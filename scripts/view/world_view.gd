@@ -37,6 +37,8 @@ var rng := RandomNumberGenerator.new()
 var near_lod := 130.0
 var cam_pos := Vector3.ZERO
 var fires: Array = []
+var selected_ids: Array[int] = []
+var select_mm: MultiMesh
 
 
 func setup(match_ref, materials, mesh_lib, q: int) -> void:
@@ -63,6 +65,45 @@ func setup(match_ref, materials, mesh_lib, q: int) -> void:
 	mark_node = _make_flag()
 	mark_node.visible = false
 	add_child(mark_node)
+	_selection_rings()
+
+
+## Flat glowing rings drawn under selected villagers.
+func _selection_rings() -> void:
+	var ring := TorusMesh.new()
+	ring.inner_radius = 0.5
+	ring.outer_radius = 0.62
+	ring.rings = 24
+	ring.ring_segments = 6
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color(1.0, 0.85, 0.35)
+	mat.no_depth_test = false
+	ring.material = mat
+	select_mm = MultiMesh.new()
+	select_mm.transform_format = MultiMesh.TRANSFORM_3D
+	select_mm.mesh = ring
+	select_mm.instance_count = 64
+	select_mm.visible_instance_count = 0
+	var mi := MultiMeshInstance3D.new()
+	mi.multimesh = select_mm
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.custom_aabb = AABB(Vector3(-60, -60, -60), Vector3(Defs.MAP_SIZE + 120, 320, Defs.MAP_SIZE + 120))
+	add_child(mi)
+
+
+func _update_selection_rings(alpha: float) -> void:
+	var n := 0
+	for id in selected_ids:
+		if n >= select_mm.instance_count:
+			break
+		var u = m.unit(id)
+		if u == null or u.dead:
+			continue
+		var p: Vector2 = u.prev.lerp(u.pos, alpha)
+		select_mm.set_instance_transform(n, Transform3D(Basis.IDENTITY.scaled(Vector3(1, 0.4, 1)), m.terrain.pos3(p, 0.06)))
+		n += 1
+	select_mm.visible_instance_count = n
 
 
 # --- Environment ------------------------------------------------------------------
@@ -808,6 +849,7 @@ func update_frame(delta: float, alpha: float, cam: Vector3) -> void:
 	_update_shots()
 	_update_engines(alpha)
 	people.update_frame(delta, alpha, cam, hidden_unit)
+	_update_selection_rings(alpha)
 	for id in carcasses.keys():
 		var n = m.terrain.nodes[id]
 		if n.amount <= 0.0:

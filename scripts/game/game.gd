@@ -73,6 +73,7 @@ var chat_hint_items: Array = []
 var map_open := false
 var map_refresh_t := 0.0
 var look_unit := -1
+var selected: Array[int] = []
 var look_bld := -1
 var ready_done := false
 var start_ms := 0
@@ -190,6 +191,7 @@ func _process(delta: float) -> void:
 	Sfx.listener_pos = cmd.eye()
 	_update_hud()
 	_update_look()
+	_update_selection()
 	if placing:
 		_update_place()
 	if map_open:
@@ -317,6 +319,12 @@ func _describe_unit(u) -> String:
 		gear = " · " + (Defs.item_name(u.weapon) if u.weapon != "" else "bow")
 	var who: String = u.name if c == null or c.members.size() <= 1 else "%s (%s)" % [u.name, m.crew_label(c)]
 	var action := "Enter to order crew" if c and c.members.size() > 1 else "Enter to give orders"
+	if selected.has(u.id):
+		action = "selected · Shift+click to drop"
+	elif not selected.is_empty():
+		action = "click to select · Shift+click to add"
+	else:
+		action += " · click to select"
 	return "%s — %s%s · %s" % [who, what, gear, action]
 
 
@@ -403,6 +411,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_ESCAPE:
 				if placing:
 					_cancel_place()
+				elif not selected.is_empty():
+					_clear_selection()
 				elif map_open:
 					_toggle_map()
 				else:
@@ -446,7 +456,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			if event.pressed:
 				if placing:
 					_place_click()
-				else:
+				elif not _click_select(event.shift_pressed):
 					cmd.primary_pressed()
 			else:
 				cmd.primary_released()
@@ -514,6 +524,70 @@ func _mark() -> void:
 	Sfx.play("click", null, -6.0)
 
 
+# --- Selection -------------------------------------------------------------------------
+
+## Left click on one of your villagers selects them; Shift+click adds or drops them.
+## Returns false when the click wasn't on a villager, so it stays an attack.
+func _click_select(additive: bool) -> bool:
+	if look_unit < 0:
+		return false
+	var u = m.unit(look_unit)
+	if u == null or u.dead or u.faction != 0 or u.kind != "villager":
+		return false
+	if u.child:
+		hud.show_toast("%s is a child and can't work yet." % u.name)
+		return true
+	if additive:
+		if selected.has(u.id):
+			selected.erase(u.id)
+		else:
+			selected.append(u.id)
+	elif selected.size() == 1 and selected[0] == u.id:
+		selected.clear()
+	else:
+		selected = [u.id]
+	Sfx.play("click", null, -10.0)
+	_show_selection()
+	return true
+
+
+func _clear_selection() -> void:
+	selected.clear()
+	_show_selection()
+
+
+func _prune_selection() -> void:
+	var keep: Array[int] = []
+	for id in selected:
+		if m.orderable_unit(0, id):
+			keep.append(id)
+	selected = keep
+
+
+func _selection_label() -> String:
+	if selected.is_empty():
+		return ""
+	if selected.size() == 1:
+		return m.unit(selected[0]).name
+	var names: Array[String] = []
+	for id in selected.slice(0, 3):
+		names.append(m.unit(id).name)
+	var more := selected.size() - names.size()
+	return ", ".join(names) + (" +%d" % more if more > 0 else "") + " (%d selected)" % selected.size()
+
+
+func _show_selection() -> void:
+	hud.set_selection(("Selected: " + _selection_label() + "  ·  Enter to order · Esc to clear") if not selected.is_empty() else "")
+	view.selected_ids = selected
+
+
+func _update_selection() -> void:
+	var before := selected.size()
+	_prune_selection()
+	if selected.size() != before:
+		_show_selection()
+
+
 func _on_attack_result(text: String) -> void:
 	if text.begins_with("hit:"):
 		return
@@ -527,7 +601,14 @@ func open_chat(prefill: String = "") -> void:
 	chat_first_member = -1
 	addressee = {}
 	address_label = "your people"
-	if look_unit >= 0:
+	_prune_selection()
+	if selected.size() == 1:
+		addressee = {"unit": selected[0], "individual": true}
+		address_label = m.unit(selected[0]).name + " alone"
+	elif selected.size() > 1:
+		addressee = {"units": selected.duplicate()}
+		address_label = _selection_label()
+	elif look_unit >= 0:
 		var u = m.unit(look_unit)
 		if u and u.faction == 0 and u.kind == "villager" and not u.dead:
 			if u.child:
@@ -725,7 +806,7 @@ func _on_chat(text: String) -> void:
 			var u2 = m.unit(req["unit"])
 			if u2 and u2.crew >= 0:
 				crew_id = u2.crew
-		terra.ask(m.brief(0, who, crew_id, req.get("individual", false)), text, dialogue)
+		terra.ask(m.brief(0, who, crew_id, req.get("individual", false), req.get("units", []).size()), text, dialogue)
 	else:
 		hud.log_line("I didn't catch that. Try 'gather wood', 'build a hut' or /h for help. Choose a Terra connection in Settings for free-form orders.", "warn")
 
@@ -778,7 +859,7 @@ func _stop_orders(req: Dictionary) -> void:
 
 func _execute(req: Dictionary, steps: Array, who: String) -> void:
 	steps = m.resolve_steps(0, steps)
-	if req.get("individual", false):
+	if req.get("individual", false) or req.has("units"):
 		for s in steps:
 			s["count"] = 0
 	var needs := []
@@ -816,7 +897,7 @@ func _issue(req: Dictionary, steps: Array, who: String, sites: Array = []) -> vo
 		for s in steps:
 			parts.append(_describe_order(s, req))
 		var label := who
-		if label == "your people" and not r.get("crews", []).is_empty():
+		if (label == "your people" or req.has("units")) and not r.get("crews", []).is_empty():
 			var c = m.crews.get(r["crews"][0])
 			if c:
 				label = m.crew_label(c)
@@ -1222,6 +1303,7 @@ func _menu_tech() -> void:
 func _menu_help() -> void:
 	var t := """[b]Moving[/b]  WASD · Shift sprint · Space jump · mouse to look
 [b]Fighting[/b]  Left click to strike (hold and release with a bow) · Q switch bow/weapon · G or E at the armory: take gear · F at the stable: ride
+[b]Selecting[/b]  Look at a villager and [b]click[/b] to select them; [b]Shift+click[/b] adds or drops more. Orders you type then go to exactly the selected people, as one crew. [b]Esc[/b] clears the selection.
 [b]Talking[/b]  Look at a villager and press [b]Enter[/b] (or T) to address their crew. In chat, [b]Tab[/b] cycles through individual members and back to the crew. [b]@Name[/b] addresses someone's crew by name, [b]@all[/b] addresses everyone. Idle villagers take orders with no addressee.
 [b]Marking[/b]  R marks the spot you look at; orders can then say 'there' or 'the mark'.
 

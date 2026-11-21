@@ -370,7 +370,12 @@ func reassign_crew(faction: int, req: Dictionary, destination_id: int) -> Dictio
 	if source == destination:
 		return {"ok": false, "error": "Already part of %s." % crew_label(destination)}
 	var members := []
-	if not req.get("individual", false) and source:
+	if req.has("units"):
+		for id in req["units"]:
+			var su := orderable_unit(faction, int(id))
+			if su and crew_of(su) != destination:
+				members.append(su.id)
+	elif not req.get("individual", false) and source:
 		members = source.members.duplicate()
 	elif req.has("unit") and orderable_unit(faction, int(req["unit"])):
 		members.append(int(req["unit"]))
@@ -389,7 +394,8 @@ func reassign_crew(faction: int, req: Dictionary, destination_id: int) -> Dictio
 
 
 ## Orders accept {"unit": id} (their crew), {"unit": id, "individual": true},
-## {"crew": id}, {"all": true}, or an empty address for free villagers, plus steps.
+## {"units": [ids]} (an exact selection), {"crew": id}, {"all": true}, or an empty
+## address for free villagers, plus steps.
 func command(faction: int, req: Dictionary) -> Dictionary:
 	var steps := clean_steps(req.get("steps", []))
 	var err := Defs.validate_steps(steps)
@@ -416,6 +422,37 @@ func command(faction: int, req: Dictionary) -> Dictionary:
 		if c == null:
 			return {"ok": false, "error": "That crew is no longer available."}
 		targets.append(c)
+	elif req.has("units"):
+		# An exact selection of villagers: they work together as one crew, at the size picked.
+		var picked: Array[Unit] = []
+		for id in req["units"]:
+			var su := orderable_unit(faction, int(id))
+			if su and not picked.has(su):
+				picked.append(su)
+		if picked.is_empty():
+			return {"ok": false, "error": "Nobody selected can take orders."}
+		if steps.size() == 1 and first["action"] in ["status", "dismiss"]:
+			for su in picked:
+				if first["action"] == "dismiss":
+					release_member(su)
+				else:
+					var sc := crew_of(su)
+					var doing := Defs.describe_step(sc.steps[sc.idx]) if sc and sc.idx < sc.steps.size() else "standing by"
+					post(faction, "%s: %s. %d%% health." % [su.name, doing, int(100.0 * su.hp / su.max_hp)], "info")
+			return {"ok": true, "crews": []}
+		for s in steps:
+			s["count"] = 0
+		var same := crew_of(picked[0])
+		for su in picked:
+			if crew_of(su) != same:
+				same = null
+				break
+		if same and same.members.size() == picked.size():
+			targets.append(same)
+		else:
+			for su in picked:
+				release_member(su)
+			targets.append(make_crew(faction, picked))
 	elif req.has("unit"):
 		var u := unit(int(req["unit"]))
 		if u == null or u.dead or u.faction != faction or u.kind != "villager":
@@ -471,6 +508,12 @@ func cancel(faction: int, req: Dictionary) -> int:
 		for c: Crew in crews.values():
 			if c.faction == faction:
 				cancel_plan(c)
+				n += 1
+	elif req.has("units"):
+		for id in req["units"]:
+			var su := orderable_unit(faction, int(id))
+			if su and (crew_of(su) or su.siege >= 0):
+				release_member(su)
 				n += 1
 	elif req.get("individual", false):
 		var u := orderable_unit(faction, int(req.get("unit", -1)))
@@ -787,7 +830,7 @@ func next_age_text(faction: int) -> String:
 
 
 ## The facts Terra may use. Only what this faction knows, never hidden truth.
-func brief(faction: int, addressed: String, crew_id: int, individual: bool = false) -> Dictionary:
+func brief(faction: int, addressed: String, crew_id: int, individual: bool = false, selected: int = 0) -> Dictionary:
 	var f := fac(faction)
 	var can_build := []
 	var locked := []
@@ -828,6 +871,8 @@ func brief(faction: int, addressed: String, crew_id: int, individual: bool = fal
 		if int(f.gear[g]) > 0:
 			gear[g] = int(f.gear[g])
 	var addressed_info := {"who": addressed, "individual": individual}
+	if selected > 0:
+		addressed_info["selected"] = selected
 	if crew_id >= 0 and crews.has(crew_id):
 		addressed_info["crew"] = crew_status(crews[crew_id])
 	return {

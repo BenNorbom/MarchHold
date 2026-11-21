@@ -22,7 +22,7 @@ func _initialize() -> void:
 
 func _run_tests() -> void:
 	var only := OS.get_environment("MH_TEST")
-	var tests := ["defs", "validation", "terrain", "economy", "crews", "walls", "combat", "parser", "schema", "chatgpt", "terra_orders", "duel"]
+	var tests := ["defs", "validation", "terrain", "economy", "crews", "selection", "walls", "combat", "parser", "schema", "chatgpt", "terra_orders", "duel"]
 	var t0 := Time.get_ticks_msec()
 	for name in tests:
 		if only != "" and only != name:
@@ -224,6 +224,31 @@ func test_crews() -> void:
 	check(moved["ok"] and adults[5].crew == idle_group.id, "an idle group stays together when one member transfers")
 	order = m.command(0, {"unit": remaining.id, "individual": true, "steps": [step("dismiss")]})
 	check(order["ok"] and remaining.crew < 0 and other.task == "hold", "individual dismissal leaves the rest of the destination crew on duty")
+
+
+func test_selection() -> void:
+	var m = new_match(77)
+	var adults: Array = m.idle_adults(0, m.home_pos(0))
+	var a = adults[0]
+	var b = adults[1]
+	var c = adults[2]
+	var d = adults[3]
+	var big = m.make_crew(0, [a, b, c])
+	m.command(0, {"crew": big.id, "steps": [step("gather", "wood")]})
+	var r: Dictionary = m.command(0, {"units": [a.id, d.id], "steps": [step("gather", "stone", 0, "", 5)]})
+	var picked = m.crew_of(a)
+	check(r["ok"] and picked != null and picked == m.crew_of(d), "selected villagers form one crew")
+	check(picked.members.size() == 2 and picked.steps[0]["subject"] == "stone", "the selection crew has exactly the picked people (%d)" % picked.members.size())
+	check(m.crew_of(b) == big and big.members.size() == 2 and b.task == "gather", "the rest of the old crew keeps working")
+	r = m.command(0, {"units": [a.id, d.id], "steps": [step("gather", "berries")]})
+	check(r["ok"] and m.crew_of(a) == picked, "re-ordering the same selection reuses its crew")
+	r = m.command(0, {"units": [a.id], "steps": [step("status")]})
+	check(r["ok"] and m.crew_of(a) == picked, "status for a selection keeps assignments")
+	check(m.cancel(0, {"units": [a.id, d.id]}) == 2 and m.crew_of(a) == null and a.task == "idle", "stopping a selection frees them")
+	r = m.command(0, {"units": [], "steps": [step("gather", "wood")]})
+	check(not r["ok"], "an empty selection is refused")
+	var joined: Dictionary = m.reassign_crew(0, {"units": [a.id, d.id]}, b.id)
+	check(joined["ok"] and m.crew_of(a) == big and m.crew_of(d) == big and big.members.size() == 4, "a selection can join another crew")
 
 
 func test_walls() -> void:

@@ -1,6 +1,6 @@
 # MarchHold
 
-A medieval strategy game played entirely in first person. You are the commander of a small band of settlers. You don't click on units; you walk among your people and **talk to them**. Type an order, and your villagers gather, build, arm themselves, scout and fight. Grow a campfire into a walled town with bronze, iron and finally cannons, and defeat Commander Rook before he defeats you.
+A medieval strategy game played entirely in first person. You are the commander of a small band of settlers. There's no overhead view; you walk among your people and **talk to them**. Type an order, and your villagers gather, build, arm themselves, scout and fight. Grow a campfire into a walled town with bronze, iron and finally cannons, and defeat Commander Rook before he defeats you.
 
 - 1 km × 1 km valley, a fresh map every match; the two camps start at least 620 m apart.
 - 1v1 against an AI rival with five openings (rush, boom, turtle, cavalry, cannons) and three difficulties.
@@ -25,8 +25,8 @@ Start with **The Founding** (tutorial) from the main menu. Terra, your steward, 
 |---|---|
 | WASD, mouse | Move, look |
 | Shift / Space | Sprint / jump |
-| Enter or T | Talk to the crew or villager you're looking at (or to your people) |
-| Left mouse | Strike; with a bow, hold to draw and release to shoot |
+| Enter or T | Talk to your selected villagers, or the crew or villager you're looking at (or to your people) |
+| Left mouse | Select the villager you're looking at (Shift+click adds or drops more); otherwise strike, or with a bow hold to draw and release to shoot |
 | Q | Switch between bow and weapon (rotates a building while placing) |
 | E / G | Talk to the person you look at; take gear at the armory |
 | F | Take or leave a horse at your stable |
@@ -35,10 +35,12 @@ Start with **The Founding** (tutorial) from the main menu. Terra, your steward, 
 | M | Field map (only what you and your scouts have seen) |
 | B / C | Build menu / craft menu |
 | F1 or H | Help |
-| Esc | Close menus, cancel placement, pause |
+| Esc | Close menus, cancel placement, clear the selection, pause |
 | F11 / F12 | Fullscreen / screenshot |
 
 ## Giving orders
+
+Look at a villager and **click** to select them. **Shift+click** adds more people or drops someone already selected, and a gold ring marks everyone selected. Press **Enter** and your order goes to exactly those people, working as one crew. **Esc** clears the selection.
 
 Look at a villager and press **Enter** to address their whole crew. Press **Tab** before sending to select that villager alone, then press it again to cycle through the other members and back to the crew. **Shift+Tab** cycles backward. `@Name` addresses someone's crew by name and `@all` addresses everyone. If nobody is addressed, idle villagers take the job.
 
@@ -118,7 +120,7 @@ powershell -ExecutionPolicy Bypass -File tools\build.ps1
 
 ## Status
 
-Version 0.3.1 lets Terra fill in order details and submit orders immediately, with manual placement for construction. Version 0.3.0 added individual crew orders, slash-command previews, and animated villager models. Version 0.2.0 added ChatGPT plan sign-in and model selection for Terra. Version 0.1.0 introduced the full lean tech tree, chat and slash commands, Terra, scouting, combat, horses, cannons, the AI rival, the intro and the tutorial. Next up: saving and resuming, an art pass on horses, formations and morale tuning, voice orders, and online play for up to 8 players.
+Version 0.3.2 adds click and Shift+click selection of villagers. Version 0.3.1 let Terra fill in order details and submit orders immediately, with manual placement for construction. Version 0.3.0 added individual crew orders, slash-command previews, and animated villager models. Version 0.2.0 added ChatGPT plan sign-in and model selection for Terra. Version 0.1.0 introduced the full lean tech tree, chat and slash commands, Terra, scouting, combat, horses, cannons, the AI rival, the intro and the tutorial. Next up: saving and resuming, an art pass on horses, formations and morale tuning, voice orders, and online play for up to 8 players.
 
 ## Credits
 

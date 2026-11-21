@@ -1,6 +1,6 @@
 # MarchHold — Game Plan
 
-MarchHold is a realistic medieval strategy game played entirely in first person. You are a commander on foot or horseback. You don't click on units; you talk to your people through a chat line. An OpenAI-powered interpreter ("Terra") turns what you type into concrete orders, and the simulation validates and executes them. Slash commands like `/b` give instant menus for the common things. You start with nothing and grow a settlement from a campfire to a gunpowder army of up to 200.
+MarchHold is a realistic medieval strategy game played entirely in first person. You are a commander on foot or horseback. You walk among your people, pick them out by looking and clicking, and talk to them through a chat line. An OpenAI-powered interpreter ("Terra") turns what you type into concrete orders, and the simulation validates and executes them. Slash commands like `/b` give instant menus for the common things. You start with nothing and grow a settlement from a campfire to a gunpowder army of up to 200.
 
 First target: **1v1, player vs AI, single machine.** Later: **online head-to-head, up to 8 players.**
 
@@ -265,6 +265,7 @@ Formations (line, wedge, shield wall, loose), morale and routing, wall assaults 
 
 Press **Enter** (or **T**) to open the chat line. Who you're talking to:
 
+- The villagers you've selected (click someone you're looking at; Shift+click adds or drops more; Esc clears). Selected people take the order as one crew, or
 - The villager or captain you're looking at when you open it, or
 - A name: `@Hal take ten spearmen to the ford`, or
 - `@all` for every crew.

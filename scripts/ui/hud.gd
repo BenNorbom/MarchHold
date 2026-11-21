@@ -28,6 +28,7 @@ var hp_bar: ProgressBar
 var st_bar: ProgressBar
 var held_label: Label
 var prompt_label: Label
+var selection_label: Label
 var log_box: VBoxContainer
 var log_lines: Array = []       # [{node, t}]
 var chat_panel: PanelContainer
@@ -121,6 +122,16 @@ func _build_crosshair() -> void:
 	thinking.theme_type_variation = "Prompt"
 	thinking.visible = false
 	root.add_child(thinking)
+	selection_label = Label.new()
+	selection_label.set_anchors_preset(Control.PRESET_CENTER)
+	selection_label.position = Vector2(-450, 94)
+	selection_label.size = Vector2(900, 30)
+	selection_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	selection_label.theme_type_variation = "Prompt"
+	selection_label.modulate = Color(1.0, 0.86, 0.45)
+	selection_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	selection_label.visible = false
+	root.add_child(selection_label)
 
 
 func _build_compass() -> void:
@@ -624,6 +635,11 @@ func update_status(hp: float, max_hp: float, stamina: float, held: String, yaw_d
 
 func set_prompt(text: String) -> void:
 	prompt_label.text = text
+
+
+func set_selection(text: String) -> void:
+	selection_label.visible = text != ""
+	selection_label.text = text
 
 
 func set_thinking(text: String) -> void:
