@@ -5,7 +5,7 @@ A medieval strategy game played entirely in first person. You are the commander 
 - 1 km × 1 km valley, a fresh map every match; the two camps start at least 620 m apart.
 - 1v1 against an AI rival with five openings (rush, boom, turtle, cavalry, cannons) and three difficulties.
 - Kill the crowned enemy commander to win. If you fall, the match is lost.
-- Optional **Terra**: connect your own OpenAI API key and give orders in plain language ("get thirty wood, then put up a hut by the berries").
+- Optional **Terra**: connect your ChatGPT plan or enter your own OpenAI API key to give orders in plain language ("get thirty wood, then put up a hut by the berries").
 
 ## Install
 
@@ -69,11 +69,11 @@ Walls are placed post to post: choose a palisade or stone wall, click each post,
 
 ### Terra (optional)
 
-Add an OpenAI API key under **Settings → OpenAI API key**. Free-form orders then go to Terra, which answers with a plan you confirm with **go**. It can also answer questions such as "why aren't we growing?" from what your people know.
+In **Settings → Terra connection**, choose **ChatGPT plan → Continue with ChatGPT**. Approve plan use in your browser and return to MarchHold. Terra is selected if your account offers it. You can choose another available order model, manage plan usage, or disconnect from Settings.
 
-- The key is stored encrypted on your PC and sent only to `api.openai.com`.
-- Requests are billed to your OpenAI account. A per-match limit is in Settings (default 120).
-- The model name is a setting (default `gpt-6.1-terra`). If your key can't use it, Terra says so and you can pick another model.
+You can also choose **OpenAI API key** and paste your own key into the game. This option uses your OpenAI API balance. Choose **Off** to keep orders local.
+
+MarchHold keeps account credentials encrypted on your PC. When you submit a free-form order or question, the game sends the text, recent Terra dialogue and relevant game state to OpenAI. Terra answers questions and drafts plans you can confirm with **go**. Settings includes a separate per-match request limit (default 120).
 
 ## How the game works
 
@@ -116,7 +116,7 @@ powershell -ExecutionPolicy Bypass -File tools\build.ps1
 
 ## Status
 
-Version 0.1.0 is the first playable build: the full lean tech tree, chat and slash commands, Terra, scouting, combat, horses, cannons, the AI rival, the intro and the tutorial. Next up: saving and resuming, an art pass on people and horses, formations and morale tuning, voice orders, and online play for up to 8 players.
+Version 0.2.0 adds ChatGPT plan sign-in and model selection for Terra. Version 0.1.0 introduced the full lean tech tree, chat and slash commands, Terra, scouting, combat, horses, cannons, the AI rival, the intro and the tutorial. Next up: saving and resuming, an art pass on people and horses, formations and morale tuning, voice orders, and online play for up to 8 players.
 
 ## Credits
 

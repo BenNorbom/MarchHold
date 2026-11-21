@@ -35,6 +35,27 @@ static func plan_schema() -> Dictionary:
 	}
 
 
+static func parse_plan(output: String) -> Dictionary:
+	var plan = JSON.parse_string(output)
+	if not plan is Dictionary or plan.get("kind") not in KINDS or not plan.get("reply") is String or not plan.get("steps") is Array:
+		return {}
+	var steps: Array = plan["steps"]
+	if steps.size() > Defs.MAX_STEPS or (plan["kind"] != "plan" and not steps.is_empty()):
+		return {}
+	for step in steps:
+		if not step is Dictionary or step.size() != 5:
+			return {}
+		if not step.get("action") is String or not step.get("subject") is String or not step.get("where") is String:
+			return {}
+		if not _whole_number(step.get("count"), 100) or not _whole_number(step.get("amount"), 10000):
+			return {}
+	return plan
+
+
+static func _whole_number(value, maximum: int) -> bool:
+	return (value is int or value is float) and value >= 0 and value <= maximum and value == floorf(value)
+
+
 static func action_guide() -> String:
 	var lines: Array[String] = []
 	lines.append("gather: subject wood, stone, berries, hunt (needs a hunter's lodge), farm (needs a farm), bronze_ore/coal/iron_ore (need a mine on that deposit). amount = units to deliver, 0 = keep going (last step only).")

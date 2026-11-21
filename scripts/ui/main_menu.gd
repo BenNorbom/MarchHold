@@ -11,6 +11,7 @@ const Defs = preload("res://scripts/data/defs.gd")
 var main_box: VBoxContainer
 var match_panel: PanelContainer
 var credits_panel: PanelContainer
+var terra_status: Label
 var difficulty: OptionButton
 var strategy: OptionButton
 var seed_edit: LineEdit
@@ -59,12 +60,13 @@ func _ready() -> void:
 	_button(main_box, "Settings", _show_settings)
 	_button(main_box, "Credits", func(): credits_panel.visible = true)
 	_button(main_box, "Quit", func(): quit_game.emit())
-	var ver := Label.new()
-	ver.text = "v" + Defs.VERSION + (" · Terra on" if Settings.has_key() else " · Terra off (add a key in Settings)")
-	ver.theme_type_variation = "Small"
-	ver.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	ver.position = Vector2(18, -36)
-	add_child(ver)
+	terra_status = Label.new()
+	terra_status.theme_type_variation = "Small"
+	terra_status.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	terra_status.position = Vector2(18, -36)
+	add_child(terra_status)
+	_update_terra_status()
+	Settings.changed.connect(_update_terra_status)
 	_build_match_panel()
 	_build_credits()
 
@@ -199,6 +201,11 @@ func _show_settings() -> void:
 	var p := SettingsPanel.new()
 	add_child(p)
 	p.closed.connect(func(): main_box.visible = true)
+	p.closed.connect(_update_terra_status)
+
+
+func _update_terra_status() -> void:
+	terra_status.text = "v" + Defs.VERSION + (" · Terra on" if Settings.terra_available() else " · Terra off")
 
 
 func _build_credits() -> void:
@@ -218,7 +225,7 @@ func _build_credits() -> void:
 	var body := Label.new()
 	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.custom_minimum_size = Vector2(660, 300)
-	body.text = "MarchHold v%s\n\nMade with Godot Engine (MIT licence, godotengine.org).\nTextures: Poly Haven (CC0, polyhaven.com).\nFonts: Cinzel and EB Garamond (SIL Open Font License).\nAll models, sounds, trees and characters are generated procedurally by the game.\nInstaller: Inno Setup (jrsoftware.org).\n\nTerra uses the OpenAI API with your own key." % Defs.VERSION
+	body.text = "MarchHold v%s\n\nMade with Godot Engine (MIT licence, godotengine.org).\nTextures: Poly Haven (CC0, polyhaven.com).\nFonts: Cinzel and EB Garamond (SIL Open Font License).\nAll models, sounds, trees and characters are generated procedurally by the game.\nInstaller: Inno Setup (jrsoftware.org).\n\nTerra can use your ChatGPT plan or your OpenAI API key." % Defs.VERSION
 	v.add_child(body)
 	var close := Button.new()
 	close.text = "Close"

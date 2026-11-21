@@ -1,6 +1,6 @@
 extends Node
-## Terra: sends free-text orders to the OpenAI Responses API with a strict JSON
-## schema and returns {kind, reply, steps}. The model only proposes; the
+## Terra sends free-text orders using the player's chosen connection.
+## It returns {kind, reply, steps}. The model only proposes; the
 ## simulation validates every step.
 
 const Schema = preload("res://scripts/orders/schema.gd")
@@ -11,18 +11,21 @@ signal answered(result: Dictionary)
 var http: HTTPRequest
 var busy := false
 var requests := 0
+var _plan_token := ""
 
 
 func _ready() -> void:
 	http = HTTPRequest.new()
 	http.timeout = 30.0
 	http.use_threads = true
+	http.max_redirects = 0
+	http.body_size_limit = 4 * 1024 * 1024
 	add_child(http)
 	http.request_completed.connect(_on_done)
 
 
 func available() -> bool:
-	return Settings.has_key()
+	return Settings.terra_available()
 
 
 func remaining() -> int:
@@ -40,52 +43,81 @@ func _reasoning_for(model: String):
 
 func ask(facts: Dictionary, message: String, history: Array, pending: Array) -> void:
 	if busy:
-		answered.emit({"ok": false, "error": "Terra is still thinking about your last order."})
 		return
 	if not available():
-		answered.emit({"ok": false, "error": "Terra isn't set up. Add an OpenAI API key in Settings to give orders in your own words."})
+		answered.emit({"ok": false, "error": "Choose a Terra connection in Settings to give orders in your own words."})
 		return
 	if remaining() <= 0:
 		answered.emit({"ok": false, "error": "Terra has answered the most requests allowed this match. Simple orders and slash commands still work."})
 		return
-	var model := str(Settings.get_val("model", Settings.DEFAULT_MODEL))
 	var input := {"facts": facts, "history": history, "pending_plan": pending, "message": message}
-	var schema := Schema.plan_schema()
+	busy = true
+	_plan_token = ""
+	if Settings.get_val("terra_provider") == Settings.CHATGPT_PLAN:
+		await _ask_chatgpt(input)
+		return
+	var model := str(Settings.get_val("model", Settings.DEFAULT_MODEL))
 	var body := {
 		"model": model,
 		"store": false,
 		"max_output_tokens": 1200,
 		"instructions": Schema.instructions(),
 		"input": JSON.stringify(input),
-		"text": {"format": {"type": "json_schema", "name": "village", "strict": true, "schema": schema}},
+		"text": {"format": {"type": "json_schema", "name": "village", "strict": true, "schema": Schema.plan_schema()}},
 	}
 	var reasoning = _reasoning_for(model)
 	if reasoning != null:
 		body["reasoning"] = reasoning
-	var headers := PackedStringArray(["Authorization: Bearer " + Settings.api_key, "Content-Type: application/json"])
-	busy = true
-	requests += 1
+	_send(body, Settings.api_key, "application/json")
+
+
+func _ask_chatgpt(input: Dictionary) -> void:
+	var model := str(Settings.get_val("chatgpt_model", ""))
+	if model == "":
+		_fail("Open Settings and choose an order model from your ChatGPT plan.")
+		return
+	var auth := await ChatGPT.access_token()
+	if auth.has("error"):
+		_fail(auth["error"])
+		return
+	_plan_token = auth["token"]
+	var instructions := Schema.instructions() + "\nReturn only a JSON object matching this schema: " + JSON.stringify(Schema.plan_schema())
+	_send({"model": model, "store": false, "stream": true, "instructions": instructions,
+		"input": [{"role": "user", "content": JSON.stringify(input)}]}, _plan_token, "text/event-stream")
+
+
+func _send(body: Dictionary, token: String, accept: String) -> void:
+	var headers := PackedStringArray(["Authorization: Bearer " + token, "Content-Type: application/json", "Accept: " + accept])
 	var err := http.request(URL, headers, HTTPClient.METHOD_POST, JSON.stringify(body))
 	if err != OK:
-		busy = false
-		answered.emit({"ok": false, "error": "Could not reach OpenAI. Check your connection and try again."})
+		_fail("Could not reach OpenAI. Check your connection and try again.")
+	else:
+		requests += 1
+
+
+func _fail(error: String) -> void:
+	busy = false
+	_plan_token = ""
+	answered.emit({"ok": false, "error": error})
 
 
 func _on_done(result: int, code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
-	busy = false
 	if result == HTTPRequest.RESULT_TIMEOUT:
-		answered.emit({"ok": false, "error": "OpenAI took too long to respond. Try again."})
+		_fail("OpenAI took too long to respond. Try again.")
 		return
 	if result != HTTPRequest.RESULT_SUCCESS:
-		answered.emit({"ok": false, "error": "Could not reach OpenAI. Check your connection and try again."})
+		_fail("Could not reach OpenAI. Check your connection and try again.")
 		return
 	var text := body.get_string_from_utf8()
+	if _plan_token != "":
+		_on_chatgpt_done(code, text)
+		return
 	var data = JSON.parse_string(text)
 	if code != 200:
-		answered.emit({"ok": false, "error": _error_text(code, data)})
+		_fail(_error_text(code, data))
 		return
 	if not (data is Dictionary):
-		answered.emit({"ok": false, "error": "Terra did not return a readable answer. Try rephrasing your order."})
+		_fail("Terra did not return a readable answer. Try rephrasing your order.")
 		return
 	var out := ""
 	for item in data.get("output", []):
@@ -93,11 +125,76 @@ func _on_done(result: int, code: int, _headers: PackedStringArray, body: PackedB
 			for c in item.get("content", []):
 				if c is Dictionary and c.get("type", "") == "output_text":
 					out = str(c.get("text", ""))
-	var parsed = JSON.parse_string(out)
-	if not (parsed is Dictionary) or not parsed.has("kind"):
-		answered.emit({"ok": false, "error": "Terra did not return a readable answer. Try rephrasing your order."})
+	_finish(out)
+
+
+func _on_chatgpt_done(code: int, body: String) -> void:
+	if code != 200:
+		var data = JSON.parse_string(body)
+		_fail(_plan_error(code, data.get("error") if data is Dictionary else null))
 		return
+	var response := _read_stream(body)
+	if response.has("text"):
+		var output := str(response["text"]).strip_edges()
+		if output.begins_with("```") and output.ends_with("```"):
+			output = output.substr(output.find("\n") + 1).trim_suffix("```").strip_edges()
+		_finish(output)
+	elif response.has("error"):
+		_fail(_plan_error(0, response["error"]))
+	else:
+		_fail("ChatGPT did not finish the answer. Try again.")
+
+
+static func _read_stream(body: String) -> Dictionary:
+	var output := ""
+	for event in body.replace("\r\n", "\n").split("\n\n", false):
+		var data := PackedStringArray()
+		for line in event.split("\n", false):
+			if line.begins_with("data:"):
+				data.append(line.substr(5).strip_edges())
+		if data.is_empty() or data[0] == "[DONE]":
+			continue
+		var item = JSON.parse_string("\n".join(data))
+		if not item is Dictionary:
+			return {}
+		match item.get("type"):
+			"response.output_text.delta":
+				output += str(item.get("delta", ""))
+			"response.completed":
+				return {"text": output}
+			"response.failed":
+				var response = item.get("response")
+				return {"error": response.get("error") if response is Dictionary else null}
+			"response.incomplete", "error":
+				return {"error": item.get("error", item)}
+	return {}
+
+
+func _finish(output: String) -> void:
+	var parsed := Schema.parse_plan(output)
+	if parsed.is_empty():
+		_fail("Terra did not return a readable answer. Try rephrasing your order.")
+		return
+	busy = false
+	_plan_token = ""
 	answered.emit({"ok": true, "data": parsed})
+
+
+func _plan_error(status: int, error) -> String:
+	var code := str(error.get("code", "")) if error is Dictionary else ""
+	if code == "subscription_sharing_usage_limit_exceeded" or status == 429:
+		ChatGPT.usage_limited = true
+		return ChatGPT.USAGE_LIMIT
+	if status == 401:
+		ChatGPT.invalidate_token(_plan_token)
+		return ChatGPT.SIGN_IN_REQUIRED
+	if code == "subscription_sharing_user_not_eligible" or status == 403:
+		return "ChatGPT plan access is unavailable for this account or workspace."
+	if code in ["model_not_found", "subscription_sharing_unsupported_capability"] or status in [400, 404]:
+		return "That model or request is unavailable on your ChatGPT plan. Check Order model in Settings."
+	if status >= 500 or code in ["subscription_sharing_usage_unavailable", "subscription_sharing_user_unavailable"]:
+		return "ChatGPT plan usage is temporarily unavailable. Try again shortly."
+	return "ChatGPT could not finish Terra's answer. Try again."
 
 
 ## Local messages chosen from error codes (the API body is never shown, it can echo credentials).

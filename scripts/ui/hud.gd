@@ -2,11 +2,15 @@ extends CanvasLayer
 ## Minimal first-person HUD plus the chat line, slash menus and the field map.
 
 signal chat_submitted(text: String)
+signal chat_changed(text: String)
 signal chat_closed
 signal menu_clicked(index: int)
 signal pause_choice(name: String)
 
 const UiTheme = preload("res://scripts/ui/ui_theme.gd")
+const Defs = preload("res://scripts/data/defs.gd")
+
+const RESOURCE_DISPLAY_ORDER := ["food", "wood", "stone", "bronze_ore", "coal", "iron_ore", "bronze", "iron"]
 
 const KIND_COLORS := {
 	"info": "e8dcc2", "warn": "f0c060", "alarm": "ff6a50", "death": "e07060", "done": "a8d890",
@@ -27,11 +31,15 @@ var log_lines: Array = []       # [{node, t}]
 var chat_panel: PanelContainer
 var chat_to: Label
 var chat_edit: LineEdit
+var chat_usage: Button
 var menu_panel: PanelContainer
 var menu_title: Label
 var menu_body: RichTextLabel
 var menu_footer: Label
 var map_view: Control
+var village_widgets: VBoxContainer
+var supply_label: Label
+var resource_counts: Dictionary[String, Label] = {}
 var objective_panel: PanelContainer
 var objective_label: RichTextLabel
 var caption: Label
@@ -66,6 +74,7 @@ func _ready() -> void:
 	_build_chat()
 	_build_menu()
 	_build_map()
+	_build_village()
 	_build_objective()
 	_build_caption()
 	_build_pause()
@@ -189,6 +198,13 @@ func _build_chat() -> void:
 	chat_panel.size = Vector2(668, 40)
 	chat_panel.visible = false
 	root.add_child(chat_panel)
+	chat_usage = Button.new()
+	chat_usage.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	chat_usage.position = Vector2(18, -54)
+	chat_usage.text = "Using ChatGPT plan · Manage usage"
+	chat_usage.visible = false
+	chat_usage.pressed.connect(func(): OS.shell_open(ChatGPT.USAGE_URL))
+	root.add_child(chat_usage)
 	var h := HBoxContainer.new()
 	chat_panel.add_child(h)
 	chat_to = Label.new()
@@ -198,6 +214,7 @@ func _build_chat() -> void:
 	chat_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	chat_edit.placeholder_text = "Type an order, or / for menus…"
 	chat_edit.max_length = 300
+	chat_edit.text_changed.connect(chat_changed.emit)
 	chat_edit.text_submitted.connect(_on_chat_submit)
 	chat_edit.gui_input.connect(_on_chat_key)
 	h.add_child(chat_edit)
@@ -206,11 +223,13 @@ func _build_chat() -> void:
 func _on_chat_submit(text: String) -> void:
 	var t := text.strip_edges()
 	close_chat()
-	if t != "":
-		history.push_front(t)
-		if history.size() > 30:
-			history.pop_back()
-		chat_submitted.emit(t)
+	if t == "":
+		chat_closed.emit()
+		return
+	history.push_front(t)
+	if history.size() > 30:
+		history.pop_back()
+	chat_submitted.emit(t)
 
 
 func _on_chat_key(ev: InputEvent) -> void:
@@ -223,11 +242,13 @@ func _on_chat_key(ev: InputEvent) -> void:
 			history_i = mini(history_i + 1, history.size() - 1)
 			chat_edit.text = history[history_i]
 			chat_edit.caret_column = chat_edit.text.length()
+			chat_changed.emit(chat_edit.text)
 			chat_edit.accept_event()
 		elif ev.keycode == KEY_DOWN:
 			history_i = maxi(history_i - 1, -1)
 			chat_edit.text = history[history_i] if history_i >= 0 else ""
 			chat_edit.caret_column = chat_edit.text.length()
+			chat_changed.emit(chat_edit.text)
 			chat_edit.accept_event()
 
 
@@ -236,6 +257,8 @@ func open_chat(to_text: String, prefill: String = "") -> void:
 	history_i = -1
 	chat_to.text = "  To %s:  " % to_text
 	chat_panel.visible = true
+	chat_usage.visible = Settings.get_val("terra_provider") == Settings.CHATGPT_PLAN and ChatGPT.can_use_plan()
+	chat_usage.text = "ChatGPT usage limit reached · Manage usage" if ChatGPT.usage_limited else "Using ChatGPT plan · Manage usage"
 	chat_edit.text = prefill
 	chat_edit.grab_focus()
 	chat_edit.caret_column = prefill.length()
@@ -245,6 +268,7 @@ func open_chat(to_text: String, prefill: String = "") -> void:
 func close_chat() -> void:
 	chat_open = false
 	chat_panel.visible = false
+	chat_usage.visible = false
 	chat_edit.release_focus()
 	_refresh_log_visibility()
 
@@ -296,12 +320,45 @@ func _build_map() -> void:
 	root.add_child(map_view)
 
 
+func _build_village() -> void:
+	village_widgets = VBoxContainer.new()
+	village_widgets.position = Vector2(18, 14)
+	village_widgets.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	village_widgets.add_theme_constant_override("separation", 12)
+	root.add_child(village_widgets)
+	var panel := _panel()
+	panel.custom_minimum_size.x = 180
+	panel.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	village_widgets.add_child(panel)
+	var rows := VBoxContainer.new()
+	rows.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(rows)
+	supply_label = Label.new()
+	supply_label.add_theme_color_override("font_color", UiTheme.GOLD)
+	supply_label.add_theme_font_size_override("font_size", 22)
+	rows.add_child(supply_label)
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	grid.add_theme_constant_override("h_separation", 16)
+	grid.add_theme_constant_override("v_separation", 0)
+	rows.add_child(grid)
+	for resource: String in RESOURCE_DISPLAY_ORDER:
+		var label := Label.new()
+		label.text = Defs.RESOURCE_NAMES[resource].capitalize()
+		grid.add_child(label)
+		var count := Label.new()
+		count.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		count.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		grid.add_child(count)
+		resource_counts[resource] = count
+
+
 func _build_objective() -> void:
 	objective_panel = _panel("ObjectivePanel")
-	objective_panel.position = Vector2(18, 60)
-	objective_panel.size = Vector2(430, 80)
+	objective_panel.custom_minimum_size = Vector2(430, 80)
 	objective_panel.visible = false
-	root.add_child(objective_panel)
+	village_widgets.add_child(objective_panel)
 	objective_label = RichTextLabel.new()
 	objective_label.bbcode_enabled = true
 	objective_label.fit_content = true
@@ -478,6 +535,12 @@ func _refresh_log_visibility() -> void:
 
 
 # --- Per frame ----------------------------------------------------------------------
+
+func update_economy(population: int, housing: int, stock: Dictionary) -> void:
+	supply_label.text = "Villagers  %d/%d" % [population, housing]
+	for resource: String in RESOURCE_DISPLAY_ORDER:
+		resource_counts[resource].text = str(int(stock.get(resource, 0)))
+
 
 func update_status(hp: float, max_hp: float, stamina: float, held: String, yaw_deg: float, home_deg: float) -> void:
 	hp_bar.max_value = max_hp

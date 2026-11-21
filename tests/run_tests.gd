@@ -9,14 +9,20 @@ const Match = preload("res://scripts/sim/match.gd")
 const Rival = preload("res://scripts/ai/rival.gd")
 const Parser = preload("res://scripts/orders/parser.gd")
 const Schema = preload("res://scripts/orders/schema.gd")
+const ChatGPTCallback = preload("res://scripts/orders/chatgpt_callback.gd")
+const ChatGPTVault = preload("res://scripts/orders/chatgpt_vault.gd")
 
 var failures := 0
 var passes := 0
 
 
 func _initialize() -> void:
+	_run_tests.call_deferred()
+
+
+func _run_tests() -> void:
 	var only := OS.get_environment("MH_TEST")
-	var tests := ["defs", "validation", "terrain", "economy", "walls", "combat", "parser", "schema", "duel"]
+	var tests := ["defs", "validation", "terrain", "economy", "walls", "combat", "parser", "schema", "chatgpt", "duel"]
 	var t0 := Time.get_ticks_msec()
 	for name in tests:
 		if only != "" and only != name:
@@ -33,6 +39,30 @@ func check(cond: bool, msg: String) -> void:
 	else:
 		failures += 1
 		printerr("FAIL: ", msg)
+
+
+func test_chatgpt() -> void:
+	var terra_script := load("res://scripts/orders/terra.gd")
+	var valid := "GET /auth/callback?state=test&client_id=example&code=a%2Bb HTTP/1.1"
+	check(ChatGPTCallback._parse(valid, "test").get("code") == "a+b", "ChatGPT callback decodes the authorization code")
+	check(ChatGPTCallback._parse(valid, "wrong").is_empty(), "ChatGPT callback requires matching state")
+	check(ChatGPTCallback._parse("GET /auth/callback?state=test&state=other HTTP/1.1", "test").is_empty(), "ChatGPT callback rejects duplicate state")
+	var plan := JSON.stringify({"kind": "reply", "reply": "Stores are full.", "steps": []})
+	var delta := "data: " + JSON.stringify({"type": "response.output_text.delta", "delta": plan}) + "\r\n\r\n"
+	var completed := "data: {\"type\":\"response.completed\"}\r\n\r\n"
+	check(terra_script._read_stream(delta + completed).get("text") == plan, "ChatGPT stream returns completed text")
+	check(terra_script._read_stream(delta).is_empty(), "ChatGPT stream discards incomplete output")
+	var failure := "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"subscription_sharing_usage_limit_exceeded\"}}}"
+	check(terra_script._read_stream(delta + failure).get("error", {}).get("code") == "subscription_sharing_usage_limit_exceeded", "ChatGPT stream preserves the failure code")
+	check(not Schema.parse_plan(plan).is_empty(), "Terra accepts a well-formed answer")
+	var malformed := JSON.stringify({"kind": "plan", "reply": "", "steps": [{"action": "gather",
+		"subject": "wood", "where": "", "count": {}, "amount": 10}]})
+	check(Schema.parse_plan(malformed).is_empty(), "Terra rejects a malformed model step before simulation")
+	if OS.get_name() == "Windows":
+		var example := "Windows credential storage test".to_utf8_buffer()
+		var protected := ChatGPTVault._crypt(example, "Protect")
+		check(not protected.is_empty() and protected != example, "Windows protects the local ChatGPT credential bytes")
+		check(ChatGPTVault._crypt(protected, "Unprotect") == example, "Windows decrypts the protected bytes for this user")
 
 
 func run(m, seconds: float, ais: Array = []) -> void:

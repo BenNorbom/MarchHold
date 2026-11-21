@@ -85,9 +85,11 @@ func start(options: Dictionary) -> void:
 	view.hidden_unit = me.id
 	hud = Hud.new()
 	add_child(hud)
+	_update_hud()
 	hud.map_view.setup(m, view.map_image())
 	hud.chat_submitted.connect(_on_chat)
-	hud.chat_closed.connect(func(): cmd.move_enabled = true)
+	hud.chat_changed.connect(_on_chat_changed)
+	hud.chat_closed.connect(_on_chat_closed)
 	hud.menu_clicked.connect(_menu_select)
 	hud.pause_choice.connect(_on_pause_choice)
 	terra = Terra.new()
@@ -118,7 +120,7 @@ func _welcome() -> void:
 	hud.log_line("You stand at your campfire with six villagers. Commander Rook has made camp somewhere across the valley.", "system")
 	hud.log_line("Look at a villager and press Enter to give orders. Type /b to build, /h for help.", "system")
 	if not terra.available():
-		hud.log_line("Terra (free-form orders) is off: simple orders still work. Add an OpenAI key in Settings for orders in your own words.", "hint")
+		hud.log_line("Simple orders work offline. Choose a Terra connection in Settings for orders in your own words.", "hint")
 
 
 func intro_done() -> void:
@@ -201,6 +203,8 @@ func _sound_events(events: Array) -> void:
 
 
 func _update_hud() -> void:
+	var faction = m.fac(0)
+	hud.update_economy(faction.pop, faction.housing, faction.stock)
 	var me = m.commander(0)
 	if me == null:
 		return
@@ -512,6 +516,20 @@ func open_chat(prefill: String = "") -> void:
 	hud.open_chat(label, prefill)
 
 
+func _on_chat_changed(text: String) -> void:
+	if text.strip_edges().to_lower() == "/b":
+		if not hud.menu_open:
+			_menu_build(true)
+	elif hud.menu_open:
+		_close_menu()
+
+
+func _on_chat_closed() -> void:
+	if hud.menu_open:
+		_close_menu()
+	cmd.move_enabled = true
+
+
 func _find_by_name(tag: String):
 	var best = null
 	for u in m.units:
@@ -578,6 +596,9 @@ func _on_chat(text: String) -> void:
 		_execute(req, parsed["steps"], who)
 		return
 	if terra.available():
+		if terra.busy:
+			hud.log_line("Terra is still thinking about your last order.", "warn")
+			return
 		terra_ctx = {"req": req, "who": who, "text": text}
 		hud.set_thinking("Terra is thinking…")
 		var crew_id := -1
@@ -587,7 +608,7 @@ func _on_chat(text: String) -> void:
 				crew_id = u2.crew
 		terra.ask(m.brief(0, who, crew_id), text, dialogue, pending.get("steps", []))
 	else:
-		hud.log_line("I didn't catch that. Try 'gather wood', 'build a hut', 'make spears', 'send a scout', 'to arms' — or /h for help. With an OpenAI key (Settings) you can say anything.", "warn")
+		hud.log_line("I didn't catch that. Try 'gather wood', 'build a hut' or /h for help. Choose a Terra connection in Settings for free-form orders.", "warn")
 
 
 func _on_terra(result: Dictionary) -> void:
@@ -857,7 +878,7 @@ func _close_menu() -> void:
 	menu_kind = ""
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	cmd.look_enabled = true
-	cmd.move_enabled = true
+	cmd.move_enabled = not hud.chat_open
 
 
 func _cost_bb(cost: Dictionary, miss: Dictionary) -> String:
@@ -870,7 +891,7 @@ func _cost_bb(cost: Dictionary, miss: Dictionary) -> String:
 	return ", ".join(parts)
 
 
-func _menu_build() -> void:
+func _menu_build(preview: bool = false) -> void:
 	var all: Array = m.build_menu(0)
 	var ready := all.filter(func(e): return e["locked"] == "")
 	var locked := all.filter(func(e): return e["locked"] != "")
@@ -886,7 +907,8 @@ func _menu_build() -> void:
 		for e in locked:
 			lines.append("[color=#8a8070]   %s — %s[/color]" % [e["name"], e["locked"]])
 	var who := ("for " + address_label) if not addressee.is_empty() else "(the nearest free villagers will build)"
-	_open_menu("build", "Build  " + who, "\n".join(lines))
+	var footer := "Click to choose · Enter enables number keys · Esc to close" if preview else "Number keys or click to choose · Esc to close"
+	_open_menu("build", "Build  " + who, "\n".join(lines), footer)
 
 
 func _menu_craft() -> void:
@@ -926,6 +948,8 @@ func _menu_select(i: int) -> void:
 	var e: Dictionary = menu_items[i - 1]
 	var req := addressee.duplicate()
 	var who := address_label if not addressee.is_empty() else "your people"
+	if hud.chat_open:
+		hud.close_chat()
 	_close_menu()
 	match e["kind"]:
 		"build":
@@ -1098,6 +1122,9 @@ func _toggle_map() -> void:
 
 func _show_end() -> void:
 	over_shown = true
+	if hud.chat_open:
+		hud.close_chat()
+		_on_chat_closed()
 	var win: bool = m.winner == 0
 	var f = m.fac(0)
 	var mins := int(m.t) / 60

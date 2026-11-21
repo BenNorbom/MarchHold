@@ -7,6 +7,9 @@ signal changed
 const PATH := "user://settings.cfg"
 const KEY_PATH := "user://terra.cfg"
 const DEFAULT_MODEL := "gpt-6.1-terra"
+const CHATGPT_PLAN := 0
+const API_KEY := 1
+const TERRA_OFF := 2
 
 var data := {
 	"quality": 1,           # 0 low, 1 medium, 2 high
@@ -16,6 +19,9 @@ var data := {
 	"invert_y": false,
 	"fullscreen": false,
 	"model": DEFAULT_MODEL,
+	"chatgpt_model": "",
+	"terra_provider": -1,
+	"chatgpt_usage_seen": false,
 	"intro_seen": false,
 	"matches_played": 0,
 	"tutorial_done": false,
@@ -50,6 +56,8 @@ func load_all() -> void:
 	var kc := ConfigFile.new()
 	if kc.load_encrypted_pass(KEY_PATH, _secret()) == OK:
 		api_key = str(kc.get_value("terra", "key", ""))
+	if int(data["terra_provider"]) not in [CHATGPT_PLAN, API_KEY, TERRA_OFF]:
+		data["terra_provider"] = API_KEY if has_key() else CHATGPT_PLAN
 
 
 func save_all() -> void:
@@ -89,3 +97,10 @@ func apply() -> void:
 
 func has_key() -> bool:
 	return api_key.length() > 20
+
+
+func terra_available() -> bool:
+	match int(data["terra_provider"]):
+		CHATGPT_PLAN: return ChatGPT.can_use_plan()
+		API_KEY: return has_key()
+	return false
