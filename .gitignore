@@ -1,0 +1,13 @@
+# Godot
+.godot/
+/android/
+*.translation
+export_credentials.cfg
+# Build output
+/build/
+/dist/
+# OS / editor
+.DS_Store
+Thumbs.db
+*.tmp
+.vscode/

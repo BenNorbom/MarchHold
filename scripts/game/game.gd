@@ -1,0 +1,1122 @@
+extends Node3D
+## One match: the simulation, the rival, the world view, the commander, the HUD,
+## Terra, and the intro / tutorial / hints. All orders end up in Match.command().
+
+signal finished(action: String)
+
+const Defs = preload("res://scripts/data/defs.gd")
+const Terrain = preload("res://scripts/world/terrain.gd")
+const Match = preload("res://scripts/sim/match.gd")
+const Rival = preload("res://scripts/ai/rival.gd")
+const Materials = preload("res://scripts/view/materials.gd")
+const Meshes = preload("res://scripts/view/meshes.gd")
+const WorldView = preload("res://scripts/view/world_view.gd")
+const Commander = preload("res://scripts/view/commander.gd")
+const Hud = preload("res://scripts/ui/hud.gd")
+const Terra = preload("res://scripts/orders/terra.gd")
+const Parser = preload("res://scripts/orders/parser.gd")
+const Tutorial = preload("res://scripts/game/tutorial.gd")
+const Intro = preload("res://scripts/game/intro.gd")
+const Hints = preload("res://scripts/game/hints.gd")
+
+var opts := {}
+var m
+var ai
+var mats
+var meshes
+var view
+var cmd
+var hud
+var terra
+var tutorial
+var intro
+var hints
+var acc := 0.0
+var paused := false
+var over_shown := false
+var peak_pop := 0
+var addressee := {}
+var address_label := ""
+var pending := {}
+var terra_ctx := {}
+var dialogue: Array = []
+var placing := false
+var place_req := {}
+var place_type := ""
+var place_rot := 0.0
+var place_pos := Vector2.ZERO
+var place_ok := false
+var wall_points: Array = []
+var placed_ids: Array = []
+var menu_kind := ""
+var menu_items: Array = []
+var map_open := false
+var map_refresh_t := 0.0
+var look_unit := -1
+var look_bld := -1
+var ready_done := false
+var start_ms := 0
+
+
+func start(options: Dictionary) -> void:
+	opts = options
+	var seed_in := int(opts.get("seed", 0))
+	if seed_in == 0:
+		seed_in = randi() % 900000 + 1000
+	opts["seed"] = seed_in
+	var is_tutorial: bool = opts.get("tutorial", false)
+	m = Match.new()
+	m.setup({"seed": seed_in})
+	ai = Rival.new()
+	ai.setup(m, {"faction": 1, "difficulty": 0 if is_tutorial else int(opts.get("difficulty", 1)),
+		"strategy": "boom" if is_tutorial else str(opts.get("strategy", "random")), "seed": seed_in,
+		"calm_start": bool(opts.get("calm_start", false)), "passive": is_tutorial, "max_pop": 14 if is_tutorial else 200})
+	var quality := int(Settings.get_val("quality", 1))
+	mats = Materials.new()
+	meshes = Meshes.new(mats)
+	view = WorldView.new()
+	add_child(view)
+	view.setup(m, mats, meshes, quality)
+	var me = m.commander(0)
+	cmd = Commander.new()
+	add_child(cmd)
+	cmd.setup(m, mats, m.terrain.pos3(me.pos, 0.3), me.facing)
+	cmd.attacked.connect(_on_attack_result)
+	view.hidden_unit = me.id
+	hud = Hud.new()
+	add_child(hud)
+	hud.map_view.setup(m, view.map_image())
+	hud.chat_submitted.connect(_on_chat)
+	hud.chat_closed.connect(func(): cmd.move_enabled = true)
+	hud.menu_clicked.connect(_menu_select)
+	hud.pause_choice.connect(_on_pause_choice)
+	terra = Terra.new()
+	add_child(terra)
+	terra.answered.connect(_on_terra)
+	Sfx.set_world(self)
+	Sfx.set_fire(m.terrain.pos3(m.home_pos(0), 0.5))
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	hints = Hints.new()
+	hints.setup(self)
+	if is_tutorial:
+		tutorial = Tutorial.new()
+		tutorial.setup(self)
+	if not Settings.get_val("intro_seen", false) or opts.get("intro", false):
+		intro = Intro.new()
+		add_child(intro)
+		intro.setup(self)
+	else:
+		_welcome()
+	ready_done = true
+	start_ms = Time.get_ticks_msec()
+
+
+func _welcome() -> void:
+	if tutorial:
+		tutorial.begin()
+		return
+	hud.log_line("You stand at your campfire with six villagers. Commander Rook has made camp somewhere across the valley.", "system")
+	hud.log_line("Look at a villager and press Enter to give orders. Type /b to build, /h for help.", "system")
+	if not terra.available():
+		hud.log_line("Terra (free-form orders) is off: simple orders still work. Add an OpenAI key in Settings for orders in your own words.", "hint")
+
+
+func intro_done() -> void:
+	Settings.set_val("intro_seen", true)
+	intro = null
+	_welcome()
+
+
+# --- Frame loop ----------------------------------------------------------------------
+
+func _process(delta: float) -> void:
+	if not ready_done:
+		return
+	if paused or intro != null and intro.blocking():
+		if intro != null:
+			view.update_frame(delta, 0.0, cmd.eye())
+		return
+	var me = m.commander(0)
+	if me and not me.dead:
+		m.set_commander(0, Vector2(cmd.position.x, cmd.position.z), cmd.facing(), cmd.anim)
+	if not m.over:
+		acc += delta
+		var n := 0
+		while acc >= Defs.TICK and n < 4:
+			acc -= Defs.TICK
+			m.tick(Defs.TICK)
+			ai.update(Defs.TICK)
+			if tutorial:
+				tutorial.tick(Defs.TICK)
+			n += 1
+		if n >= 4:
+			acc = 0.0
+	var alpha := clampf(acc / Defs.TICK, 0.0, 1.0)
+	view.handle_events(m.events)
+	_sound_events(m.events)
+	m.events.clear()
+	for msg in m.messages:
+		if msg["faction"] == 0:
+			hud.log_line(msg["text"], msg["kind"])
+			hints.on_message(msg)
+			if msg["kind"] == "age":
+				hud.show_toast(msg["text"].split("!")[0] + "!")
+	m.messages.clear()
+	view.update_frame(delta, alpha, cmd.eye())
+	Sfx.listener_pos = cmd.eye()
+	_update_hud()
+	_update_look()
+	if placing:
+		_update_place()
+	if map_open:
+		map_refresh_t -= delta
+		if map_refresh_t <= 0.0:
+			map_refresh_t = 1.0
+			hud.map_view.refresh()
+	hints.tick(delta)
+	peak_pop = maxi(peak_pop, m.fac(0).pop)
+	if m.over and not over_shown:
+		_show_end()
+
+
+func _sound_events(events: Array) -> void:
+	for ev in events:
+		if ev["type"] != "sound":
+			continue
+		var name: String = ev["name"]
+		var p: Vector2 = ev["pos"]
+		if ev.get("faction", -1) == 0 and name in ["bell", "horn", "report", "age", "birth", "complete"]:
+			var vol := -4.0 if name in ["bell", "horn"] else -9.0
+			Sfx.play(name, null, vol)
+			if name == "bell":
+				get_tree().create_timer(0.9).timeout.connect(func(): Sfx.play("bell", null, -6.0))
+				get_tree().create_timer(1.8).timeout.connect(func(): Sfx.play("bell", null, -8.0))
+		else:
+			var vol2 := -8.0
+			if name in ["cannon", "impact", "collapse"]:
+				vol2 = 2.0
+			elif name in ["chop", "pick", "hammer", "anvil"]:
+				vol2 = -12.0
+			Sfx.play(name, m.terrain.pos3(p, 1.0), vol2)
+
+
+func _update_hud() -> void:
+	var me = m.commander(0)
+	if me == null:
+		return
+	var held := ""
+	if cmd.can_shoot():
+		held = "Bow · %d arrows" % me.arrows
+	else:
+		held = Defs.item_name(me.weapon).capitalize() if me.weapon != "" else "Bare hands"
+		if me.shield != "":
+			held += " · " + Defs.item_name(me.shield)
+		if me.bow:
+			held += " · bow (%d)" % me.arrows
+	if me.armor != "":
+		held += " · " + Defs.item_name(me.armor)
+	if me.mounted:
+		held = "On horseback · " + held
+	var fwd: Vector3 = cmd.look_dir()
+	var yaw := rad_to_deg(atan2(fwd.x, -fwd.z))
+	var home: Vector2 = m.home_pos(0) - me.pos
+	var hb := rad_to_deg(atan2(home.x, -home.y))
+	hud.update_status(me.hp, me.max_hp, cmd.stamina, held, fposmod(yaw, 360.0), fposmod(hb, 360.0))
+
+
+func _update_look() -> void:
+	if placing or hud.menu_open:
+		return
+	look_unit = view.pick_unit(cmd.eye(), cmd.look_dir(), 45.0)
+	look_bld = -1
+	var text := ""
+	if look_unit >= 0:
+		var u = m.unit(look_unit)
+		text = _describe_unit(u)
+	else:
+		var hit = view.ground_hit(cmd.eye(), cmd.look_dir(), 14.0)
+		var bid := _building_at_ray()
+		if bid >= 0:
+			look_bld = bid
+			text = _describe_building(m.bld(bid))
+	hud.set_prompt(text)
+
+
+func _building_at_ray() -> int:
+	var from: Vector3 = cmd.eye()
+	var dir: Vector3 = cmd.look_dir()
+	var best := -1
+	var bd := 14.0
+	for b in m.buildings:
+		if b.dead or b.pos.distance_to(Vector2(from.x, from.z)) > 20.0:
+			continue
+		# Sample along the ray against the footprint.
+		var t := 0.5
+		while t < bd:
+			var p := from + dir * t
+			var local: Vector2 = (Vector2(p.x, p.z) - b.pos).rotated(-b.rot)
+			if absf(local.x) <= b.size.x * 0.5 + 0.2 and absf(local.y) <= b.size.y * 0.5 + 0.2 and p.y < m.terrain.height_at(p.x, p.z) + 8.0:
+				bd = t
+				best = b.id
+				break
+			t += 0.5
+	return best
+
+
+func _describe_unit(u) -> String:
+	if u == null:
+		return ""
+	if u.faction == -1:
+		return "Wild horse" if u.kind == "horse" else ("Deer" if u.kind == "deer" else "")
+	if u.faction == 1:
+		if u.kind == "commander":
+			return "Commander Rook — kill him to win"
+		return "Enemy " + m.describe_person(u) + (" (wounded)" if u.hp < u.max_hp * 0.5 else "")
+	if u.kind == "horse":
+		return "Your horse in the stable"
+	if u.kind in ["cannon", "ram"]:
+		return "%s (%d crew)%s" % [Defs.item_name(u.kind).capitalize(), u.crew_ids.size(), (" · %d shot" % u.ammo) if u.kind == "cannon" else ""]
+	if u.dead:
+		return u.name + " (dead)"
+	if u.child:
+		return "%s (child, grows up in %d s)" % [u.name, int(maxf(0.0, Defs.MATURE_TIME - (m.t - u.born)))]
+	var c = m.crew_of(u)
+	var what := "idle"
+	if c and c.idx < c.steps.size():
+		what = Defs.describe_step(c.steps[c.idx])
+	elif c and c.captain:
+		what = "captain, standing by"
+	var gear := ""
+	if u.weapon != "" or u.bow:
+		gear = " · " + (Defs.item_name(u.weapon) if u.weapon != "" else "bow")
+	var who: String = u.name if c == null or c.members.size() <= 1 else "%s (%s)" % [u.name, m.crew_label(c)]
+	return "%s — %s%s · Enter to give orders" % [who, what, gear]
+
+
+func _describe_building(b) -> String:
+	if b == null:
+		return ""
+	var name: String = Defs.building_name(b.type)
+	if b.type == "armory":
+		name += " (%s)" % ["wood", "bronze", "iron"][b.tier]
+	if b.type == "smelter" and b.tier >= 1:
+		name = "Iron furnace"
+	if b.faction == 1:
+		return "Enemy " + name.to_lower()
+	if not b.complete:
+		if not b.paid:
+			return "%s — site, waiting for builders (%s)" % [name, Defs.cost_text(Defs.BUILDINGS[b.type]["cost"])]
+		return "%s — %d%% built" % [name, int(b.progress * 100)]
+	var extra := ""
+	match b.type:
+		"armory":
+			var f = m.fac(0)
+			var parts: Array[String] = []
+			for k in f.gear:
+				if int(f.gear[k]) > 0:
+					parts.append("%d %s" % [f.gear[k], Defs.item_name(k, int(f.gear[k]))])
+			extra = " · E: take gear · " + (", ".join(parts) if not parts.is_empty() else "empty")
+		"stable":
+			var n := 0
+			for h in m.units:
+				if not h.dead and h.kind == "horse" and h.stable == b.id:
+					n += 1
+			extra = " · %d horses · F: ride" % n
+		"mine":
+			extra = " · " + Defs.RESOURCE_NAMES.get(b.deposit, "")
+		"campfire":
+			extra = " · home"
+	if b.upgrading != "":
+		extra += " · upgrading %d%%" % int(100.0 * b.up_work / float(Defs.UPGRADES[b.upgrading]["work"]))
+	if b.research != "":
+		extra += " · researching %d%%" % int(100.0 * b.research_t / float(Defs.RESEARCH[b.research]["time"]))
+	if b.hp < b.max_hp * 0.98:
+		extra += " · %d%% intact" % int(100.0 * b.hp / b.max_hp)
+	return name + extra
+
+
+# --- Input ---------------------------------------------------------------------------
+
+func _unhandled_input(event: InputEvent) -> void:
+	if not ready_done or over_shown or Time.get_ticks_msec() - start_ms < 600:
+		return
+	if intro != null and intro.blocking():
+		if event is InputEventKey and event.pressed and event.keycode in [KEY_ESCAPE, KEY_SPACE, KEY_ENTER]:
+			intro.skip()
+			get_viewport().set_input_as_handled()
+		return
+	if hud.chat_open:
+		return
+	if event is InputEventKey and event.pressed and not event.echo:
+		var k: int = event.keycode
+		if paused:
+			if k == KEY_ESCAPE:
+				_set_paused(false)
+			return
+		if hud.menu_open:
+			if k == KEY_ESCAPE or (k == KEY_TAB and menu_kind == "ledger"):
+				_close_menu()
+			elif k >= KEY_0 and k <= KEY_9:
+				_menu_select(10 if k == KEY_0 else k - KEY_0)
+			elif k == KEY_ENTER or k == KEY_T:
+				_close_menu()
+				open_chat()
+			get_viewport().set_input_as_handled()
+			return
+		match k:
+			KEY_ENTER, KEY_KP_ENTER:
+				if placing and Defs.BUILDINGS[place_type].get("wall", false):
+					_finish_wall()
+				else:
+					open_chat()
+			KEY_T:
+				open_chat()
+			KEY_SLASH:
+				open_chat("/")
+			KEY_ESCAPE:
+				if placing:
+					_cancel_place()
+				elif map_open:
+					_toggle_map()
+				else:
+					_set_paused(true)
+			KEY_TAB:
+				_menu_ledger()
+			KEY_M:
+				_toggle_map()
+			KEY_B:
+				_menu_build()
+			KEY_C:
+				_menu_craft()
+			KEY_F1, KEY_H:
+				_menu_help()
+			KEY_E:
+				if placing:
+					place_rot += deg_to_rad(15.0)
+				else:
+					_interact()
+			KEY_Q:
+				if placing:
+					place_rot -= deg_to_rad(15.0)
+				else:
+					var msg: String = cmd.toggle_weapon()
+					if msg != "":
+						hud.show_toast(msg)
+			KEY_F:
+				var r: String = m.commander_mount(0)
+				if r != "":
+					hud.log_line(r, "system")
+			KEY_R:
+				_mark()
+			KEY_G:
+				var r2: String = m.commander_take_gear(0)
+				hud.log_line(r2, "system")
+		get_viewport().set_input_as_handled()
+	elif event is InputEventMouseButton:
+		if paused or hud.menu_open:
+			return
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			if event.pressed:
+				if placing:
+					_place_click()
+				else:
+					cmd.primary_pressed()
+			else:
+				cmd.primary_released()
+		elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+			if placing:
+				if Defs.BUILDINGS[place_type].get("wall", false) and wall_points.size() >= 1:
+					_finish_wall()
+				else:
+					_cancel_place()
+		elif event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed and placing:
+			place_rot += deg_to_rad(15.0)
+		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN and event.pressed and placing:
+			place_rot -= deg_to_rad(15.0)
+
+
+func _set_paused(on: bool) -> void:
+	paused = on
+	hud.show_pause(on)
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if on else Input.MOUSE_MODE_CAPTURED
+	cmd.look_enabled = not on
+	get_tree().paused = false
+
+
+func _on_pause_choice(name: String) -> void:
+	match name:
+		"resume":
+			_set_paused(false)
+		"help":
+			_set_paused(false)
+			_menu_help()
+		"settings":
+			finished.emit("settings")
+		"menu":
+			finished.emit("menu")
+		"again":
+			finished.emit("again")
+		"quit":
+			finished.emit("quit")
+
+
+func _interact() -> void:
+	if look_unit >= 0:
+		var u = m.unit(look_unit)
+		if u and u.faction == 0 and u.kind == "villager":
+			open_chat()
+			return
+	var arm = m.nearest_building(0, Vector2(cmd.position.x, cmd.position.z), ["armory"])
+	if arm and m.dist_to_building(Vector2(cmd.position.x, cmd.position.z), arm) < 5.0:
+		hud.log_line(m.commander_take_gear(0), "system")
+		return
+	var st = m.nearest_building(0, Vector2(cmd.position.x, cmd.position.z), ["stable"])
+	if st and m.dist_to_building(Vector2(cmd.position.x, cmd.position.z), st) < 5.0:
+		hud.log_line(m.commander_mount(0), "system")
+		return
+	hud.show_toast("Look at a villager and press E or Enter to talk. Stand by the armory and press E for gear.")
+
+
+func _mark() -> void:
+	var hit = view.ground_hit(cmd.eye(), cmd.look_dir(), 300.0)
+	if hit == null:
+		hud.show_toast("Look at the ground to mark a spot.")
+		return
+	m.set_mark(0, Vector2(hit.x, hit.z))
+	hud.log_line("Spot marked. Orders can now say 'there' or 'the mark' (e.g. 'guard the mark').", "system")
+	Sfx.play("click", null, -6.0)
+
+
+func _on_attack_result(text: String) -> void:
+	if text.begins_with("hit:"):
+		return
+	hud.show_toast(text)
+
+
+# --- Chat and orders -----------------------------------------------------------------
+
+func open_chat(prefill: String = "") -> void:
+	var label := "your people"
+	addressee = {}
+	if look_unit >= 0:
+		var u = m.unit(look_unit)
+		if u and u.faction == 0 and u.kind == "villager" and not u.dead:
+			if u.child:
+				hud.show_toast("%s is a child and can't work yet." % u.name)
+			else:
+				addressee = {"unit": u.id}
+				var c = m.crew_of(u)
+				label = u.name if c == null or c.members.size() <= 1 else m.crew_label(c)
+	address_label = label
+	cmd.move_enabled = false
+	hud.open_chat(label, prefill)
+
+
+func _find_by_name(tag: String):
+	var best = null
+	for u in m.units:
+		if u.dead or u.faction != 0 or u.kind != "villager":
+			continue
+		var n: String = u.name.to_lower()
+		if n == tag:
+			return u
+		if n.begins_with(tag) and best == null:
+			best = u
+	return best
+
+
+func _on_chat(text: String) -> void:
+	cmd.move_enabled = true
+	if text.begins_with("/"):
+		_slash(text)
+		return
+	var req := addressee.duplicate()
+	var who := address_label if not addressee.is_empty() and address_label != "" else "your people"
+	if text.begins_with("@"):
+		var sp := text.find(" ")
+		var tag := (text.substr(1, sp - 1) if sp > 0 else text.substr(1)).to_lower().trim_suffix(",").trim_suffix(":")
+		text = text.substr(sp + 1).strip_edges() if sp > 0 else ""
+		if tag in ["all", "everyone", "everybody"]:
+			req = {"all": true}
+			who = "everyone"
+		else:
+			var u = _find_by_name(tag)
+			if u == null:
+				hud.log_line("Nobody here is called %s. Type /p to see your people." % tag.capitalize(), "warn")
+				return
+			if u.child:
+				hud.log_line("%s is a child and can't work yet." % u.name, "warn")
+				return
+			req = {"unit": u.id}
+			var c = m.crew_of(u)
+			who = u.name if c == null or c.members.size() <= 1 else m.crew_label(c)
+	if text.strip_edges() == "":
+		return
+	hud.log_line(text, "you", "You → " + who)
+	var parsed: Dictionary = Parser.parse(text)
+	if not pending.is_empty():
+		if parsed.get("confirm", false):
+			var p := pending
+			pending = {}
+			_execute(p["req"], p["steps"], p["who"])
+			return
+		if parsed.get("cancel", false):
+			pending = {}
+			hud.log_line("Plan dropped.", "terra", "Terra")
+			return
+	if parsed.get("cancel", false):
+		var n: int = m.cancel(0, req if not req.is_empty() else {"all": true})
+		hud.log_line("Stopped." if n > 0 else "Nobody was doing anything.", "crew")
+		return
+	if parsed.get("confirm", false):
+		hud.log_line("There's no plan waiting. Give an order first.", "terra", "Terra")
+		return
+	if parsed.get("ok", false):
+		if parsed.get("all", false) and req.is_empty():
+			req = {"all": true}
+			who = "everyone"
+		_execute(req, parsed["steps"], who)
+		return
+	if terra.available():
+		terra_ctx = {"req": req, "who": who, "text": text}
+		hud.set_thinking("Terra is thinking…")
+		var crew_id := -1
+		if req.has("unit"):
+			var u2 = m.unit(req["unit"])
+			if u2 and u2.crew >= 0:
+				crew_id = u2.crew
+		terra.ask(m.brief(0, who, crew_id), text, dialogue, pending.get("steps", []))
+	else:
+		hud.log_line("I didn't catch that. Try 'gather wood', 'build a hut', 'make spears', 'send a scout', 'to arms' — or /h for help. With an OpenAI key (Settings) you can say anything.", "warn")
+
+
+func _on_terra(result: Dictionary) -> void:
+	hud.set_thinking("")
+	if not result.get("ok", false):
+		hud.log_line(result.get("error", "Terra could not answer."), "warn")
+		return
+	var d: Dictionary = result["data"]
+	var reply := str(d.get("reply", ""))
+	dialogue.append({"player": terra_ctx.get("text", ""), "terra": reply})
+	while dialogue.size() > 6:
+		dialogue.pop_front()
+	match str(d.get("kind", "reply")):
+		"plan":
+			var steps: Array = Match.clean_steps(d.get("steps", []))
+			var err := Defs.validate_steps(steps)
+			if err == "":
+				for s in steps:
+					err = m.step_problem(0, s)
+					if err != "":
+						break
+			if reply != "":
+				hud.log_line(reply, "terra", "Terra")
+			if err != "":
+				hud.log_line("That plan can't be done yet: " + err, "warn")
+				return
+			pending = {"req": terra_ctx.get("req", {}), "steps": steps, "who": terra_ctx.get("who", "your people")}
+			var lines: Array[String] = []
+			for i in steps.size():
+				var s: Dictionary = steps[i]
+				var cost := ""
+				if s["action"] == "build":
+					cost = " (%s)" % Defs.cost_text(Defs.BUILDINGS[s["subject"]]["cost"])
+				lines.append("%d. %s%s" % [i + 1, Defs.describe_step(s).capitalize(), cost])
+			hud.log_line("Plan for %s:  %s" % [pending["who"], "   ".join(lines)], "terra")
+			hud.log_line("Say 'go' to start, change it, or 'cancel'.", "terra")
+		"confirm":
+			if not pending.is_empty():
+				var p := pending
+				pending = {}
+				_execute(p["req"], p["steps"], p["who"])
+			elif reply != "":
+				hud.log_line(reply, "terra", "Terra")
+		"cancel":
+			pending = {}
+			hud.log_line(reply if reply != "" else "Plan dropped.", "terra", "Terra")
+		_:
+			hud.log_line(reply, "terra", "Terra")
+
+
+func _execute(req: Dictionary, steps: Array, who: String) -> void:
+	steps = m.resolve_steps(0, steps)
+	var needs := []
+	for i in steps.size():
+		if steps[i]["action"] == "build":
+			needs.append(i)
+	if needs.is_empty():
+		_issue(req, steps, who)
+		return
+	for i in needs:
+		var why: String = m.unlock_problem(0, steps[i]["subject"])
+		if why != "":
+			hud.log_line(why, "warn")
+			return
+	place_req = {"req": req, "steps": steps, "who": who, "needs": needs, "k": 0}
+	placed_ids = []
+	_begin_place(steps[needs[0]]["subject"])
+
+
+func _issue(req: Dictionary, steps: Array, who: String) -> void:
+	var full := req.duplicate()
+	full["steps"] = steps
+	var r: Dictionary = m.command(0, full)
+	if r.get("ok", false):
+		var parts: Array[String] = []
+		for s in steps:
+			parts.append(Defs.describe_step(s))
+		var label := who
+		if label == "your people" and r.has("crews"):
+			var c = m.crews.get(r["crews"][0])
+			if c:
+				label = m.crew_label(c)
+		hud.log_line("%s: %s." % [label.capitalize() if label == "everyone" else label, ", then ".join(parts)], "crew")
+		Sfx.play("click", null, -10.0)
+		if tutorial:
+			tutorial.on_command(steps, r)
+	else:
+		hud.log_line(r.get("error", "That order didn't work."), "warn")
+		for id in placed_ids:
+			m.remove_site(id)
+	placed_ids = []
+
+
+# --- Placement --------------------------------------------------------------------------
+
+func _begin_place(type: String) -> void:
+	placing = true
+	place_type = type
+	wall_points = []
+	var me = m.commander(0)
+	# Door (local +Z) faces the commander.
+	place_rot = PI - (me.facing if me else 0.0)
+	var d: Dictionary = Defs.BUILDINGS[type]
+	if d.get("wall", false):
+		hud.show_toast("%s: click to set posts, Enter or right-click to finish, Esc to cancel." % d["name"])
+	else:
+		hud.show_toast("Place the %s: click to confirm, Q/E or the wheel to turn, Esc to cancel." % d["name"].to_lower())
+
+
+func _aim_point():
+	return view.ground_hit(cmd.eye(), cmd.look_dir(), 90.0)
+
+
+func _update_place() -> void:
+	var hit = _aim_point()
+	var d: Dictionary = Defs.BUILDINGS[place_type]
+	if hit == null:
+		view.hide_ghost()
+		hud.set_prompt("Look at the ground.")
+		return
+	place_pos = Vector2(hit.x, hit.z)
+	var cost_note := ""
+	var miss: Dictionary = m.missing_cost(0, d["cost"])
+	if not miss.is_empty():
+		cost_note = " · needs %s more" % Defs.cost_text(miss)
+	if d.get("wall", false):
+		var pts := wall_points.duplicate()
+		pts.append(place_pos)
+		var pieces := []
+		var total := 0
+		for i in range(pts.size() - 1):
+			var a: Vector2 = pts[i]
+			var b: Vector2 = pts[i + 1]
+			var len := a.distance_to(b)
+			if len < 1.0:
+				continue
+			var n := maxi(1, int(ceil(len / float(d["length"]))))
+			var rot := atan2((b - a).y, (b - a).x)
+			for k in n:
+				var mid := a.lerp(b, (k + 0.5) / n)
+				var ok: bool = m.site_problem(0, place_type, mid, rot, Vector2(len / n, d["thick"])) == ""
+				pieces.append([mid, rot, len / n, ok])
+				total += 1
+		view.hide_ghost()
+		view.show_wall_ghosts(place_type, pieces)
+		var cost_each: Dictionary = d["cost"]
+		var all_cost := {}
+		for r in cost_each:
+			all_cost[r] = int(cost_each[r]) * total
+		hud.set_prompt("%s: %d posts, %d pieces (%s) · click: post · Enter: finish · Esc: cancel" % [d["name"], wall_points.size(), total, Defs.cost_text(all_cost)])
+		place_ok = total > 0
+		return
+	var why: String = m.site_problem(0, place_type, place_pos, place_rot)
+	place_ok = why == ""
+	view.show_ghost(place_type, place_pos, place_rot, place_ok)
+	hud.set_prompt(("%s — click to place%s" % [d["name"], cost_note]) if place_ok else why)
+
+
+func _place_click() -> void:
+	var d: Dictionary = Defs.BUILDINGS[place_type]
+	if d.get("wall", false):
+		if _aim_point() == null:
+			return
+		wall_points.append(place_pos)
+		Sfx.play("click", null, -8.0)
+		return
+	if not place_ok:
+		Sfx.play("click", null, -2.0, 0.6)
+		return
+	var r: Dictionary = m.place_site(0, place_type, place_pos, place_rot)
+	if not r.get("ok", false):
+		hud.show_toast(r.get("error", "Can't build there."))
+		return
+	_site_done([r["id"]])
+
+
+func _finish_wall() -> void:
+	var pts := wall_points.duplicate()
+	if pts.size() == 1 and _aim_point() != null:
+		pts.append(place_pos)
+	if pts.size() < 2:
+		hud.show_toast("Set at least two posts.")
+		return
+	var r: Dictionary = m.place_wall(0, place_type, pts)
+	if not r.get("ok", false):
+		hud.show_toast(r.get("error", "Can't build a wall there."))
+		return
+	if int(r.get("skipped", 0)) > 0:
+		hud.log_line("%d pieces were left out (%s)." % [r["skipped"], r.get("error", "blocked")], "warn")
+	_site_done(r["ids"])
+
+
+func _site_done(ids: Array) -> void:
+	placed_ids.append_array(ids)
+	var pr := place_req
+	var idx: int = pr["needs"][pr["k"]]
+	pr["steps"][idx]["sites"] = ids
+	pr["k"] = int(pr["k"]) + 1
+	view.hide_ghost()
+	Sfx.play("click", null, -6.0)
+	if pr["k"] < pr["needs"].size():
+		_begin_place(pr["steps"][pr["needs"][pr["k"]]]["subject"])
+		return
+	placing = false
+	hud.set_prompt("")
+	place_req = {}
+	_issue(pr["req"], pr["steps"], pr["who"])
+
+
+func _cancel_place() -> void:
+	placing = false
+	view.hide_ghost()
+	hud.set_prompt("")
+	for id in placed_ids:
+		m.remove_site(id)
+	placed_ids = []
+	place_req = {}
+	hud.show_toast("Placement cancelled.")
+
+
+# --- Slash commands and menus -----------------------------------------------------------
+
+func _slash(text: String) -> void:
+	var parts := text.substr(1).strip_edges().split(" ", false)
+	var c := parts[0].to_lower() if parts.size() > 0 else "h"
+	var arg := " ".join(parts.slice(1)).strip_edges()
+	match c:
+		"b", "build":
+			if arg != "":
+				_build_by_name(arg)
+			else:
+				_menu_build()
+		"c", "craft", "make":
+			if arg != "":
+				_craft_by_name(arg)
+			else:
+				_menu_craft()
+		"l", "ledger":
+			_menu_ledger()
+		"p", "people", "crews":
+			_menu_people()
+		"s", "scouts", "reports":
+			_menu_reports()
+		"m", "map":
+			_toggle_map()
+		"t", "tech":
+			_menu_tech()
+		"h", "help", "?":
+			_menu_help()
+		"cancel", "stop":
+			var n: int = m.cancel(0, addressee if not addressee.is_empty() else {"all": true})
+			hud.log_line("Stopped %d crew%s." % [n, "" if n == 1 else "s"], "crew")
+		_:
+			hud.log_line("Unknown command /%s. Type /h for the list." % c, "warn")
+
+
+func _open_menu(kind: String, title: String, body: String, footer: String = "Number keys or click to choose · Esc to close") -> void:
+	menu_kind = kind
+	hud.show_menu(title, body, footer)
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	cmd.look_enabled = false
+	cmd.move_enabled = false
+
+
+func _close_menu() -> void:
+	hud.hide_menu()
+	menu_kind = ""
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	cmd.look_enabled = true
+	cmd.move_enabled = true
+
+
+func _cost_bb(cost: Dictionary, miss: Dictionary) -> String:
+	if cost.is_empty():
+		return "free"
+	var parts: Array[String] = []
+	for r in cost:
+		var col := "ff8070" if miss.has(r) else "e8dcc2"
+		parts.append("[color=#%s]%d %s[/color]" % [col, int(cost[r]), Defs.RESOURCE_NAMES.get(r, r)])
+	return ", ".join(parts)
+
+
+func _menu_build() -> void:
+	var all: Array = m.build_menu(0)
+	var ready := all.filter(func(e): return e["locked"] == "")
+	var locked := all.filter(func(e): return e["locked"] != "")
+	ready.sort_custom(func(a, b): return a["missing"].size() < b["missing"].size())
+	menu_items = ready
+	var lines: Array[String] = []
+	for i in ready.size():
+		var e: Dictionary = ready[i]
+		var key := str(i + 1) if i < 9 else ("0" if i == 9 else "·")
+		lines.append("[url=%d][b][color=#ffd870]%s[/color]  %s[/b][/url]  —  %s\n      [color=#b8b0a0]%s[/color]" % [i + 1, key, e["name"], _cost_bb(e["cost"], e["missing"]), e["desc"]])
+	if not locked.is_empty():
+		lines.append("\n[color=#9a9080]Not yet:[/color]")
+		for e in locked:
+			lines.append("[color=#8a8070]   %s — %s[/color]" % [e["name"], e["locked"]])
+	var who := ("for " + address_label) if not addressee.is_empty() else "(the nearest free villagers will build)"
+	_open_menu("build", "Build  " + who, "\n".join(lines))
+
+
+func _menu_craft() -> void:
+	var all: Array = m.craft_menu(0)
+	if m.armory_tier(0) < 0:
+		_open_menu("none", "Craft", "You need an [b]armory[/b] first. Open /b to build one (50 wood).", "Esc to close")
+		return
+	var ready := all.filter(func(e): return e["locked"] == "")
+	var locked := all.filter(func(e): return e["locked"] != "")
+	menu_items = ready
+	var lines: Array[String] = []
+	for i in ready.size():
+		var e: Dictionary = ready[i]
+		var key := str(i + 1) if i < 9 else ("0" if i == 9 else "·")
+		lines.append("[url=%d][b][color=#ffd870]%s[/color]  %s[/b][/url]  —  %s   [color=#b8b0a0](in armory: %d)[/color]" % [i + 1, key, e["name"], _cost_bb(e["cost"], e["missing"]), e["stock"]])
+	if not locked.is_empty():
+		lines.append("\n[color=#9a9080]Not yet:[/color]")
+		for e in locked:
+			lines.append("[color=#8a8070]   %s — %s[/color]" % [Defs.item_name(e["id"], 2).capitalize(), e["locked"]])
+	_open_menu("craft", "Armory (%s)" % ["wood", "bronze", "iron"][maxi(0, m.armory_tier(0))], "\n".join(lines), "Number keys or click: one batch · type '/c arrows 3' for three batches · Esc to close")
+
+
+func _menu_select(i: int) -> void:
+	if menu_kind == "people":
+		if i >= 1 and i <= menu_items.size():
+			var c = menu_items[i - 1]
+			_close_menu()
+			addressee = {"crew": c.id}
+			address_label = m.crew_label(c)
+			cmd.move_enabled = false
+			hud.open_chat(address_label)
+		return
+	if not menu_kind in ["build", "craft"]:
+		return
+	if i < 1 or i > menu_items.size():
+		return
+	var e: Dictionary = menu_items[i - 1]
+	var req := addressee.duplicate()
+	var who := address_label if not addressee.is_empty() else "your people"
+	_close_menu()
+	match e["kind"]:
+		"build":
+			_execute(req, [{"action": "build", "subject": e["id"], "count": 0, "amount": 0, "where": ""}], who)
+		"upgrade":
+			_issue(req, [{"action": "upgrade", "subject": e["id"], "count": 0, "amount": 0, "where": ""}], who)
+		"research":
+			_issue(req, [{"action": "research", "subject": e["id"], "count": 0, "amount": 0, "where": ""}], who)
+		"craft":
+			_issue(req, [{"action": "craft", "subject": e["id"], "count": 0, "amount": int(Defs.ITEMS[e["id"]]["batch"]), "where": ""}], who)
+
+
+func _build_by_name(arg: String) -> void:
+	var key := Parser.find_in(Parser.normalize(arg), Parser.BUILD_WORDS)
+	if key == "":
+		for id in Defs.buildable_ids():
+			if Defs.building_name(id).to_lower().begins_with(arg.to_lower()):
+				key = id
+	if key == "":
+		hud.log_line("There's no structure called '%s'. Type /b for the list." % arg, "warn")
+		return
+	if arg.to_lower().contains("stone") and key == "palisade":
+		key = "stone_wall"
+	_execute(addressee.duplicate(), [{"action": "build", "subject": key, "count": 0, "amount": 0, "where": ""}], address_label if not addressee.is_empty() else "your people")
+
+
+func _craft_by_name(arg: String) -> void:
+	var s := Parser.normalize(arg)
+	var item := Parser.find_in(s, Parser.ITEM_WORDS)
+	if item == "":
+		hud.log_line("The armory can't make '%s'. Type /c for the list." % arg, "warn")
+		return
+	var batches := maxi(1, Parser.number_in(s))
+	var st := Parser._step("craft", item, 0)
+	var steps: Array = m.resolve_steps(0, [st])
+	var id: String = steps[0]["subject"]
+	steps[0]["amount"] = int(Defs.ITEMS[id]["batch"]) * batches
+	_issue(addressee.duplicate(), steps, address_label if not addressee.is_empty() else "your people")
+
+
+func _menu_ledger() -> void:
+	if menu_kind == "ledger":
+		_close_menu()
+		return
+	var f = m.fac(0)
+	var lines: Array[String] = []
+	lines.append("[b]%s age[/b] · %d:%02d into the match" % [Defs.AGES[f.age], int(m.t) / 60, int(m.t) % 60])
+	lines.append("%s" % m.next_age_text(0))
+	lines.append("")
+	lines.append("[b]People[/b]  %d of %d housing  (%d adults, %d children, %d idle, %d armed)" % [f.pop, f.housing, f.adults, f.children, f.idle, f.soldiers])
+	var need := int(ceil(f.pop * Defs.WELL_FED_STOCK))
+	var fs: String = Defs.FOOD_STATES[f.food_state]
+	var why := ""
+	if f.food_state < 3:
+		why = "  — well fed needs %d food stored (storage %d)" % [need, f.food_cap]
+	elif f.pop >= f.housing:
+		why = "  — but housing is full: build huts or houses"
+	lines.append("[b]Food[/b]  %d stored · [color=#%s]%s[/color]%s" % [int(f.stock["food"]), "a8d890" if f.food_state == 3 else ("f0c060" if f.food_state >= 1 else "ff6a50"), fs, why])
+	lines.append("")
+	var res: Array[String] = []
+	for r in ["wood", "stone", "bronze_ore", "coal", "iron_ore", "bronze", "iron"]:
+		res.append("%s %d" % [Defs.RESOURCE_NAMES[r], int(f.stock.get(r, 0))])
+	lines.append("[b]Stores[/b]  " + " · ".join(res))
+	var gear: Array[String] = []
+	for k in f.gear:
+		if int(f.gear[k]) > 0:
+			gear.append("%d %s" % [f.gear[k], Defs.item_name(k, int(f.gear[k]))])
+	lines.append("[b]Armory[/b]  " + (", ".join(gear) if not gear.is_empty() else "empty"))
+	lines.append("[b]Horses[/b]  %d in stables" % f.horses)
+	lines.append("")
+	lines.append("[b]Crews[/b]")
+	for c in m.crews_of(0):
+		lines.append("   " + m.crew_status(c))
+	lines.append("")
+	lines.append("[color=#b8b0a0]Births %d · deaths %d · enemies killed %d · Terra requests left: %s[/color]" % [f.births, f.deaths, f.kills, str(terra.remaining()) if terra.available() else "off"])
+	_open_menu("ledger", "Ledger", "\n".join(lines), "Tab or Esc to close")
+
+
+func _menu_people() -> void:
+	var crews: Array = m.crews_of(0)
+	menu_items = crews
+	var lines: Array[String] = []
+	for i in crews.size():
+		var key := str(i + 1) if i < 9 else ("0" if i == 9 else "·")
+		lines.append("[url=%d][b][color=#ffd870]%s[/color][/b][/url]  %s" % [i + 1, key, m.crew_status(crews[i])])
+	var f = m.fac(0)
+	lines.append("")
+	lines.append("[color=#b8b0a0]%d idle adults, %d children. Choose a crew to talk to it, or say @Name in chat.[/color]" % [f.idle, f.children])
+	_open_menu("people", "People and crews", "\n".join(lines))
+
+
+func _menu_reports() -> void:
+	var f = m.fac(0)
+	var lines: Array[String] = []
+	if f.reports.is_empty():
+		lines.append("No reports yet. Send a scout: [b]send a scout east[/b], or [b]scout their camp[/b].")
+	for r in f.reports:
+		var ago := int((m.t - float(r["t"])) / 60.0)
+		lines.append("[color=#9cc8f0]%s[/color]  [color=#b8b0a0](%s)[/color]\n" % [r["text"], "just now" if ago < 1 else "%d min ago" % ago])
+	_open_menu("reports", "Scout reports", "\n".join(lines), "Esc to close")
+
+
+func _menu_tech() -> void:
+	var f = m.fac(0)
+	var lines: Array[String] = []
+	for a in Defs.AGES.size():
+		var reached: bool = f.age >= a
+		var head := "[b][color=#%s]%s age[/color][/b]" % ["a8d890" if reached else "e8dcc2", Defs.AGES[a]]
+		if reached and a > 0:
+			head += "  [color=#b8b0a0](reached at %d:%02d)[/color]" % [int(f.age_t[a]) / 60, int(f.age_t[a]) % 60]
+		elif not reached:
+			head += "  — " + Defs.AGE_HOW[a]
+		lines.append(head)
+		var bl: Array[String] = []
+		for id in Defs.BUILDINGS:
+			if int(Defs.BUILDINGS[id]["age"]) == a and Defs.BUILDINGS[id].get("buildable", true):
+				bl.append(Defs.BUILDINGS[id]["name"])
+		var il: Array[String] = []
+		for id in Defs.ITEMS:
+			var it: Dictionary = Defs.ITEMS[id]
+			var need: int = [0, 2, 3][it["tier"]]
+			if it.has("research"):
+				need = 4
+			if need == a:
+				il.append(Defs.item_name(id, 2))
+		for id in Defs.UPGRADES:
+			if int(Defs.UPGRADES[id]["age"]) == a:
+				bl.append(Defs.UPGRADES[id]["name"] + " (upgrade)")
+		if not bl.is_empty():
+			lines.append("   Build: " + ", ".join(bl))
+		if not il.is_empty():
+			lines.append("   Armory: " + ", ".join(il))
+		lines.append("")
+	_open_menu("tech", "Tech tree", "\n".join(lines), "Esc to close")
+
+
+func _menu_help() -> void:
+	var t := """[b]Moving[/b]  WASD · Shift sprint · Space jump · mouse to look
+[b]Fighting[/b]  Left click to strike (hold and release with a bow) · Q switch bow/weapon · G or E at the armory: take gear · F at the stable: ride
+[b]Talking[/b]  Look at a villager and press [b]Enter[/b] (or T), then type. [b]@Name[/b] talks to someone by name, [b]@all[/b] to everyone. Nobody addressed: idle villagers take the job.
+[b]Marking[/b]  R marks the spot you look at; orders can then say 'there' or 'the mark'.
+
+[b]Slash commands[/b] (instant, no Terra needed)
+   /b  build menu (or B) · /b hut builds a hut directly
+   /c  craft menu (or C) · /c spears 2 makes two batches
+   /l  ledger (or Tab) · /p people and crews · /s scout reports
+   /m  field map (or M) · /t tech tree · /h this help · /cancel stop a crew
+
+[b]Orders you can type[/b]
+   gather wood · gather 30 stone then build a house · pick berries · work the farms · hunt
+   build a hut · build a palisade · make 32 arrows · arm 6 with spears · to arms! · fall back
+   send two scouts east · scout their camp · attack their camp · guard the mark · follow me · hold
+   tame 3 horses · mount up · smelt bronze · upgrade the armory · research gunpowder · man the cannon
+   promote (makes a captain) · dismiss · status · then chains steps · 'go' confirms Terra's plans
+
+[b]Winning[/b]  Kill Commander Rook (he wears a crown). If you fall, the match is lost.
+[b]Growing[/b]  People are born only when the village is [i]well fed[/i] and there is free housing."""
+	_open_menu("help", "Help", t, "Esc to close")
+
+
+func _toggle_map() -> void:
+	map_open = not map_open
+	hud.map_view.visible = map_open
+	if map_open:
+		hud.map_view.refresh()
+		map_refresh_t = 1.0
+
+
+# --- End of the match -----------------------------------------------------------------------
+
+func _show_end() -> void:
+	over_shown = true
+	var win: bool = m.winner == 0
+	var f = m.fac(0)
+	var mins := int(m.t) / 60
+	var secs := int(m.t) % 60
+	var body := ""
+	if win:
+		body = "Commander Rook has fallen after %d:%02d.\n\n" % [mins, secs]
+	else:
+		body = "You were killed after %d:%02d. Your people scatter.\n\n" % [mins, secs]
+	body += "Peak population %d · enemies killed %d · births %d · %s age reached.\nRook played a %s opening." % [peak_pop, f.kills, f.births, Defs.AGES[f.age], ai.strategy]
+	hud.show_end(win, body)
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	cmd.look_enabled = false
+	cmd.move_enabled = false
+	Sfx.play("age" if win else "horn", null, -4.0)
+	Settings.set_val("matches_played", int(Settings.get_val("matches_played", 0)) + 1)
+	if tutorial and win:
+		Settings.set_val("tutorial_done", true)
+
+
+func _exit_tree() -> void:
+	Sfx.set_world(null)

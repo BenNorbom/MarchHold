@@ -1,0 +1,327 @@
+extends SceneTree
+## Headless test runner:
+##   godot --headless --path . -s res://tests/run_tests.gd
+## Set MH_TEST=<name> to run a single test, MH_DUEL_MIN=<minutes> to change the duel length.
+
+const Defs = preload("res://scripts/data/defs.gd")
+const Terrain = preload("res://scripts/world/terrain.gd")
+const Match = preload("res://scripts/sim/match.gd")
+const Rival = preload("res://scripts/ai/rival.gd")
+const Parser = preload("res://scripts/orders/parser.gd")
+const Schema = preload("res://scripts/orders/schema.gd")
+
+var failures := 0
+var passes := 0
+
+
+func _initialize() -> void:
+	var only := OS.get_environment("MH_TEST")
+	var tests := ["defs", "validation", "terrain", "economy", "walls", "combat", "parser", "schema", "duel"]
+	var t0 := Time.get_ticks_msec()
+	for name in tests:
+		if only != "" and only != name:
+			continue
+		print("--- ", name)
+		call("test_" + name)
+	print("\n%d passed, %d failed (%.1f s)" % [passes, failures, (Time.get_ticks_msec() - t0) / 1000.0])
+	quit(1 if failures > 0 else 0)
+
+
+func check(cond: bool, msg: String) -> void:
+	if cond:
+		passes += 1
+	else:
+		failures += 1
+		printerr("FAIL: ", msg)
+
+
+func run(m, seconds: float, ais: Array = []) -> void:
+	var steps := int(seconds / Defs.TICK)
+	for i in steps:
+		m.tick(Defs.TICK)
+		for ai in ais:
+			ai.update(Defs.TICK)
+		m.events.clear()
+		if m.over:
+			break
+
+
+func new_match(seed_in: int, ai_both: bool = false):
+	var m = Match.new()
+	m.setup({"seed": seed_in, "ai_both": ai_both})
+	return m
+
+
+# --- Tests ------------------------------------------------------------------------
+
+func test_defs() -> void:
+	for id in Defs.BUILDINGS:
+		var d: Dictionary = Defs.BUILDINGS[id]
+		for r in d["cost"]:
+			check(r in Defs.RESOURCES, "%s cost uses unknown resource %s" % [id, r])
+		check(d.has("desc"), "%s has a description" % id)
+	for id in Defs.ITEMS:
+		var it: Dictionary = Defs.ITEMS[id]
+		for r in it["cost"]:
+			check(r in Defs.RESOURCES, "%s cost uses unknown resource %s" % [id, r])
+		check(int(it["batch"]) > 0, "%s batch > 0" % id)
+	for a in Defs.ACTIONS:
+		check(not Defs.subjects_for(a).is_empty(), "%s has subjects" % a)
+	check(not "tin" in Defs.RESOURCES and not "copper" in Defs.RESOURCES, "copper and tin are merged into bronze ore")
+	check(not "charcoal" in Defs.RESOURCES, "coal is mined, no charcoal")
+
+
+func step(a: String, s: String = "", amount: int = 0, where: String = "", count: int = 0) -> Dictionary:
+	return {"action": a, "subject": s, "count": count, "amount": amount, "where": where}
+
+
+func test_validation() -> void:
+	check(Defs.validate_steps([step("gather", "wood", 20), step("build", "hut")]) == "", "gather then build is valid")
+	check(Defs.validate_steps([]) != "", "empty plan rejected")
+	check(Defs.validate_steps([step("gather", "wood"), step("build", "hut")]) != "", "endless gathering must be last")
+	check(Defs.validate_steps([step("guard"), step("gather", "wood", 5)]) != "", "guard must be last")
+	check(Defs.validate_steps([step("build", "wood")]) != "", "build needs a structure")
+	check(Defs.validate_steps([step("craft", "arrows", 32)]) == "", "craft with amount")
+	check(Defs.validate_steps([step("build", "hut", 5)]) != "", "build can't take an amount")
+	check(Defs.validate_steps([step("scout", "", 0, "east")]) == "", "scout east")
+	check(Defs.validate_steps([step("scout", "", 0, "up")]) != "", "unknown direction")
+	var nine := []
+	for i in 9:
+		nine.append(step("build", "hut"))
+	check(Defs.validate_steps(nine) != "", "more than eight steps rejected")
+	check(Defs.validate_steps([step("teleport")]) != "", "unknown action rejected")
+
+
+func test_terrain() -> void:
+	for s in range(1, 13):
+		var tr = Terrain.new()
+		tr.generate(s * 977)
+		var a: Vector2 = tr.starts[0]
+		var b: Vector2 = tr.starts[1]
+		check(a.distance_to(b) >= Defs.MIN_START_DISTANCE, "seed %d camps %.0f m apart" % [s, a.distance_to(b)])
+		for p in [a, b]:
+			check(p.x >= Defs.EDGE_MARGIN - 1 and p.y >= Defs.EDGE_MARGIN - 1 and p.x <= Defs.MAP_SIZE - Defs.EDGE_MARGIN + 1 and p.y <= Defs.MAP_SIZE - Defs.EDGE_MARGIN + 1, "seed %d camp inside margins" % s)
+			var kinds := {}
+			for n in tr.nodes:
+				var d: float = n.pos.distance_to(p)
+				if n.kind == "berry" and d < 90.0:
+					kinds["berry"] = true
+				if n.kind == "tree" and d < 120.0:
+					kinds["tree"] = true
+				if n.kind == "deposit" and d < 230.0:
+					kinds[n.sub] = true
+				if n.kind == "rock" and n.sub == "outcrop" and d < 160.0:
+					kinds["outcrop"] = true
+			for k in ["berry", "tree", "bronze_ore", "coal", "iron_ore", "outcrop"]:
+				check(kinds.has(k), "seed %d: %s near camp" % [s, k])
+		if s == 1:
+			print("  trees: %d, nodes: %d" % [tr.count_nodes("tree"), tr.nodes.size()])
+
+
+func test_economy() -> void:
+	var m = new_match(5)
+	var f = m.fac(0)
+	check(f.pop == Defs.START_VILLAGERS, "start with six villagers")
+	check(f.housing == 8, "campfire houses 8")
+	var r: Dictionary = m.command(0, {"steps": [step("gather", "wood", 30, "", 6)]})
+	check(r.get("ok", false), "gather order accepted: %s" % r.get("error", ""))
+	run(m, 70.0)
+	check(float(f.stock["wood"]) >= 20.0, "wood gathered (%.0f)" % float(f.stock["wood"]))
+	var home: Vector2 = m.home_pos(0)
+	var site := {}
+	for k in 24:
+		var p: Vector2 = home + Vector2.from_angle(k * 0.7) * (14.0 + k)
+		site = m.place_site(0, "hut", p, 0.0)
+		if site.get("ok", false):
+			break
+	check(site.get("ok", false), "hut site placed: %s" % site.get("error", ""))
+	var st := step("build", "hut")
+	st["sites"] = [site.get("id", -1)]
+	r = m.command(0, {"steps": [st]})
+	check(r.get("ok", false), "build order accepted: %s" % r.get("error", ""))
+	run(m, 60.0)
+	check(m.bld(site.get("id", -1)) != null and m.bld(site["id"]).complete, "hut built")
+	m._refresh_counts(f)
+	check(f.housing == 13, "housing rose to 13 (%d)" % f.housing)
+	check(f.pop > Defs.START_VILLAGERS, "births happened while well fed (%d people)" % f.pop)
+	var bad: Dictionary = m.place_site(0, "house", home + Vector2(30, 30), 0.0)
+	check(not bad.get("ok", true), "house locked in the Wood age")
+	# Berries feed the village.
+	var food_before := float(f.stock["food"])
+	r = m.command(0, {"steps": [step("gather", "berries", 0, "", 3)]})
+	run(m, 40.0)
+	check(float(f.stock["food"]) > food_before - 5.0, "berry pickers keep food up")
+
+
+func test_walls() -> void:
+	var m = new_match(8)
+	var f = m.fac(0)
+	f.stock["wood"] = 500.0
+	var home: Vector2 = m.home_pos(0)
+	var pts := [home + Vector2(-20, 25), home + Vector2(0, 30), home + Vector2(20, 25)]
+	var r: Dictionary = m.place_wall(0, "palisade", pts)
+	check(r.get("ok", false), "palisade placed post to post: %s" % r.get("error", ""))
+	var ids: Array = r.get("ids", [])
+	check(ids.size() >= 8, "about 10 pieces for 40 m (%d)" % ids.size())
+	var st := step("build", "palisade")
+	st["sites"] = ids
+	r = m.command(0, {"steps": [st], })
+	check(r.get("ok", false), "wall crew assigned")
+	run(m, 90.0)
+	var done := 0
+	for id in ids:
+		var b = m.bld(id)
+		if b and b.complete:
+			done += 1
+	check(done == ids.size(), "all palisade pieces built (%d/%d)" % [done, ids.size()])
+	var b0 = m.bld(ids[0])
+	if b0:
+		var c: Vector2i = m.cell_of(b0.pos)
+		check(m.grids[1].is_point_solid(c), "palisade blocks the enemy")
+
+
+func test_combat() -> void:
+	var m = new_match(11)
+	var f = m.fac(0)
+	f.gear["wood_spear"] = 8
+	f.gear["bow"] = 2
+	f.gear["arrows"] = 40
+	f.stock["wood"] = 200.0
+	var home: Vector2 = m.home_pos(0)
+	var arm: Dictionary = {}
+	for k in 30:
+		arm = m.place_site(0, "armory", home + Vector2.from_angle(k * 0.5) * (16.0 + k * 0.5), 0.0)
+		if arm.get("ok", false):
+			break
+	m.bld(arm["id"]).progress = 1.0
+	m._complete(m.bld(arm["id"]))
+	var r: Dictionary = m.command(0, {"steps": [step("arm", "", 0, "", 6), step("guard", "", 0, "home")]})
+	check(r.get("ok", false), "arm and guard accepted: %s" % r.get("error", ""))
+	run(m, 30.0)
+	var armed := 0
+	for u in m.units:
+		if u.faction == 0 and u.kind == "villager" and (u.weapon != "" or u.bow):
+			armed += 1
+	check(armed >= 5, "villagers armed (%d)" % armed)
+	# Enemy raiders walk in.
+	var raiders := []
+	for k in 4:
+		var e = m.spawn_unit(1, "villager", home + Vector2(60, 0) + Vector2(k * 1.5, 0))
+		e.name = "Raider"
+		e.weapon = "club"
+		raiders.append(e)
+	var rc = m.make_crew(1, raiders)
+	rc.steps = [step("attack", "", 0, "")]
+	rc.state = {"target": home}
+	rc.idx = 0
+	for e in raiders:
+		m._set_task(e, "attack")
+	run(m, 60.0)
+	var alive := 0
+	for e in raiders:
+		if not e.dead:
+			alive += 1
+	check(alive <= 1, "the raid was beaten off (%d raiders left)" % alive)
+	check(m.fac(1).deaths >= 3 or alive <= 1, "raiders died")
+	# Cannon vs a wall piece.
+	var m2 = new_match(12)
+	var w = m2.add_building(1, "stone_wall", m2.home_pos(1) + Vector2(40, 0), 0.0, true)
+	var cn = m2.spawn_unit(0, "cannon", w.pos + Vector2(-90, 0))
+	cn.ammo = 8
+	var crewmen := []
+	for k in 3:
+		var cm = m2.spawn_unit(0, "villager", cn.pos + Vector2(-2, k))
+		cm.siege = cn.id
+		cn.crew_ids.append(cm.id)
+		crewmen.append(cm)
+	var cc = m2.make_crew(0, crewmen)
+	cc.steps = [step("hold")]
+	cc.state = {"target": cn.pos}
+	for cm in crewmen:
+		m2._set_task(cm, "hold")
+	run(m2, 70.0)
+	check(w.dead or w.hp < w.max_hp * 0.5, "cannon shots break a stone wall (hp %.0f / %.0f)" % [w.hp, w.max_hp])
+
+
+func test_parser() -> void:
+	var P = Parser
+	var r: Dictionary = P.parse("gather wood")
+	check(r.get("ok", false) and r["steps"][0]["action"] == "gather" and r["steps"][0]["subject"] == "wood", "gather wood")
+	r = P.parse("gather 30 wood then build a hut")
+	check(r.get("ok", false) and r["steps"].size() == 2 and r["steps"][0]["amount"] == 30 and r["steps"][1]["subject"] == "hut", "two-step plan")
+	r = P.parse("send two scouts east")
+	check(r.get("ok", false) and r["steps"][0]["action"] == "scout" and r["steps"][0]["where"] == "east" and r["steps"][0]["count"] == 2, "send two scouts east")
+	r = P.parse("make 32 arrows")
+	check(r.get("ok", false) and r["steps"][0]["action"] == "craft" and r["steps"][0]["subject"] == "arrows" and r["steps"][0]["amount"] == 32, "make arrows")
+	r = P.parse("follow me")
+	check(r.get("ok", false) and r["steps"][0]["action"] == "follow", "follow me")
+	r = P.parse("fall back")
+	check(r.get("ok", false) and r["steps"][0]["action"] == "recall", "fall back")
+	r = P.parse("to arms!")
+	check(r.get("ok", false) and r["steps"][0]["action"] == "arm" and r["steps"][-1]["action"] == "guard", "to arms")
+	r = P.parse("arm 6 with spears and guard the camp")
+	check(r.get("ok", false) and r["steps"][0]["subject"] == "wood_spear" and r["steps"][0]["count"] == 6, "arm with spears")
+	r = P.parse("what should we do about the weather in spain")
+	check(not r.get("ok", false), "nonsense is not parsed")
+	r = P.parse("build a stone wall")
+	check(r.get("ok", false) and r["steps"][0]["subject"] == "stone_wall", "stone wall")
+	r = P.parse("smelt bronze")
+	check(r.get("ok", false) and r["steps"][0]["action"] == "smelt", "smelt bronze")
+	r = P.parse("attack their camp")
+	check(r.get("ok", false) and r["steps"][0]["action"] == "attack" and r["steps"][0]["where"] == "enemy", "attack their camp")
+
+
+func test_schema() -> void:
+	var sc: Dictionary = Schema.plan_schema()
+	check(sc["type"] == "object" and sc["additionalProperties"] == false, "strict object")
+	var items: Dictionary = sc["properties"]["steps"]["items"]
+	check(items["required"].size() == items["properties"].size(), "every step field is required (strict mode)")
+	check("gather" in items["properties"]["action"]["enum"], "actions come from the data tables")
+	check("university" in items["properties"]["subject"]["enum"], "subjects include buildings")
+	var text := JSON.stringify(sc)
+	check(text.length() > 200 and JSON.parse_string(text) != null, "schema serializes")
+
+
+func test_duel() -> void:
+	var minutes := float(OS.get_environment("MH_DUEL_MIN")) if OS.get_environment("MH_DUEL_MIN") != "" else 24.0
+	var strategies := [["rush", "boom"], ["turtle", "cavalry"], ["cannons", "boom"]]
+	var pick: int = int(OS.get_environment("MH_DUEL_PAIR")) if OS.get_environment("MH_DUEL_PAIR") != "" else 0
+	var pair: Array = strategies[pick % strategies.size()]
+	var m = new_match(4242 + pick, true)
+	var ais := []
+	for i in 2:
+		var ai = Rival.new()
+		ai.setup(m, {"faction": i, "difficulty": 1, "strategy": pair[i], "seed": 99 + i})
+		ais.append(ai)
+	var t0 := Time.get_ticks_msec()
+	var report_every := 120.0
+	var next_report := report_every
+	var peak := [0, 0]
+	while m.t < minutes * 60.0 and not m.over:
+		run(m, 10.0, ais)
+		for f in m.factions:
+			peak[f.id] = maxi(peak[f.id], f.pop)
+		if m.t >= next_report:
+			next_report += report_every
+			var line := "  %5.1f min" % (m.t / 60.0)
+			for f in m.factions:
+				line += " | %s: pop %d, age %s, wood %d, food %d (%s), soldiers %d, kills %d, bld %d" % [ais[f.id].strategy, f.pop,
+					Defs.AGES[f.age], int(f.stock["wood"]), int(f.stock["food"]), Defs.FOOD_STATES[f.food_state], f.soldiers, f.kills, m.buildings_of(f.id).size()]
+			print(line)
+			if OS.get_environment("MH_DUEL_DEBUG") != "":
+				for ai in ais:
+					var rl := "    %s roles:" % ai.strategy
+					for role in ai.roles:
+						var c = m.crews.get(ai.roles[role])
+						if c:
+							rl += " %s=%d:%s" % [role, c.members.size(), (Defs.describe_step(c.steps[c.idx]) if c.idx < c.steps.size() else "idle")]
+					rl += " | camp known: %s, idle %d" % [str(m.known_enemy_camp(ai.fid) != null), m.fac(ai.fid).idle]
+					print(rl)
+	var secs := (Time.get_ticks_msec() - t0) / 1000.0
+	print("  simulated %.1f min in %.1f s; winner: %s" % [m.t / 60.0, secs, str(m.winner) if m.over else "none yet"])
+	for f in m.factions:
+		check(peak[f.id] > 15, "%s grew past 15 people (peak %d)" % [ais[f.id].strategy, peak[f.id]])
+		check(m.buildings_of(f.id).size() >= 6, "%s built at least 6 structures" % ais[f.id].strategy)
+		check(f.age >= 1, "%s reached the Stone age" % ais[f.id].strategy)
+	var fought := m.fac(0).kills + m.fac(1).kills
+	check(fought > 0 or m.over, "the rivals fought (%d kills)" % fought)
