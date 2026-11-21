@@ -253,8 +253,12 @@ func first_step_problem(faction: int, s: Dictionary) -> String:
 		"smelt":
 			if buildings_of(faction, "smelter").is_empty():
 				why = "we need a smelter first."
+			elif subj == "iron" and buildings_of(faction, "smelter").all(func(b): return b.tier < 1):
+				why = "the smelter has to be upgraded to an iron furnace first."
 		"research":
-			if not has_building(faction, Defs.RESEARCH[subj]["building"]):
+			if fac(faction).researched.has(subj):
+				why = "we already know %s." % Defs.RESEARCH[subj]["name"].to_lower()
+			elif not has_building(faction, Defs.RESEARCH[subj]["building"]):
 				why = "we need a university first."
 		"tame":
 			if buildings_of(faction, "stable").is_empty():
@@ -269,6 +273,20 @@ func first_step_problem(faction: int, s: Dictionary) -> String:
 			var up := _upgrade_for(faction, subj)
 			if up.begins_with("!"):
 				why = up.substr(1)
+		"build":
+			var sites = s.get("sites", [])
+			if not sites is Array or not sites.any(func(id):
+				var site := bld(id)
+				return site != null and not site.dead and not site.complete and site.faction == faction
+			):
+				why = "there's no site placed for the %s." % Defs.building_name(subj).to_lower()
+		"scout", "guard", "hold", "attack":
+			var where: String = s.get("where", "")
+			var needs_enemy_camp: bool = (where == "enemy" and s["action"] != "scout") or (where == "" and s["action"] == "attack")
+			if where == "marked" and not fac(faction).has_mark:
+				why = "mark a spot first (look at the ground and press R)."
+			elif needs_enemy_camp and known_enemy_camp(faction) == null:
+				why = "we don't know where their camp is. Scout first."
 		"gather":
 			var g: Dictionary = Defs.GATHER[subj]
 			if g.has("building") and not g.has("node"):
@@ -327,9 +345,51 @@ func _military_pool(faction: int) -> Array:
 	return out
 
 
-## The single entry point for orders, from chat, slash menus, Terra and the AI.
-## req: {"unit": id} or {"crew": id} or {"all": true} or {} (the steward picks
-## idle people), plus "steps". Returns {"ok", "error", "crews"}.
+func orderable_unit(faction: int, id: int) -> Unit:
+	var u := unit(id)
+	if u and not u.dead and u.kind == "villager" and u.faction == faction and not u.child:
+		return u
+	return null
+
+
+func _addressed_crew(faction: int, req: Dictionary) -> Crew:
+	var c: Crew = crews.get(int(req["crew"])) if req.has("crew") else null
+	if not req.has("crew") and req.has("unit"):
+		var u := orderable_unit(faction, int(req["unit"]))
+		if u:
+			c = crew_of(u)
+	return c if c and c.faction == faction and not c.members.is_empty() else null
+
+
+## Join one villager or their whole crew to an existing crew without restarting its plan.
+func reassign_crew(faction: int, req: Dictionary, destination_id: int) -> Dictionary:
+	var destination := _addressed_crew(faction, {"unit": destination_id})
+	if destination == null:
+		return {"ok": false, "error": "Choose a villager who already leads or belongs to a crew."}
+	var source := _addressed_crew(faction, req)
+	if source == destination:
+		return {"ok": false, "error": "Already part of %s." % crew_label(destination)}
+	var members := []
+	if not req.get("individual", false) and source:
+		members = source.members.duplicate()
+	elif req.has("unit") and orderable_unit(faction, int(req["unit"])):
+		members.append(int(req["unit"]))
+	if members.is_empty():
+		return {"ok": false, "error": "Address a villager or crew first."}
+	var task: String = destination.steps[destination.idx]["action"] if destination.idx < destination.steps.size() else "idle"
+	for id in members:
+		var u := orderable_unit(faction, id)
+		if u:
+			release_member(u)
+			_join(destination, u)
+			_set_task(u, task)
+			destination.start_size += 1
+	_assign_slots(destination)
+	return {"ok": true, "crew": destination.id}
+
+
+## Orders accept {"unit": id} (their crew), {"unit": id, "individual": true},
+## {"crew": id}, {"all": true}, or an empty address for free villagers, plus steps.
 func command(faction: int, req: Dictionary) -> Dictionary:
 	var steps := clean_steps(req.get("steps", []))
 	var err := Defs.validate_steps(steps)
@@ -351,8 +411,11 @@ func command(faction: int, req: Dictionary) -> Dictionary:
 		var idle := idle_adults(faction, home_pos(faction))
 		if not idle.is_empty():
 			targets.append(make_crew(faction, idle))
-	elif req.has("crew") and crews.has(int(req["crew"])):
-		targets.append(crews[int(req["crew"])])
+	elif req.has("crew"):
+		var c := _addressed_crew(faction, req)
+		if c == null:
+			return {"ok": false, "error": "That crew is no longer available."}
+		targets.append(c)
 	elif req.has("unit"):
 		var u := unit(int(req["unit"]))
 		if u == null or u.dead or u.faction != faction or u.kind != "villager":
@@ -360,6 +423,21 @@ func command(faction: int, req: Dictionary) -> Dictionary:
 		if u.child:
 			return {"ok": false, "error": "%s is a child and can't work yet." % u.name}
 		var c := crew_of(u)
+		if req.get("individual", false):
+			if steps.size() == 1 and first["action"] == "status":
+				var doing := "standing by"
+				if c and c.idx < c.steps.size():
+					doing = Defs.describe_step(c.steps[c.idx])
+				post(faction, "%s: %s. %d%% health." % [u.name, doing, int(100.0 * u.hp / u.max_hp)], "info")
+				return {"ok": true, "crews": []}
+			if steps.size() == 1 and first["action"] == "dismiss":
+				release_member(u)
+				return {"ok": true, "crews": []}
+			for s in steps:
+				s["count"] = 0
+			if c and c.members.size() > 1:
+				release_member(u)
+				c = null
 		if c == null:
 			c = make_crew(faction, [u])
 		targets.append(c)
@@ -394,14 +472,16 @@ func cancel(faction: int, req: Dictionary) -> int:
 			if c.faction == faction:
 				cancel_plan(c)
 				n += 1
-	elif req.has("unit"):
-		var u := unit(int(req["unit"]))
-		if u and crew_of(u):
-			cancel_plan(crew_of(u))
+	elif req.get("individual", false):
+		var u := orderable_unit(faction, int(req.get("unit", -1)))
+		if u and (crew_of(u) or u.siege >= 0):
+			release_member(u)
 			n = 1
-	elif req.has("crew") and crews.has(int(req["crew"])):
-		cancel_plan(crews[int(req["crew"])])
-		n = 1
+	else:
+		var c := _addressed_crew(faction, req)
+		if c:
+			cancel_plan(c)
+			n = 1
 	return n
 
 
@@ -707,7 +787,7 @@ func next_age_text(faction: int) -> String:
 
 
 ## The facts Terra may use. Only what this faction knows, never hidden truth.
-func brief(faction: int, addressed: String, crew_id: int) -> Dictionary:
+func brief(faction: int, addressed: String, crew_id: int, individual: bool = false) -> Dictionary:
 	var f := fac(faction)
 	var can_build := []
 	var locked := []
@@ -747,7 +827,7 @@ func brief(faction: int, addressed: String, crew_id: int) -> Dictionary:
 	for g in f.gear:
 		if int(f.gear[g]) > 0:
 			gear[g] = int(f.gear[g])
-	var addressed_info := {"who": addressed}
+	var addressed_info := {"who": addressed, "individual": individual}
 	if crew_id >= 0 and crews.has(crew_id):
 		addressed_info["crew"] = crew_status(crews[crew_id])
 	return {

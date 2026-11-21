@@ -19,6 +19,23 @@ const Tutorial = preload("res://scripts/game/tutorial.gd")
 const Intro = preload("res://scripts/game/intro.gd")
 const Hints = preload("res://scripts/game/hints.gd")
 
+const SLASH_ALIASES := {
+	"build": "b", "craft": "c", "make": "c", "ledger": "l",
+	"people": "p", "crews": "p", "scouts": "s", "reports": "s",
+	"map": "m", "tech": "t", "help": "h", "?": "h", "stop": "cancel",
+}
+const CHAT_HINTS := {
+	"b": ["Build · /b", "Type [b]/b hut[/b] or choose a structure below."],
+	"c": ["Craft · /c", "Choose a recipe or type [b]/c spears 2[/b] for two batches."],
+	"l": ["Ledger · /l", "Press Enter to see supplies, food, housing and crew status."],
+	"p": ["People and crews · /p", "Press Enter to list crews. Type [b]@Name[/b] to address one."],
+	"s": ["Scout reports · /s", "Press Enter to read reports. To send a scout, type [b]send a scout east[/b]."],
+	"m": ["Field map · /m", "Press Enter to toggle the map of places your people have seen."],
+	"t": ["Tech tree · /t", "Press Enter to see the unlocks for each age."],
+	"h": ["Slash commands", "[b]/b[/b] Build   [b]/c[/b] Craft   [b]/l[/b] Ledger   [b]/p[/b] People   [b]/s[/b] Scouts\n[b]/m[/b] Map   [b]/t[/b] Tech   [b]/cancel[/b] Stop orders   [b]/h[/b] Help"],
+	"cancel": ["Stop orders · /cancel", "Press Enter to stop the addressed crew. With no addressee, all crews stop."],
+}
+
 var opts := {}
 var m
 var ai
@@ -37,6 +54,8 @@ var over_shown := false
 var peak_pop := 0
 var addressee := {}
 var address_label := ""
+var chat_crew := -1
+var chat_first_member := -1
 var pending := {}
 var terra_ctx := {}
 var dialogue: Array = []
@@ -50,6 +69,8 @@ var wall_points: Array = []
 var placed_ids: Array = []
 var menu_kind := ""
 var menu_items: Array = []
+var chat_hint_command := ""
+var chat_hint_items: Array = []
 var map_open := false
 var map_refresh_t := 0.0
 var look_unit := -1
@@ -90,6 +111,8 @@ func start(options: Dictionary) -> void:
 	hud.chat_submitted.connect(_on_chat)
 	hud.chat_changed.connect(_on_chat_changed)
 	hud.chat_closed.connect(_on_chat_closed)
+	hud.chat_choice.connect(_on_chat_choice)
+	hud.chat_cycle.connect(_cycle_chat_address)
 	hud.menu_clicked.connect(_menu_select)
 	hud.pause_choice.connect(_on_pause_choice)
 	terra = Terra.new()
@@ -294,7 +317,8 @@ func _describe_unit(u) -> String:
 	if u.weapon != "" or u.bow:
 		gear = " · " + (Defs.item_name(u.weapon) if u.weapon != "" else "bow")
 	var who: String = u.name if c == null or c.members.size() <= 1 else "%s (%s)" % [u.name, m.crew_label(c)]
-	return "%s — %s%s · Enter to give orders" % [who, what, gear]
+	var action := "Enter to order crew" if c and c.members.size() > 1 else "Enter to give orders"
+	return "%s — %s%s · %s" % [who, what, gear, action]
 
 
 func _describe_building(b) -> String:
@@ -500,33 +524,121 @@ func _on_attack_result(text: String) -> void:
 # --- Chat and orders -----------------------------------------------------------------
 
 func open_chat(prefill: String = "") -> void:
-	var label := "your people"
+	chat_crew = -1
+	chat_first_member = -1
 	addressee = {}
+	address_label = "your people"
 	if look_unit >= 0:
 		var u = m.unit(look_unit)
 		if u and u.faction == 0 and u.kind == "villager" and not u.dead:
 			if u.child:
 				hud.show_toast("%s is a child and can't work yet." % u.name)
 			else:
-				addressee = {"unit": u.id}
 				var c = m.crew_of(u)
-				label = u.name if c == null or c.members.size() <= 1 else m.crew_label(c)
-	address_label = label
+				if c and c.members.size() > 1:
+					_open_crew_chat(c, u.id, prefill)
+					return
+				addressee = {"unit": u.id}
+				address_label = u.name
 	cmd.move_enabled = false
-	hud.open_chat(label, prefill)
+	hud.open_chat(address_label, prefill)
+
+
+func _open_crew_chat(c, first_member: int, prefill: String = "") -> void:
+	chat_crew = c.id if c.members.size() > 1 else -1
+	chat_first_member = first_member
+	addressee = {"crew": c.id}
+	address_label = m.crew_label(c)
+	cmd.move_enabled = false
+	hud.open_chat(address_label, prefill, chat_crew >= 0)
+
+
+func _cycle_chat_address(backward: bool) -> void:
+	if chat_crew < 0:
+		return
+	var c = m.crews.get(chat_crew)
+	var members := []
+	if c:
+		var first := maxi(0, c.members.find(chat_first_member))
+		for offset in c.members.size():
+			var id: int = c.members[(first + offset) % c.members.size()]
+			if m.orderable_unit(0, id):
+				members.append(id)
+	if members.is_empty():
+		hud.show_toast("That crew is no longer available.")
+		return
+	# Index 0 addresses the crew. The other entries start with the villager in view.
+	var current := members.find(addressee.get("unit", -1)) + 1
+	var next := posmod(current + (-1 if backward else 1), members.size() + 1)
+	if next == 0:
+		addressee = {"crew": c.id}
+		address_label = m.crew_label(c)
+	else:
+		var u = m.unit(members[next - 1])
+		addressee = {"unit": u.id, "individual": true}
+		address_label = u.name + " alone"
+	hud.set_chat_address(address_label, true)
 
 
 func _on_chat_changed(text: String) -> void:
-	if text.strip_edges().to_lower() == "/b":
-		if not hud.menu_open:
-			_menu_build(true)
-	elif hud.menu_open:
-		_close_menu()
+	var draft := text.strip_edges()
+	if not draft.begins_with("/"):
+		return
+	var token := draft.substr(1).strip_edges().get_slice(" ", 0).to_lower()
+	if token == "" and chat_hint_command != "":
+		return
+	var command: String = SLASH_ALIASES.get(token, "h" if token == "" else token)
+	if command == chat_hint_command or not CHAT_HINTS.has(command):
+		return
+	chat_hint_command = command
+	chat_hint_items = []
+	var hint: Array = CHAT_HINTS[command]
+	var body: String = hint[1]
+	var rows: Array[String] = []
+	match command:
+		"b":
+			rows = _chat_hint_rows(m.build_menu(0))
+		"c":
+			var has_armory: bool = m.armory_tier(0) >= 0
+			var recipes: Array = m.craft_menu(0)
+			if not has_armory:
+				body = "Build an armory with [b]/b armory[/b] to unlock these recipes."
+				recipes = recipes.filter(func(e): return Defs.ITEMS[e["id"]]["tier"] == 0)
+			rows = _chat_hint_rows(recipes, has_armory)
+		"t":
+			body += "\n" + m.next_age_text(0)
+	hud.show_chat_hint(hint[0], body, rows)
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+func _chat_hint_rows(entries: Array, show_lock_reason: bool = true) -> Array[String]:
+	chat_hint_items = entries.filter(func(e): return e["locked"] == "")
+	chat_hint_items.sort_custom(func(a, b): return a["missing"].size() < b["missing"].size())
+	var rows: Array[String] = []
+	for i in chat_hint_items.size():
+		var e: Dictionary = chat_hint_items[i]
+		rows.append("[url=%d][color=#ffd870]%s[/color][/url]  ·  %s" % [i, e["name"], _cost_bb(e["cost"], e["missing"])])
+	for e in entries:
+		if e["locked"] != "":
+			var detail: String = e["locked"] if show_lock_reason else _cost_bb(e["cost"], {})
+			rows.append("[color=#b8b0a0]%s  ·  %s[/color]" % [e["name"], detail])
+	return rows
+
+
+func _on_chat_choice(index: int) -> void:
+	if not hud.chat_open or index < 0 or index >= chat_hint_items.size():
+		return
+	var entry: Dictionary = chat_hint_items[index]
+	hud.close_chat()
+	_on_chat_closed()
+	_choose_order_entry(entry)
 
 
 func _on_chat_closed() -> void:
-	if hud.menu_open:
-		_close_menu()
+	if chat_hint_command != "":
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	chat_hint_command = ""
+	chat_hint_items.clear()
 	cmd.move_enabled = true
 
 
@@ -544,7 +656,7 @@ func _find_by_name(tag: String):
 
 
 func _on_chat(text: String) -> void:
-	cmd.move_enabled = true
+	_on_chat_closed()
 	if text.begins_with("/"):
 		_slash(text)
 		return
@@ -565,12 +677,28 @@ func _on_chat(text: String) -> void:
 			if u.child:
 				hud.log_line("%s is a child and can't work yet." % u.name, "warn")
 				return
-			req = {"unit": u.id}
 			var c = m.crew_of(u)
-			who = u.name if c == null or c.members.size() <= 1 else m.crew_label(c)
+			if c and c.members.size() > 1:
+				req = {"crew": c.id}
+				who = m.crew_label(c)
+			else:
+				req = {"unit": u.id}
+				who = u.name
 	if text.strip_edges() == "":
 		return
 	hud.log_line(text, "you", "You → " + who)
+	var order := text.strip_edges().to_lower()
+	if order.begins_with("join @"):
+		var destination = _find_by_name(order.substr(6).strip_edges().trim_suffix("."))
+		if destination == null:
+			hud.log_line("Use 'join @Name' with the name of someone in the destination crew.", "warn")
+			return
+		var result: Dictionary = m.reassign_crew(0, req, destination.id)
+		if result["ok"]:
+			hud.log_line("%s joined %s." % [who.trim_suffix(" alone"), m.crew_label(m.crews[result["crew"]])], "crew")
+		else:
+			hud.log_line(result["error"], "warn")
+		return
 	var parsed: Dictionary = Parser.parse(text)
 	if not pending.is_empty():
 		if parsed.get("confirm", false):
@@ -601,12 +729,12 @@ func _on_chat(text: String) -> void:
 			return
 		terra_ctx = {"req": req, "who": who, "text": text}
 		hud.set_thinking("Terra is thinking…")
-		var crew_id := -1
-		if req.has("unit"):
+		var crew_id := int(req.get("crew", -1))
+		if req.has("unit") and not req.get("individual", false):
 			var u2 = m.unit(req["unit"])
 			if u2 and u2.crew >= 0:
 				crew_id = u2.crew
-		terra.ask(m.brief(0, who, crew_id), text, dialogue, pending.get("steps", []))
+		terra.ask(m.brief(0, who, crew_id, req.get("individual", false)), text, dialogue, pending.get("steps", []))
 	else:
 		hud.log_line("I didn't catch that. Try 'gather wood', 'build a hut' or /h for help. Choose a Terra connection in Settings for free-form orders.", "warn")
 
@@ -642,7 +770,7 @@ func _on_terra(result: Dictionary) -> void:
 				var cost := ""
 				if s["action"] == "build":
 					cost = " (%s)" % Defs.cost_text(Defs.BUILDINGS[s["subject"]]["cost"])
-				lines.append("%d. %s%s" % [i + 1, Defs.describe_step(s).capitalize(), cost])
+				lines.append("%d. %s%s" % [i + 1, _describe_order(s, pending["req"]).capitalize(), cost])
 			hud.log_line("Plan for %s:  %s" % [pending["who"], "   ".join(lines)], "terra")
 			hud.log_line("Say 'go' to start, change it, or 'cancel'.", "terra")
 		"confirm":
@@ -661,6 +789,9 @@ func _on_terra(result: Dictionary) -> void:
 
 func _execute(req: Dictionary, steps: Array, who: String) -> void:
 	steps = m.resolve_steps(0, steps)
+	if req.get("individual", false):
+		for s in steps:
+			s["count"] = 0
 	var needs := []
 	for i in steps.size():
 		if steps[i]["action"] == "build":
@@ -678,6 +809,12 @@ func _execute(req: Dictionary, steps: Array, who: String) -> void:
 	_begin_place(steps[needs[0]]["subject"])
 
 
+func _describe_order(step: Dictionary, req: Dictionary) -> String:
+	if req.get("individual", false) and step["action"] == "dismiss":
+		return "leave the crew"
+	return Defs.describe_step(step)
+
+
 func _issue(req: Dictionary, steps: Array, who: String) -> void:
 	var full := req.duplicate()
 	full["steps"] = steps
@@ -685,9 +822,9 @@ func _issue(req: Dictionary, steps: Array, who: String) -> void:
 	if r.get("ok", false):
 		var parts: Array[String] = []
 		for s in steps:
-			parts.append(Defs.describe_step(s))
+			parts.append(_describe_order(s, req))
 		var label := who
-		if label == "your people" and r.has("crews"):
+		if label == "your people" and not r.get("crews", []).is_empty():
 			var c = m.crews.get(r["crews"][0])
 			if c:
 				label = m.crew_label(c)
@@ -833,34 +970,38 @@ func _cancel_place() -> void:
 
 func _slash(text: String) -> void:
 	var parts := text.substr(1).strip_edges().split(" ", false)
-	var c := parts[0].to_lower() if parts.size() > 0 else "h"
+	var token := parts[0].to_lower() if parts.size() > 0 else "h"
+	var c: String = SLASH_ALIASES.get(token, token)
 	var arg := " ".join(parts.slice(1)).strip_edges()
 	match c:
-		"b", "build":
+		"b":
 			if arg != "":
 				_build_by_name(arg)
 			else:
 				_menu_build()
-		"c", "craft", "make":
+		"c":
 			if arg != "":
 				_craft_by_name(arg)
 			else:
 				_menu_craft()
-		"l", "ledger":
+		"l":
 			_menu_ledger()
-		"p", "people", "crews":
+		"p":
 			_menu_people()
-		"s", "scouts", "reports":
+		"s":
 			_menu_reports()
-		"m", "map":
+		"m":
 			_toggle_map()
-		"t", "tech":
+		"t":
 			_menu_tech()
-		"h", "help", "?":
+		"h":
 			_menu_help()
-		"cancel", "stop":
+		"cancel":
 			var n: int = m.cancel(0, addressee if not addressee.is_empty() else {"all": true})
-			hud.log_line("Stopped %d crew%s." % [n, "" if n == 1 else "s"], "crew")
+			if addressee.get("individual", false):
+				hud.log_line("Released %s." % address_label.trim_suffix(" alone") if n > 0 else "They had no assignment.", "crew")
+			else:
+				hud.log_line("Stopped %d crew%s." % [n, "" if n == 1 else "s"], "crew")
 		_:
 			hud.log_line("Unknown command /%s. Type /h for the list." % c, "warn")
 
@@ -891,7 +1032,7 @@ func _cost_bb(cost: Dictionary, miss: Dictionary) -> String:
 	return ", ".join(parts)
 
 
-func _menu_build(preview: bool = false) -> void:
+func _menu_build() -> void:
 	var all: Array = m.build_menu(0)
 	var ready := all.filter(func(e): return e["locked"] == "")
 	var locked := all.filter(func(e): return e["locked"] != "")
@@ -907,8 +1048,7 @@ func _menu_build(preview: bool = false) -> void:
 		for e in locked:
 			lines.append("[color=#8a8070]   %s — %s[/color]" % [e["name"], e["locked"]])
 	var who := ("for " + address_label) if not addressee.is_empty() else "(the nearest free villagers will build)"
-	var footer := "Click to choose · Enter enables number keys · Esc to close" if preview else "Number keys or click to choose · Esc to close"
-	_open_menu("build", "Build  " + who, "\n".join(lines), footer)
+	_open_menu("build", "Build  " + who, "\n".join(lines))
 
 
 func _menu_craft() -> void:
@@ -936,21 +1076,20 @@ func _menu_select(i: int) -> void:
 		if i >= 1 and i <= menu_items.size():
 			var c = menu_items[i - 1]
 			_close_menu()
-			addressee = {"crew": c.id}
-			address_label = m.crew_label(c)
-			cmd.move_enabled = false
-			hud.open_chat(address_label)
+			_open_crew_chat(c, c.leader)
 		return
 	if not menu_kind in ["build", "craft"]:
 		return
 	if i < 1 or i > menu_items.size():
 		return
 	var e: Dictionary = menu_items[i - 1]
+	_close_menu()
+	_choose_order_entry(e)
+
+
+func _choose_order_entry(e: Dictionary) -> void:
 	var req := addressee.duplicate()
 	var who := address_label if not addressee.is_empty() else "your people"
-	if hud.chat_open:
-		hud.close_chat()
-	_close_menu()
 	match e["kind"]:
 		"build":
 			_execute(req, [{"action": "build", "subject": e["id"], "count": 0, "amount": 0, "where": ""}], who)
@@ -1089,13 +1228,13 @@ func _menu_tech() -> void:
 func _menu_help() -> void:
 	var t := """[b]Moving[/b]  WASD · Shift sprint · Space jump · mouse to look
 [b]Fighting[/b]  Left click to strike (hold and release with a bow) · Q switch bow/weapon · G or E at the armory: take gear · F at the stable: ride
-[b]Talking[/b]  Look at a villager and press [b]Enter[/b] (or T), then type. [b]@Name[/b] talks to someone by name, [b]@all[/b] to everyone. Nobody addressed: idle villagers take the job.
+[b]Talking[/b]  Look at a villager and press [b]Enter[/b] (or T) to address their crew. In chat, [b]Tab[/b] cycles through individual members and back to the crew. [b]@Name[/b] addresses someone's crew by name, [b]@all[/b] addresses everyone. Idle villagers take orders with no addressee.
 [b]Marking[/b]  R marks the spot you look at; orders can then say 'there' or 'the mark'.
 
 [b]Slash commands[/b] (instant, no Terra needed)
    /b  build menu (or B) · /b hut builds a hut directly
    /c  craft menu (or C) · /c spears 2 makes two batches
-   /l  ledger (or Tab) · /p people and crews · /s scout reports
+   /l  ledger (or Tab outside chat) · /p people and crews · /s scout reports
    /m  field map (or M) · /t tech tree · /h this help · /cancel stop a crew
 
 [b]Orders you can type[/b]
@@ -1104,6 +1243,7 @@ func _menu_help() -> void:
    send two scouts east · scout their camp · attack their camp · guard the mark · follow me · hold
    tame 3 horses · mount up · smelt bronze · upgrade the armory · research gunpowder · man the cannon
    promote (makes a captain) · dismiss · status · then chains steps · 'go' confirms Terra's plans
+   join @Name moves the addressed villager or crew to that person's crew.
 
 [b]Winning[/b]  Kill Commander Rook (he wears a crown). If you fall, the match is lost.
 [b]Growing[/b]  People are born only when the village is [i]well fed[/i] and there is free housing."""

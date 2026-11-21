@@ -102,6 +102,7 @@ func get_mat(name: String) -> Material:
 			m = ShaderMaterial.new()
 			m.shader = PERSON_SHADER
 			m.set_shader_parameter("cloth_noise", noise)
+			m.set_shader_parameter("bark_tex", tex("bark_brown_02", "diff"))
 		"animal":
 			m = ShaderMaterial.new()
 			m.shader = PERSON_SHADER

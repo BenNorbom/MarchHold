@@ -129,8 +129,8 @@ func _sign_in() -> String:
 	var keys = jwks["data"].get("keys")
 	if jwks["status"] != 200 or not keys is Array:
 		return "MarchHold could not verify your ChatGPT sign-in. Try again."
-	var claims := Identity.verify(str(tokens.get("id_token", "")), keys, issued, nonce)
-	if claims.is_empty():
+	var claims: Variant = Identity.verify(str(tokens.get("id_token", "")), keys, issued, nonce)
+	if not claims is Dictionary or claims.is_empty():
 		return "MarchHold could not verify your ChatGPT identity."
 	if _account.has("subject") and _account["subject"] != claims["sub"]:
 		return "ChatGPT returned a different account. Disconnect before switching accounts."

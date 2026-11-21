@@ -7,11 +7,14 @@ render_mode cull_back;
 // INSTANCE_COLOR: tunic / tint colour
 
 uniform sampler2D cloth_noise : filter_linear_mipmap, repeat_enable;
+uniform sampler2D bark_tex : source_color, filter_linear_mipmap, repeat_enable;
+uniform bool painted_crowd = false;
 uniform bool is_animal = false;
 
 varying vec3 base_color;
 varying float rough;
 varying float metal;
+varying flat int prop_region;
 varying vec3 lp;
 
 mat3 rot_x(float a) { float c = cos(a); float s = sin(a); return mat3(vec3(1, 0, 0), vec3(0, c, s), vec3(0, -s, c)); }
@@ -23,13 +26,14 @@ float hash(float n) { return fract(sin(n * 12.9898) * 43758.5453); }
 void vertex() {
 	int limb = int(UV2.x + 0.5);
 	int region = int(UV2.y + 0.5);
+	prop_region = region;
 	int anim = int(INSTANCE_CUSTOM.x + 0.5);
 	float ph = INSTANCE_CUSTOM.y;
 	float amt = INSTANCE_CUSTOM.z;
 	float seed = INSTANCE_CUSTOM.w;
 	vec3 v = VERTEX;
 	vec3 n = NORMAL;
-	if (!is_animal) {
+	if (!is_animal && anim != 13) {
 		vec3 hip = vec3(0.0, 0.95, 0.0);
 		vec3 sh_l = vec3(0.21, 1.42, 0.0);
 		vec3 sh_r = vec3(-0.21, 1.42, 0.0);
@@ -37,10 +41,12 @@ void vertex() {
 		float s = sin(ph);
 		float arm_l = 0.0; float arm_r = 0.0; float leg_l = 0.0; float leg_r = 0.0;
 		float lean = 0.0; float twist = 0.0; float spread = 0.0; float arm_out = 0.0; float head = 0.0;
-		if (anim == 1 || anim == 9) { // walk, carry
+		if (anim == 1 || anim == 14 || anim == 15 || anim == 9) { // walk, carry
 			leg_l = s * 0.45 * amt; leg_r = -leg_l;
 			arm_l = -s * 0.35 * amt; arm_r = -arm_l;
-			if (anim == 9) { arm_l = -0.75; arm_r = -0.75; }
+			if (anim == 9) { arm_l = -0.46; arm_r = -0.46; }
+			if (anim == 14) { arm_r = -0.42; }
+			if (anim == 15) { arm_r = -0.12; }
 		} else if (anim == 2) { // run
 			leg_l = s * 0.8; leg_r = -leg_l; arm_l = -s * 0.7; arm_r = -arm_l; lean = 0.18;
 		} else if (anim == 3) { // chop
@@ -76,6 +82,11 @@ void vertex() {
 		} else {
 			if (limb == 2 || limb == 3) {
 				vec3 piv = limb == 2 ? sh_l : sh_r;
+				float bend = anim == 9 ? -1.4 : (anim == 14 && limb == 3 ? -2.35 : (anim == 15 && limb == 3 ? -0.40 : 0.0));
+				vec3 elbow = vec3(piv.x * 1.095, 1.10, 0.02);
+				mat3 elbow_rotation = rot_x(bend * (1.0 - smoothstep(1.08,1.13,v.y)));
+				v = elbow_rotation * (v - elbow) + elbow;
+				n = elbow_rotation * n;
 				float a = limb == 2 ? arm_l : arm_r;
 				float o = limb == 2 ? arm_out : -arm_out;
 				mat3 r = rot_x(a) * rot_z(o);
@@ -89,10 +100,10 @@ void vertex() {
 			v = body * (v - hip) + hip;
 			n = body * n;
 		}
-		if (anim == 1 || anim == 2 || anim == 9) {
+		if (anim == 1 || anim == 2 || anim == 9 || anim == 14 || anim == 15) {
 			v.y += abs(cos(ph)) * 0.035 * (anim == 2 ? 2.0 : amt);
 		}
-	} else {
+	} else if (is_animal) {
 		// Quadruped: 0 body, 1 neck+head, 2..5 legs (FL, FR, BL, BR), 6 tail.
 		float s = sin(ph);
 		float amp = anim == 2 ? 0.7 : (anim == 1 ? 0.38 : 0.0);
@@ -123,36 +134,50 @@ void vertex() {
 	VERTEX = v;
 	NORMAL = normalize(n);
 	lp = v;
-	// Colours by region, varied per person.
-	float h1 = hash(seed * 91.7 + 3.1);
-	float h2 = hash(seed * 47.3 + 1.7);
-	vec3 skin = mix(vec3(0.84, 0.66, 0.52), vec3(0.46, 0.31, 0.22), h1 * h1);
-	vec3 hair = mix(vec3(0.12, 0.08, 0.05), vec3(0.55, 0.38, 0.2), h2);
-	vec3 col = COLOR.rgb;
-	rough = 0.85;
-	metal = 0.0;
-	if (region == 0) { col = skin; rough = 0.6; }
-	else if (region == 1) { col = COLOR.rgb * mix(0.85, 1.1, h2); }
-	else if (region == 2) { col = mix(vec3(0.26, 0.22, 0.17), vec3(0.4, 0.36, 0.28), h1); }
-	else if (region == 3) { col = vec3(0.2, 0.13, 0.08); rough = 0.7; }
-	else if (region == 4) { col = hair; }
-	else if (region == 5) { col = vec3(0.42, 0.29, 0.17); rough = 0.75; }
-	else if (region == 6) { col = vec3(0.56, 0.57, 0.6); rough = 0.35; metal = 0.9; }
-	else if (region == 7) { col = vec3(0.72, 0.48, 0.24); rough = 0.35; metal = 0.9; }
-	else if (region == 8) { col = vec3(0.95, 0.74, 0.28); rough = 0.25; metal = 1.0; }
-	if (is_animal) {
-		col = COLOR.rgb;
-		if (region == 4) { col = COLOR.rgb * 0.35; }
-		if (region == 3) { col = vec3(0.08, 0.07, 0.06); }
-		if (region == 0) { col = mix(COLOR.rgb, vec3(0.9, 0.88, 0.85), 0.6); }
-		rough = 0.7;
+	if (painted_crowd) {
+		base_color = COLOR.rgb;
+		rough = 0.9;
+		metal = 0.0;
+	} else {
+		// Colours by region, varied per person.
+		float h1 = hash(seed * 91.7 + 3.1);
+		float h2 = hash(seed * 47.3 + 1.7);
+		vec3 skin = mix(vec3(0.84, 0.66, 0.52), vec3(0.46, 0.31, 0.22), h1 * h1);
+		vec3 hair = mix(vec3(0.12, 0.08, 0.05), vec3(0.55, 0.38, 0.2), h2);
+		vec3 col = COLOR.rgb;
+		rough = 0.85;
+		metal = 0.0;
+		if (region == 0) { col = skin; rough = 0.6; }
+		else if (region == 1) { col = COLOR.rgb * mix(0.85, 1.1, h2); }
+		else if (region == 2) { col = mix(vec3(0.26, 0.22, 0.17), vec3(0.4, 0.36, 0.28), h1); }
+		else if (region == 3) { col = vec3(0.2, 0.13, 0.08); rough = 0.7; }
+		else if (region == 4) { col = hair; }
+		else if (region == 5) { col = vec3(0.42, 0.29, 0.17); rough = 0.75; }
+		else if (region == 6) { col = vec3(0.56, 0.57, 0.6); rough = 0.35; metal = 0.9; }
+		else if (region == 7) { col = vec3(0.72, 0.48, 0.24); rough = 0.35; metal = 0.9; }
+		else if (region == 8) { col = vec3(0.95, 0.74, 0.28); rough = 0.25; metal = 1.0; }
+		if (region == 10) { col = vec3(0.68,0.49,0.28); }
+		if (region == 11) { col = vec3(0.40,0.095,0.055); }
+		if (is_animal) {
+			col = COLOR.rgb;
+			if (region == 4) { col = COLOR.rgb * 0.35; }
+			if (region == 3) { col = vec3(0.08, 0.07, 0.06); }
+			if (region == 0) { col = mix(COLOR.rgb, vec3(0.9, 0.88, 0.85), 0.6); }
+			rough = 0.7;
+		}
+		base_color = col;
 	}
-	base_color = col;
 }
 
 void fragment() {
-	float n = texture(cloth_noise, lp.xy * 3.1 + lp.zy * 2.3).r;
+	float n = painted_crowd ? 0.64 : texture(cloth_noise, lp.xy * 3.1 + lp.zy * 2.3).r;
 	ALBEDO = base_color * mix(0.86, 1.08, n);
+	if (prop_region == 12) {
+		ALBEDO = texture(bark_tex, UV * vec2(1.8, 1.1)).rgb;
+	} else if (prop_region == 10) {
+		float rings = cos(UV.y * 93.0);
+		ALBEDO *= 0.84 + 0.16 * rings;
+	}
 	ROUGHNESS = rough;
 	METALLIC = metal;
 }

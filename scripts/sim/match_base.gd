@@ -33,6 +33,7 @@ class Unit:
 	var born := 0.0
 	var female := false
 	var crew := -1
+	var captain := false
 	var task := "idle"
 	var phase := ""
 	var tgt_node := -1

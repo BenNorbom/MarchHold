@@ -4,6 +4,8 @@ extends CanvasLayer
 signal chat_submitted(text: String)
 signal chat_changed(text: String)
 signal chat_closed
+signal chat_cycle(backward: bool)
+signal chat_choice(index: int)
 signal menu_clicked(index: int)
 signal pause_choice(name: String)
 
@@ -32,6 +34,10 @@ var chat_panel: PanelContainer
 var chat_to: Label
 var chat_edit: LineEdit
 var chat_usage: Button
+var chat_hint: PanelContainer
+var chat_hint_title: Label
+var chat_hint_text: RichTextLabel
+var chat_hint_choices: RichTextLabel
 var menu_panel: PanelContainer
 var menu_title: Label
 var menu_body: RichTextLabel
@@ -54,6 +60,7 @@ var thinking: Label
 var heading := 0.0
 var home_bearing := 0.0
 var chat_open := false
+var chat_can_cycle := false
 var menu_open := false
 var history: Array = []
 var history_i := -1
@@ -218,6 +225,55 @@ func _build_chat() -> void:
 	chat_edit.text_submitted.connect(_on_chat_submit)
 	chat_edit.gui_input.connect(_on_chat_key)
 	h.add_child(chat_edit)
+	_build_chat_hint()
+
+
+func _build_chat_hint() -> void:
+	chat_hint = _panel("ChatPanel")
+	chat_hint.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	chat_hint.custom_minimum_size.x = 460
+	chat_hint.add_theme_stylebox_override("panel", UiTheme.box(Color(0.07, 0.055, 0.04, 0.97), Color(UiTheme.GOLD, 0.7), 1, 3, 10))
+	chat_hint.hide()
+	root.add_child(chat_hint)
+	var rows := VBoxContainer.new()
+	rows.add_theme_constant_override("separation", 3)
+	chat_hint.add_child(rows)
+	chat_hint_title = Label.new()
+	chat_hint_title.theme_type_variation = "ChatTo"
+	rows.add_child(chat_hint_title)
+	chat_hint_text = RichTextLabel.new()
+	chat_hint_text.bbcode_enabled = true
+	chat_hint_text.fit_content = true
+	chat_hint_text.scroll_active = false
+	chat_hint_text.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	rows.add_child(chat_hint_text)
+	chat_hint_choices = RichTextLabel.new()
+	chat_hint_choices.bbcode_enabled = true
+	chat_hint_choices.focus_mode = Control.FOCUS_NONE
+	chat_hint_choices.meta_clicked.connect(func(meta): chat_choice.emit(int(str(meta))))
+	rows.add_child(chat_hint_choices)
+	for label in [chat_hint_text, chat_hint_choices]:
+		label.add_theme_font_size_override("normal_font_size", 17)
+		label.add_theme_font_size_override("bold_font_size", 17)
+		label.add_theme_constant_override("line_separation", 0)
+	chat_hint.resized.connect(_position_chat_hint)
+	chat_panel.item_rect_changed.connect(_position_chat_hint)
+
+
+func _position_chat_hint() -> void:
+	chat_hint.position = chat_panel.position - Vector2(0, chat_hint.size.y + 6)
+
+
+func show_chat_hint(title: String, body: String, choices: Array[String]) -> void:
+	chat_hint_title.text = title
+	chat_hint_text.text = body
+	chat_hint_choices.visible = not choices.is_empty()
+	chat_hint_choices.custom_minimum_size.y = mini(choices.size(), 5) * 23
+	chat_hint_choices.text = "\n".join(choices)
+	chat_hint_choices.scroll_to_line(0)
+	chat_hint.show()
+	chat_hint.reset_size()
+	_position_chat_hint()
 
 
 func _on_chat_submit(text: String) -> void:
@@ -252,10 +308,22 @@ func _on_chat_key(ev: InputEvent) -> void:
 			chat_edit.accept_event()
 
 
-func open_chat(to_text: String, prefill: String = "") -> void:
+func _input(ev: InputEvent) -> void:
+	if chat_open and chat_can_cycle and ev is InputEventKey and ev.keycode == KEY_TAB:
+		if ev.pressed and not ev.echo:
+			chat_cycle.emit(ev.shift_pressed)
+		get_viewport().set_input_as_handled()
+
+
+func set_chat_address(to_text: String, can_cycle: bool) -> void:
+	chat_can_cycle = can_cycle
+	chat_to.text = "  To %s%s  " % [to_text, " · Tab to switch" if can_cycle else ""]
+
+
+func open_chat(to_text: String, prefill: String = "", can_cycle: bool = false) -> void:
 	chat_open = true
 	history_i = -1
-	chat_to.text = "  To %s:  " % to_text
+	set_chat_address(to_text, can_cycle)
 	chat_panel.visible = true
 	chat_usage.visible = Settings.get_val("terra_provider") == Settings.CHATGPT_PLAN and ChatGPT.can_use_plan()
 	chat_usage.text = "ChatGPT usage limit reached · Manage usage" if ChatGPT.usage_limited else "Using ChatGPT plan · Manage usage"
@@ -263,12 +331,14 @@ func open_chat(to_text: String, prefill: String = "") -> void:
 	chat_edit.grab_focus()
 	chat_edit.caret_column = prefill.length()
 	_refresh_log_visibility()
+	chat_changed.emit(prefill)
 
 
 func close_chat() -> void:
 	chat_open = false
 	chat_panel.visible = false
 	chat_usage.visible = false
+	chat_hint.hide()
 	chat_edit.release_focus()
 	_refresh_log_visibility()
 

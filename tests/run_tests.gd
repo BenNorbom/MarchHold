@@ -22,7 +22,7 @@ func _initialize() -> void:
 
 func _run_tests() -> void:
 	var only := OS.get_environment("MH_TEST")
-	var tests := ["defs", "validation", "terrain", "economy", "walls", "combat", "parser", "schema", "chatgpt", "duel"]
+	var tests := ["defs", "validation", "terrain", "economy", "crews", "walls", "combat", "parser", "schema", "chatgpt", "duel"]
 	var t0 := Time.get_ticks_msec()
 	for name in tests:
 		if only != "" and only != name:
@@ -181,6 +181,49 @@ func test_economy() -> void:
 	r = m.command(0, {"steps": [step("gather", "berries", 0, "", 3)]})
 	run(m, 40.0)
 	check(float(f.stock["food"]) > food_before - 5.0, "berry pickers keep food up")
+
+
+func test_crews() -> void:
+	var m = new_match(414)
+	var adults: Array = m.idle_adults(0, m.home_pos(0))
+	var lead = adults[0]
+	var worker = adults[1]
+	var remaining = adults[2]
+	var other = adults[3]
+	var crew = m.make_crew(0, [lead, worker, remaining])
+	var destination = m.make_crew(0, [other])
+	m.command(0, {"crew": crew.id, "steps": [step("promote"), step("gather", "wood")]})
+	m.command(0, {"crew": destination.id, "steps": [step("promote"), step("hold")]})
+	m.update_crews(0.0)
+	check(crew.captain and destination.captain, "promoting each crew gives it a captain")
+	var order: Dictionary = m.command(0, {"unit": worker.id, "steps": [step("gather", "berries")]})
+	check(order["ok"] and lead.crew == crew.id and worker.crew == crew.id and crew.steps[0]["subject"] == "berries", "addressing a member orders their whole crew")
+	var individual := {"unit": worker.id, "individual": true}
+	order = m.command(0, individual.merged({"steps": [step("status")]}))
+	check(order["ok"] and worker.crew == crew.id and worker.task == "gather", "individual status preserves the worker's assignment")
+	order = m.command(0, individual.merged({"steps": [step("hold", "", 0, "marked")]}))
+	check(not order["ok"] and worker.crew == crew.id, "invalid individual order preserves crew membership")
+	order = m.command(0, individual.merged({"steps": [step("follow", "", 0, "", 3)]}))
+	var solo = m.crew_of(worker)
+	check(order["ok"] and solo != crew and solo.members == [worker.id] and worker.task == "follow", "individual order takes only that worker, even with a requested count")
+	check(crew.members == [lead.id, remaining.id] and remaining.task == "gather", "the original crew continues its work")
+	var state: Dictionary = destination.state.duplicate()
+	var moved: Dictionary = m.reassign_crew(0, individual, other.id)
+	check(moved["ok"] and worker.crew == destination.id and worker.task == "hold" and destination.state == state, "transferred worker takes up the destination crew's active plan")
+	check(not m.crews.has(solo.id), "transfer removes the worker's empty former crew")
+	check(m.cancel(0, individual) == 1 and worker.crew < 0 and other.task == "hold", "individual cancel releases only the addressed worker")
+	order = m.command(0, {"unit": lead.id, "individual": true, "steps": [step("follow")]})
+	check(order["ok"] and m.crew_of(lead).captain and not crew.captain and remaining.task == "gather", "a captain keeps their rank when given a solo assignment")
+	moved = m.reassign_crew(0, {"crew": crew.id}, other.id)
+	check(moved["ok"] and remaining.crew == destination.id and remaining.task == "hold", "whole crews can transfer to another captain")
+	var enemy = m.idle_adults(1, m.home_pos(1))[0]
+	moved = m.reassign_crew(0, {"crew": destination.id}, enemy.id)
+	check(not moved["ok"] and remaining.crew == destination.id, "invalid transfer leaves the original assignment intact")
+	var idle_group = m.make_crew(0, [adults[4], adults[5]])
+	moved = m.reassign_crew(0, {"unit": adults[4].id, "individual": true}, other.id)
+	check(moved["ok"] and adults[5].crew == idle_group.id, "an idle group stays together when one member transfers")
+	order = m.command(0, {"unit": remaining.id, "individual": true, "steps": [step("dismiss")]})
+	check(order["ok"] and remaining.crew < 0 and other.task == "hold", "individual dismissal leaves the rest of the destination crew on duty")
 
 
 func test_walls() -> void:

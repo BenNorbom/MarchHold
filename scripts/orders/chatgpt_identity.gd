@@ -19,18 +19,23 @@ static func verify(token: String, keys: Array, client: String, nonce: String) ->
 		return {}
 	var header = JSON.parse_string(_decode(parts[0]).get_string_from_utf8())
 	var claims = JSON.parse_string(_decode(parts[1]).get_string_from_utf8())
-	if not header is Dictionary or not claims is Dictionary or header.get("alg") != "RS256":
+	if not header is Dictionary or not claims is Dictionary or not is_same(header.get("alg"), "RS256"):
 		return {}
 	var audience = claims.get("aud")
-	if audience != client and not (audience is Array and client in audience and claims.get("azp", client) == client):
+	if not is_same(audience, client) and not (audience is Array and client in audience and is_same(claims.get("azp", client), client)):
 		return {}
-	if claims.get("iss") != ISSUER or claims.get("nonce") != nonce or str(claims.get("sub", "")) == "":
+	var subject = claims.get("sub")
+	if not is_same(claims.get("iss"), ISSUER) or not is_same(claims.get("nonce"), nonce) or not subject is String or subject.is_empty():
 		return {}
-	if float(claims.get("exp", 0)) <= Time.get_unix_time_from_system():
+	var expires = claims.get("exp")
+	if not (expires is float or expires is int) or expires <= Time.get_unix_time_from_system():
+		return {}
+	var key_id = header.get("kid")
+	if not key_id is String or key_id.is_empty():
 		return {}
 	for jwk in keys:
-		if jwk is Dictionary and jwk.get("kty") == "RSA" and jwk.get("kid") == header.get("kid") and jwk.has("n") and jwk.has("e"):
-			var key := _rsa_key(_decode(str(jwk["n"])), _decode(str(jwk["e"])))
+		if jwk is Dictionary and is_same(jwk.get("kty"), "RSA") and is_same(jwk.get("kid"), key_id) and jwk.get("n") is String and jwk.get("e") is String:
+			var key := _rsa_key(_decode(jwk["n"]), _decode(jwk["e"]))
 			var digest := (parts[0] + "." + parts[1]).sha256_buffer()
 			if key != null and Crypto.new().verify(HashingContext.HASH_SHA256, digest, _decode(parts[2]), key):
 				return claims

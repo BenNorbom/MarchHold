@@ -25,13 +25,13 @@ Start with **The Founding** (tutorial) from the main menu. Terra, your steward, 
 |---|---|
 | WASD, mouse | Move, look |
 | Shift / Space | Sprint / jump |
-| Enter or T | Talk to the villager you're looking at (or to your people) |
+| Enter or T | Talk to the crew or villager you're looking at (or to your people) |
 | Left mouse | Strike; with a bow, hold to draw and release to shoot |
 | Q | Switch between bow and weapon (rotates a building while placing) |
 | E / G | Talk to the person you look at; take gear at the armory |
 | F | Take or leave a horse at your stable |
 | R | Mark the spot you're looking at (orders can say "there" or "the mark") |
-| Tab | Ledger |
+| Tab | Cycle between the whole crew and individual members in chat. Open the ledger outside chat. |
 | M | Field map (only what you and your scouts have seen) |
 | B / C | Build menu / craft menu |
 | F1 or H | Help |
@@ -40,7 +40,9 @@ Start with **The Founding** (tutorial) from the main menu. Terra, your steward, 
 
 ## Giving orders
 
-Look at a villager and press **Enter**, then type. `@Name` talks to someone by name and `@all` to everyone. If nobody is addressed, idle villagers take the job.
+Look at a villager and press **Enter** to address their whole crew. Press **Tab** before sending to select that villager alone, then press it again to cycle through the other members and back to the crew. **Shift+Tab** cycles backward. `@Name` addresses someone's crew by name and `@all` addresses everyone. If nobody is addressed, idle villagers take the job.
+
+Give a selected individual a new order to take them out of their current crew, or say `dismiss` to release them. Say `join @Name` to move the addressed individual or crew into that person's crew and pick up its current orders.
 
 Slash commands work instantly and never need Terra:
 
@@ -116,8 +118,8 @@ powershell -ExecutionPolicy Bypass -File tools\build.ps1
 
 ## Status
 
-Version 0.2.0 adds ChatGPT plan sign-in and model selection for Terra. Version 0.1.0 introduced the full lean tech tree, chat and slash commands, Terra, scouting, combat, horses, cannons, the AI rival, the intro and the tutorial. Next up: saving and resuming, an art pass on people and horses, formations and morale tuning, voice orders, and online play for up to 8 players.
+Version 0.3.0 adds individual crew orders, slash-command previews, and animated villager models. Version 0.2.0 added ChatGPT plan sign-in and model selection for Terra. Version 0.1.0 introduced the full lean tech tree, chat and slash commands, Terra, scouting, combat, horses, cannons, the AI rival, the intro and the tutorial. Next up: saving and resuming, an art pass on horses, formations and morale tuning, voice orders, and online play for up to 8 players.
 
 ## Credits
 
-Built with [Godot Engine](https://godotengine.org) (MIT). Textures from [Poly Haven](https://polyhaven.com) (CC0). Fonts: Cinzel and EB Garamond (SIL Open Font License). Every model, tree, character and sound is generated procedurally by the game. The installer is made with Inno Setup. Licence texts are in [LICENSES/](LICENSES).
+Built with [Godot Engine](https://godotengine.org) (MIT). Textures from [Poly Haven](https://polyhaven.com) (CC0). Villagers use adapted [Grab3D models](LICENSES/VILLAGERS-CC0.txt) (CC0). Fonts: Cinzel and EB Garamond (SIL Open Font License). The game generates its other models, trees and sounds procedurally. The installer is made with Inno Setup. Licence texts are in [LICENSES/](LICENSES).

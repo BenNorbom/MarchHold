@@ -3,7 +3,7 @@ extends RefCounted
 ## schema sent to Terra, the slash menus, the ledger, the tech tree and the AI
 ## rival's options are all generated from these tables.
 
-const VERSION := "0.2.0"
+const VERSION := "0.3.0"
 
 # --- World -------------------------------------------------------------------
 const MAP_SIZE := 1024.0          # metres per side (about 1 km x 1 km)
@@ -164,11 +164,12 @@ const SCOUT_SIGHT := 62.0
 
 # --- Work ------------------------------------------------------------------------
 # node: a resource node on the map. building: work happens at a building.
+const GATHER_SPEED := 0.75
 const GATHER := {
-	"wood": {"name": "wood", "resource": "wood", "node": "tree", "rate": 1.0, "carry": 16},
-	"stone": {"name": "stone", "resource": "stone", "node": "rock", "building": "quarry", "rate": 0.6, "carry": 12, "building_rate": 0.5},
-	"berries": {"name": "berries", "resource": "food", "node": "berry", "rate": 1.2, "carry": 12},
-	"hunt": {"name": "hunting", "resource": "food", "building": "lodge", "rate": 1.5, "carry": 12},
+	"wood": {"name": "wood", "resource": "wood", "node": "tree", "rate": 1.0, "carry": 5},
+	"stone": {"name": "stone", "resource": "stone", "node": "rock", "building": "quarry", "rate": 0.6, "carry": 4, "building_rate": 0.5},
+	"berries": {"name": "berries", "resource": "food", "node": "berry", "rate": 1.2, "carry": 5},
+	"hunt": {"name": "hunting", "resource": "food", "building": "lodge", "rate": 1.5, "carry": 5},
 	"farm": {"name": "farming", "resource": "food", "building": "farm", "building_rate": 0.14},
 	"bronze_ore": {"name": "bronze ore", "resource": "bronze_ore", "building": "mine", "building_rate": 0.4},
 	"coal": {"name": "coal", "resource": "coal", "building": "mine", "building_rate": 0.45},

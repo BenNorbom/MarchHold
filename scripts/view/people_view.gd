@@ -1,8 +1,8 @@
 extends Node3D
-## Draws every person and animal with a handful of MultiMeshes. Limbs are
-## animated in the vertex shader (shaders/person.gdshader).
+## Nearby villagers use articulated rigs. Distant people, animals and props are batched.
 
-const Defs = preload("res://scripts/data/defs.gd")
+const Rig = preload("res://scripts/view/villager_rig.gd")
+const Anim = preload("res://scripts/sim/match_base.gd").Anim
 
 const MAX_PEOPLE := 560
 const MAX_ANIMALS := 260
@@ -16,18 +16,30 @@ var m
 var meshes
 var body_mm: MultiMesh
 var item_mm := {}
+var crowd_meshes: Array[MultiMesh] = []
 var horse_mm: MultiMesh
 var deer_mm: MultiMesh
 var vis := {}           # unit id -> [Vector3 pos, float facing, float phase]
 var view_dist := 300.0
 var counts := {}
+var rigs := {}
+var spare_rigs := [[], [], []]
+var detail_radius: float
+var detail_limit: int
+var refresh := 0.0
 
 
 func setup(match_ref, mats, mesh_lib, quality: int) -> void:
 	m = match_ref
+	detail_radius = [18.0, 26.0, 34.0][quality]
+	detail_limit = [4, 12, 20][quality]
 	meshes = mesh_lib
 	view_dist = [200.0, 300.0, 380.0][quality]
 	body_mm = _make(meshes.person(), MAX_PEOPLE, true)
+	var crowd_material: ShaderMaterial = mats.get_mat("person").duplicate()
+	crowd_material.set_shader_parameter("painted_crowd", true)
+	for mesh: ArrayMesh in [preload("res://assets/people/villager_crowd.res"), preload("res://assets/people/farmer_crowd.res"), preload("res://assets/people/child_crowd.res")]:
+		crowd_meshes.append(_make(mesh, MAX_PEOPLE, true, crowd_material))
 	for name in ITEMS:
 		var cap := MAX_PEOPLE if name in ["bundle_wood", "wood_spear", "club", "bow", "axe", "wood_shield"] else 260
 		if name in ["crown", "cloak"]:
@@ -37,7 +49,7 @@ func setup(match_ref, mats, mesh_lib, quality: int) -> void:
 	deer_mm = _make(meshes.quadruped(true), MAX_ANIMALS, true)
 
 
-func _make(mesh: Mesh, cap: int, shadows: bool) -> MultiMesh:
+func _make(mesh: Mesh, cap: int, shadows: bool, material: Material = null) -> MultiMesh:
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.use_colors = true
@@ -47,6 +59,8 @@ func _make(mesh: Mesh, cap: int, shadows: bool) -> MultiMesh:
 	mm.visible_instance_count = 0
 	var mi := MultiMeshInstance3D.new()
 	mi.multimesh = mm
+	if material:
+		mi.material_override = material
 	mi.custom_aabb = AABB_ALL
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mi)
@@ -104,8 +118,67 @@ func _tool_for(u) -> String:
 	return ""
 
 
+func _carried_resource(u) -> String:
+	if u.dead or u.mounted or u.carry <= 0.0:
+		return ""
+	if u.anim == Anim.CARRY or (u.phase == "haul" and u.anim in [Anim.IDLE, Anim.WALK]):
+		return u.carry_res
+	return u.carry_res if u.task == "idle" and u.anim == Anim.IDLE else ""
+
+
+func _select_rigs(cam: Vector3, hidden: int) -> void:
+	var candidates := []
+	var center := Vector2(cam.x, cam.z)
+	for u in m.units:
+		if u.kind != "villager" or u.id == hidden or (u.dead and (u.dead_t < 0 or m.t - u.dead_t > 18)):
+			continue
+		var distance: float = center.distance_to(u.pos)
+		if rigs.has(u.id):
+			distance -= 2.0
+		if distance < detail_radius:
+			candidates.append([distance, u])
+	candidates.sort_custom(func(a,b): return a[0] < b[0])
+	var wanted := {}
+	for i in mini(detail_limit,candidates.size()):
+		var u = candidates[i][1]
+		wanted[u.id] = u
+	for id in rigs.keys():
+		var rig: Rig = rigs[id]
+		if wanted.has(id) and rig.model_index == Rig.model_for(wanted[id]):
+			continue
+		rig.hide()
+		spare_rigs[rig.model_index].append(rig)
+		rigs.erase(id)
+	for id in wanted:
+		if rigs.has(id):
+			continue
+		var u = wanted[id]
+		var index := Rig.model_for(u)
+		var rig: Rig
+		if spare_rigs[index].is_empty():
+			rig = Rig.new()
+			add_child(rig)
+			rig.setup(index)
+		else:
+			rig = spare_rigs[index].pop_back()
+		rig.customize(fmod(id * 0.6180339, 1.0), m.fac(u.faction).color)
+		rig.show()
+		rigs[id] = rig
+
+
+func _item(name: String, rig: Rig, xf: Transform3D, tint: Color, data: Color) -> void:
+	if rig:
+		xf = rig.item_pose(name)
+		data.r = 13.0 # Final rigid prop transform, supplied by the bone pose.
+	_put(item_mm[name], xf, tint, data)
+
+
 func update_frame(delta: float, alpha: float, cam: Vector3, hidden: int) -> void:
 	counts.clear()
+	refresh -= delta
+	if refresh <= 0.0:
+		_select_rigs(cam, hidden)
+		refresh = 0.2
 	var tr = m.terrain
 	var t: float = m.t
 	var seen := {}
@@ -160,29 +233,45 @@ func update_frame(delta: float, alpha: float, cam: Vector3, hidden: int) -> void
 			custom.r = 10
 			if anim == 7:
 				custom.r = 7
-		_put(body_mm, xf2, tunic, custom)
-		var tool := _tool_for(u)
+		var cargo := _carried_resource(u)
+		var rig: Rig = rigs.get(u.id)
+		if rig:
+			var size := 0.90 if u.child else (0.96 + seed * 0.08)
+			rig.transform = Transform3D(xf2.basis.orthonormalized().scaled(Vector3(1.04-seed*0.08,1,1)*size),xf2.origin)
+			rig.pose(int(custom.r),v[2],moved,cargo,delta,rig.to_local(cam),u.dead)
+			cargo = rig.cargo
+		else:
+			if cargo != "":
+				custom.r = 14 if cargo == "wood" else (15 if cargo == "food" else 9)
+			if u.kind == "villager":
+				var crowd_tint := Color.WHITE.lerp(tunic, 0.16)
+				_put(crowd_meshes[Rig.model_for(u)], xf2, crowd_tint, custom)
+			else:
+				_put(body_mm, xf2, tunic, custom)
+		var tool := _tool_for(u) if not u.dead and cargo == "" else ""
 		var weapon: String = u.weapon
 		if tool != "":
-			_put(item_mm[tool], xf2, tunic, custom)
-		elif weapon != "":
-			_put(item_mm[weapon], xf2, tunic, custom)
-		if u.bow and (weapon == "" or anim == 8) and tool == "":
-			_put(item_mm["bow"], xf2, tunic, custom)
-		elif anim == 8 and not u.bow:
-			_put(item_mm["bow"], xf2, tunic, custom)
-		if u.shield != "" and anim != 8 and tool == "":
-			_put(item_mm[u.shield], xf2, tunic, custom)
+			_item(tool, rig, xf2, tunic, custom)
+		elif weapon != "" and cargo == "" and anim != Anim.SHOOT:
+			_item(weapon, rig, xf2, tunic, custom)
+		if u.bow and (weapon == "" or anim == 8) and tool == "" and cargo == "":
+			_item("bow", rig, xf2, tunic, custom)
+		elif anim == 8 and not u.bow and cargo == "":
+			_item("bow", rig, xf2, tunic, custom)
+		if u.shield != "" and anim != 8 and tool == "" and cargo == "":
+			_item(u.shield, rig, xf2, tunic, custom)
 		if u.armor != "":
-			_put(item_mm[u.armor], xf2, tunic, custom)
-			_put(item_mm["bronze_helmet" if u.armor.begins_with("bronze") else "iron_helmet"], xf2, tunic, custom)
+			_item(u.armor, rig, xf2, tunic, custom)
+			_item("bronze_helmet" if u.armor.begins_with("bronze") else "iron_helmet", rig, xf2, tunic, custom)
 		if u.kind == "commander":
-			_put(item_mm["crown"], xf2, tunic, custom)
-			_put(item_mm["cloak"], xf2, f.color.lightened(0.15) if f else tunic, custom)
-		if u.carry > 0.0:
-			var bundle := "bundle_wood" if u.carry_res == "wood" else ("bundle_food" if u.carry_res == "food" else "bundle_stone")
-			var bcol := Color(0.55, 0.53, 0.5) if u.carry_res == "stone" else (Color(0.2, 0.2, 0.22) if u.carry_res == "coal" else (Color(0.5, 0.36, 0.28) if u.carry_res.ends_with("ore") else tunic))
-			_put(item_mm[bundle], xf2, bcol, custom)
+			_item("crown", rig, xf2, tunic, custom)
+			_item("cloak", rig, xf2, f.color.lightened(0.15) if f else tunic, custom)
+		if cargo != "":
+			var bundle := "bundle_wood" if cargo == "wood" else ("bundle_food" if cargo == "food" else "bundle_stone")
+			var bcol := Color(0.55, 0.53, 0.5) if cargo == "stone" else (Color(0.2, 0.2, 0.22) if cargo == "coal" else (Color(0.5, 0.36, 0.28) if cargo.ends_with("ore") else tunic))
+			_item(bundle, rig, xf2, bcol, custom)
+	for mm in crowd_meshes:
+		mm.visible_instance_count = counts.get(mm, 0)
 	body_mm.visible_instance_count = counts.get(body_mm, 0)
 	for name in item_mm:
 		var mm: MultiMesh = item_mm[name]

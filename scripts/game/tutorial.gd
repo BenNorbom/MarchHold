@@ -20,7 +20,7 @@ const STEPS := [
 	["Raiders!", "Raiders are coming. Build a [b]palisade[/b] (/b, click posts, Enter) and call [b]to arms[/b]. Survive.",
 		"Your scout spotted raiders heading our way! A palisade slows them, and 'to arms' sends everyone to grab weapons and guard home."],
 	["A captain", "Look at a villager and say [b]promote[/b]. Then give them two steps, e.g. [b]gather 30 wood then build a hut[/b].",
-		"Captains keep their crew together. You can give any crew several steps joined with 'then'."],
+		"Press Tab in a crew's chat to give one member a new job, or say 'join @Name' to move them to another crew. Chain steps with 'then'."],
 	["Stone", "Build a [b]quarry[/b] next to a big rock outcrop, then start a [b]stone wall[/b] (/b).",
 		"A quarry opens the Stone age: houses, granaries, towers and stone walls. Walls take a lot of stone and labor."],
 	["The crown", "Find Rook's camp and kill [b]Commander Rook[/b] (he wears a crown). Take soldiers: [b]attack their camp[/b].",

@@ -1,0 +1,11 @@
+MarchHold villagers use optimized versions of Grab3D's Medieval Villager, Farmer Woman
+and Child, including the accompanying textures, rig and walk/run animations.
+Grab3D publishes these assets under CC0 1.0 Universal.
+
+https://grab3d.com/models/characters/medieval-villager/
+https://grab3d.com/models/characters/farmer-woman/
+https://grab3d.com/models/characters/child/
+https://creativecommons.org/publicdomain/zero/1.0/
+
+MarchHold adaptations include mesh simplification, clothing masks, body variations,
+work poses, resource-carry poses and equipment attachments.

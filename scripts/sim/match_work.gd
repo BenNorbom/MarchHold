@@ -20,8 +20,6 @@ func make_crew(faction: int, members: Array) -> Crew:
 	crews[c.id] = c
 	for u in members:
 		_join(c, u)
-	if not c.members.is_empty():
-		c.leader = c.members[0]
 	return c
 
 
@@ -32,7 +30,13 @@ func _join(c: Crew, u: Unit) -> void:
 	u.crew = c.id
 	c.members.append(u.id)
 	if c.leader < 0:
-		c.leader = u.id
+		_set_leader(c, u.id)
+
+
+func _set_leader(c: Crew, id: int) -> void:
+	c.leader = id
+	var lead := unit(id)
+	c.captain = lead != null and lead.captain
 
 
 func leave_crew(u: Unit) -> void:
@@ -41,11 +45,35 @@ func leave_crew(u: Unit) -> void:
 	_release_claim(u)
 	if c == null:
 		return
+	var lost_captain := c.captain and c.leader == u.id
 	c.members.erase(u.id)
+	c.start_size = maxi(0, c.start_size - 1)
 	if c.leader == u.id:
-		c.leader = c.members[0] if not c.members.is_empty() else -1
+		_set_leader(c, c.members[0] if not c.members.is_empty() else -1)
 	if c.members.is_empty():
+		_cancel_sites(c)
 		crews.erase(c.id)
+	elif lost_captain and not c.captain and c.idx >= c.steps.size():
+		dissolve(c)
+	else:
+		_assign_slots(c)
+
+
+func release_member(u: Unit) -> void:
+	leave_crew(u)
+	if u.task == "tame":
+		var horse := unit(u.tgt_unit)
+		if horse and horse.driver == u.id:
+			horse.driver = -1
+	if u.siege >= 0:
+		var engine := unit(u.siege)
+		if engine:
+			engine.crew_ids.erase(u.id)
+		u.siege = -1
+	u.tgt_unit = -1
+	u.enemy_bld = -1
+	u.in_tower = -1
+	_set_task(u, "idle")
 
 
 func dissolve(c: Crew) -> void:
@@ -53,7 +81,6 @@ func dissolve(c: Crew) -> void:
 		var u := unit(id)
 		if u:
 			u.crew = -1
-			_release_claim(u)
 			_set_task(u, "idle")
 	c.members.clear()
 	crews.erase(c.id)
@@ -157,6 +184,7 @@ func cancel_plan(c: Crew) -> void:
 	_cancel_sites(c)
 	c.steps = []
 	c.idx = 0
+	c.done = true
 	for id in c.members:
 		var u := unit(id)
 		if u:
@@ -166,19 +194,19 @@ func cancel_plan(c: Crew) -> void:
 
 
 func _set_task(u: Unit, task: String) -> void:
+	_release_claim(u)
 	u.task = task
 	u.phase = ""
-	u.tgt_node = -1
 	u.tgt_bld = -1
 	u.work_t = 0.0
 	u.path = PackedVector2Array()
 	u.scout_leg = 0
-	_release_claim(u)
 
 
 func _release_claim(u: Unit) -> void:
 	if u.tgt_node >= 0 and claims.has(u.tgt_node):
 		claims[u.tgt_node] = maxi(0, int(claims[u.tgt_node]) - 1)
+	u.tgt_node = -1
 
 
 func _claim(u: Unit, n) -> void:
@@ -383,11 +411,13 @@ func _prepare_step(c: Crew, s: Dictionary) -> String:
 		"recall":
 			c.state["target"] = home_pos(c.faction)
 		"promote":
-			c.captain = true
-			c.loop = false
 			var lead := unit(c.leader)
-			if c.faction == 0 and lead:
-				post(0, "%s is now a captain. Address them with @%s." % [lead.name, lead.name.split(" ")[0]], "info")
+			if lead:
+				lead.captain = true
+				c.captain = true
+				c.loop = false
+				if c.faction == 0:
+					post(0, "%s is now a captain. Address their crew by looking at a member." % lead.name, "info")
 		"dismiss", "status":
 			pass
 	return ""
@@ -537,11 +567,13 @@ func update_crews(dt: float) -> void:
 				c.members.erase(id)
 				c.lost += 1
 				if c.leader == id:
-					c.leader = c.members[0] if not c.members.is_empty() else -1
+					_set_leader(c, c.members[0] if not c.members.is_empty() else -1)
 		if c.members.is_empty():
 			crews.erase(c.id)
 			continue
 		if c.idx >= c.steps.size():
+			if not c.captain and c.done:
+				dissolve(c)
 			continue
 		var s: Dictionary = c.steps[c.idx]
 		if _step_done(c, s):
@@ -805,7 +837,7 @@ func _do_gather(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
 				return
 			face(u, b.pos)
 			u.anim = Anim.DIG
-			var rate: float = g["building_rate"] * work_mult(u.faction) * dt
+			var rate: float = g["building_rate"] * Defs.GATHER_SPEED * work_mult(u.faction) * dt
 			add_stock(u.faction, res, rate)
 			c.state["delivered"] = float(c.state["delivered"]) + rate
 			return
@@ -843,7 +875,7 @@ func _do_gather(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
 				return
 			face(u, n.pos)
 			u.anim = Anim.CHOP if n.kind == "tree" else (Anim.DIG if n.kind == "rock" else Anim.PICK)
-			var got := take_from_node(n, g["rate"] * work_mult(u.faction) * dt)
+			var got := take_from_node(n, minf(float(g["carry"]) - u.carry, g["rate"] * Defs.GATHER_SPEED * work_mult(u.faction) * dt))
 			u.carry_res = res
 			u.carry += got
 			if u.work_t <= 0.0:
@@ -888,6 +920,7 @@ func _work_building(u: Unit, type: String, subj: String) -> Building:
 
 
 func _do_hunt(u: Unit, c: Crew, dt: float) -> void:
+	var g: Dictionary = Defs.GATHER["hunt"]
 	var lodge := bld(u.tgt_bld)
 	if lodge == null or lodge.dead:
 		lodge = nearest_building(u.faction, u.pos, ["lodge"])
@@ -897,7 +930,7 @@ func _do_hunt(u: Unit, c: Crew, dt: float) -> void:
 		u.tgt_bld = lodge.id
 	match u.phase:
 		"", "find":
-			if u.carry >= 12.0:
+			if u.carry >= float(g["carry"]):
 				u.phase = "haul"
 				return
 			var meat = nearest_node("carcass", lodge.pos, 230.0)
@@ -948,8 +981,8 @@ func _do_hunt(u: Unit, c: Crew, dt: float) -> void:
 				return
 			u.anim = Anim.PICK
 			u.carry_res = "food"
-			u.carry += take_from_node(n, 1.5 * work_mult(u.faction) * dt)
-			if u.carry >= 12.0:
+			u.carry += take_from_node(n, minf(float(g["carry"]) - u.carry, g["rate"] * Defs.GATHER_SPEED * work_mult(u.faction) * dt))
+			if u.carry >= float(g["carry"]):
 				u.phase = "haul"
 				_release_claim(u)
 		"haul":
@@ -1662,7 +1695,7 @@ func kill_unit(u: Unit, why: String = "") -> void:
 			c.members.erase(u.id)
 			c.lost += 1
 			if c.leader == u.id:
-				c.leader = c.members[0] if not c.members.is_empty() else -1
+				_set_leader(c, c.members[0] if not c.members.is_empty() else -1)
 		u.crew = -1
 	emit({"type": "death", "id": u.id, "kind": u.kind, "pos": u.pos, "faction": u.faction})
 	if u.faction == 0 and u.kind == "villager":

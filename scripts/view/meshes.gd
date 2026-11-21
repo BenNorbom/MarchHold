@@ -762,19 +762,29 @@ func item(name: String) -> ArrayMesh:
 			g.cylinder(hand_r + Vector3(0, -0.2, -0.1), hand_r + Vector3(0, 0.3, 1.1), 0.02, 0.02, 5)
 			_p(g, 3, 6)
 			g.box(hand_r + Vector3(0, 0.22, 1.12), Vector3(0.18, 0.15, 0.03), 1.0, false)
-		"basket":
-			_p(g, 3, 5)
-			g.cylinder(hand_r + Vector3(0.12, -0.15, 0.1), hand_r + Vector3(0.12, 0.08, 0.1), 0.14, 0.17, 8, false)
+		"basket", "bundle_food":
+			var held := name == "basket"
+			_p(g, 3 if held else 0, 5)
+			_basket(g, hand_r if held else Vector3(-0.30,0.91,0.12), not held)
 		"bundle_wood":
-			_p(g, 0, 5)
-			for i in 3:
-				g.cylinder(Vector3(-0.35, 1.52 + i * 0.07, -0.05 + i * 0.05), Vector3(0.35, 1.5 + i * 0.07, 0.05 + i * 0.05), 0.07, 0.07, 6)
+			var center := Vector3(-0.215,1.42,0.01)
+			for offset in [Vector3(-0.055,0,0),Vector3(0.046,0.012,0.03),Vector3(-0.006,0.088,-0.04)]:
+				_p(g, 0, 12)
+				var start: Vector3 = center + offset - Vector3(0, 0, 0.36)
+				var end: Vector3 = center + offset + Vector3(0,0,0.33)
+				g.cylinder(start, end, 0.061, 0.054, 10, false)
+				_p(g, 0, 10)
+				g.cylinder(end - Vector3.BACK * 0.001, end, 0.054, 0.054, 10)
+				g.cylinder(start + Vector3.BACK * 0.001, start, 0.061, 0.061, 10)
+			_p(g,0,3)
+			for z in [-0.18,0.16]:
+				for i in 12:
+					var a := TAU*i/12
+					var b := TAU*(i+1)/12
+					g.cylinder(center+Vector3(0.113*cos(a),0.037+0.10*sin(a),z),center+Vector3(0.113*cos(b),0.037+0.10*sin(b),z),0.009,0.009,5)
 		"bundle_stone":
 			_p(g, 0, 9)
-			g.box(Vector3(0, 1.0, 0.3), Vector3(0.34, 0.24, 0.26), 1.0, false)
-		"bundle_food":
-			_p(g, 0, 5)
-			g.cylinder(Vector3(0, 0.92, 0.32), Vector3(0, 1.12, 0.32), 0.17, 0.2, 8, false)
+			g.sphere(Vector3(0,1.03,0.27),0.175,5,9,Vector3(1.10,0.67,0.86),0.16)
 		"wood_shield", "bronze_shield", "iron_shield":
 			_p(g, 2, 5 if name == "wood_shield" else (7 if name == "bronze_shield" else 6))
 			var c2 := hand_l + Vector3(0.09, 0.28, 0.12)
@@ -805,6 +815,26 @@ func item(name: String) -> ArrayMesh:
 	var mesh := g.finish()
 	cache[key] = mesh
 	return mesh
+
+
+func _basket(g: Geo, grip: Vector3, filled: bool) -> void:
+	var lip := grip - Vector3(0,0.16,0)
+	g.cylinder(lip-Vector3.UP*0.18,lip,0.11,0.155,14)
+	for i in 14:
+		var a := TAU*i/14
+		var b := TAU*(i+1)/14
+		for h in [0.0,0.045,0.09,0.135]:
+			var radius: float = 0.157 - h*0.25
+			g.cylinder(lip+Vector3(cos(a)*radius,-h,sin(a)*radius),lip+Vector3(cos(b)*radius,-h,sin(b)*radius),0.006,0.006,5)
+	for i in 10:
+		var a := PI*i/10
+		var b := PI*(i+1)/10
+		g.cylinder(lip+Vector3(cos(a)*0.15,sin(a)*0.16,0),lip+Vector3(cos(b)*0.15,sin(b)*0.16,0),0.012,0.012,7)
+	if filled:
+		g.region = 11
+		for i in 8:
+			var a := TAU*i/8
+			g.sphere(lip+Vector3(cos(a)*0.084,0.005,sin(a)*0.084),0.041,4,7,Vector3(1,0.84,1))
 
 
 func quadruped(deer: bool) -> ArrayMesh:
