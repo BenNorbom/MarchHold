@@ -41,7 +41,7 @@ func _reasoning_for(model: String):
 	return {"effort": "none"}
 
 
-func ask(facts: Dictionary, message: String, history: Array, pending: Array) -> void:
+func ask(facts: Dictionary, message: String, history: Array) -> void:
 	if busy:
 		return
 	if not available():
@@ -50,7 +50,7 @@ func ask(facts: Dictionary, message: String, history: Array, pending: Array) -> 
 	if remaining() <= 0:
 		answered.emit({"ok": false, "error": "Terra has answered the most requests allowed this match. Simple orders and slash commands still work."})
 		return
-	var input := {"facts": facts, "history": history, "pending_plan": pending, "message": message}
+	var input := {"facts": facts, "history": history, "message": message}
 	busy = true
 	_plan_token = ""
 	if Settings.get_val("terra_provider") == Settings.CHATGPT_PLAN:

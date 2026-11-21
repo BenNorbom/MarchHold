@@ -22,7 +22,7 @@ func _initialize() -> void:
 
 func _run_tests() -> void:
 	var only := OS.get_environment("MH_TEST")
-	var tests := ["defs", "validation", "terrain", "economy", "crews", "walls", "combat", "parser", "schema", "chatgpt", "duel"]
+	var tests := ["defs", "validation", "terrain", "economy", "crews", "walls", "combat", "parser", "schema", "chatgpt", "terra_orders", "duel"]
 	var t0 := Time.get_ticks_msec()
 	for name in tests:
 		if only != "" and only != name:
@@ -353,6 +353,51 @@ func test_schema() -> void:
 	check("university" in items["properties"]["subject"]["enum"], "subjects include buildings")
 	var text := JSON.stringify(sc)
 	check(text.length() > 200 and JSON.parse_string(text) != null, "schema serializes")
+	var steps := [step("gather", "wood", 10)]
+	check(not Schema.parse_plan(JSON.stringify({"kind": "plan", "reply": "", "steps": steps})).is_empty(), "Terra accepts an actionable plan")
+	check(Schema.parse_plan(JSON.stringify({"kind": "reply", "reply": "", "steps": steps})).is_empty(), "Terra rejects steps attached to advice")
+	check(Schema.parse_plan(JSON.stringify({"kind": "plan", "reply": "", "steps": []})).is_empty(), "Terra rejects a plan with no steps")
+
+
+func test_terra_orders() -> void:
+	var game = load("res://scripts/game/game.gd").new()
+	var m = new_match(8)
+	game.m = m
+	game.hud = game.Hud.new()
+	game.add_child(game.hud)
+	game.view = game.WorldView.new()
+	game.view.ghost = MeshInstance3D.new()
+	game.view.add_child(game.view.ghost)
+	game.add_child(game.view)
+	root.add_child(game)
+	var worker = m.idle_adults(0, m.home_pos(0))[0]
+	var ctx := {"req": {"unit": worker.id, "individual": true}, "who": worker.name, "text": "We could use a little more timber in the stores."}
+	var gather := {"ok": true, "data": {"kind": "plan", "reply": "I'll gather ten wood.", "steps": [step("gather", "wood", 10)]}}
+	game.terra_ctx = ctx
+	game._on_terra(gather)
+	var crew = m.crew_of(worker)
+	check(crew != null and worker.task == "gather" and crew.steps[0]["amount"] == 10, "Terra starts the addressed villager's order immediately")
+	game.terra_ctx = ctx
+	game._on_terra({"ok": true, "data": {"kind": "reply", "reply": "A hut would house five people.", "steps": []}})
+	check(worker.task == "gather" and not game.placing, "Terra advice leaves the crew and placement untouched")
+	game.terra_ctx = ctx
+	check(game._discard_terra_request({}), "an outstanding Terra order can be cancelled")
+	game._on_terra({"ok": true, "data": {"kind": "plan", "reply": "", "steps": [step("hold")]}})
+	check(worker.task == "gather", "Terra ignores a cancelled order's later response")
+	game.terra_ctx = ctx
+	game._on_terra({"ok": true, "data": {"kind": "plan", "reply": "Choose a spot for the hut.", "steps": [step("build", "hut")]}})
+	check(game.placing and game.place_type == "hut" and worker.task == "gather" and m.buildings_of(0, "hut", false).is_empty(), "Terra opens placement and waits for the player to choose the site")
+	var home: Vector2 = m.home_pos(0)
+	for i in 12:
+		var pos := home + Vector2.from_angle(i * TAU / 12.0) * 24.0
+		if m.site_problem(0, "hut", pos, game.place_rot) == "":
+			game.place_pos = pos
+			game.place_ok = true
+			game._place_click()
+			break
+	var huts: Array = m.buildings_of(0, "hut", false)
+	check(not game.placing and worker.task == "build" and huts.size() == 1 and huts[0].pos == game.place_pos, "the chosen site becomes the addressed villager's construction job")
+	game.free()
 
 
 func test_duel() -> void:

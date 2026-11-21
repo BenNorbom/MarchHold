@@ -56,7 +56,6 @@ var addressee := {}
 var address_label := ""
 var chat_crew := -1
 var chat_first_member := -1
-var pending := {}
 var terra_ctx := {}
 var dialogue: Array = []
 var placing := false
@@ -700,22 +699,14 @@ func _on_chat(text: String) -> void:
 			hud.log_line(result["error"], "warn")
 		return
 	var parsed: Dictionary = Parser.parse(text)
-	if not pending.is_empty():
-		if parsed.get("confirm", false):
-			var p := pending
-			pending = {}
-			_execute(p["req"], p["steps"], p["who"])
-			return
-		if parsed.get("cancel", false):
-			pending = {}
-			hud.log_line("Plan dropped.", "terra", "Terra")
-			return
 	if parsed.get("cancel", false):
-		var n: int = m.cancel(0, req if not req.is_empty() else {"all": true})
-		hud.log_line("Stopped." if n > 0 else "Nobody was doing anything.", "crew")
+		if _discard_terra_request(req):
+			hud.log_line("Order dropped.", "terra", "Terra")
+		else:
+			_stop_orders(req)
 		return
 	if parsed.get("confirm", false):
-		hud.log_line("There's no plan waiting. Give an order first.", "terra", "Terra")
+		hud.log_line("Orders start when you give them. For construction, choose a site to start.", "hint")
 		return
 	if parsed.get("ok", false):
 		if parsed.get("all", false) and req.is_empty():
@@ -734,21 +725,27 @@ func _on_chat(text: String) -> void:
 			var u2 = m.unit(req["unit"])
 			if u2 and u2.crew >= 0:
 				crew_id = u2.crew
-		terra.ask(m.brief(0, who, crew_id, req.get("individual", false)), text, dialogue, pending.get("steps", []))
+		terra.ask(m.brief(0, who, crew_id, req.get("individual", false)), text, dialogue)
 	else:
 		hud.log_line("I didn't catch that. Try 'gather wood', 'build a hut' or /h for help. Choose a Terra connection in Settings for free-form orders.", "warn")
 
 
 func _on_terra(result: Dictionary) -> void:
+	var ctx := terra_ctx
+	terra_ctx = {}
 	hud.set_thinking("")
+	if ctx.is_empty() or m.over:
+		return
 	if not result.get("ok", false):
 		hud.log_line(result.get("error", "Terra could not answer."), "warn")
 		return
 	var d: Dictionary = result["data"]
 	var reply := str(d.get("reply", ""))
-	dialogue.append({"player": terra_ctx.get("text", ""), "terra": reply})
+	dialogue.append({"player": ctx["text"], "terra": reply})
 	while dialogue.size() > 6:
 		dialogue.pop_front()
+	if reply != "":
+		hud.log_line(reply, "terra", "Terra")
 	match str(d.get("kind", "reply")):
 		"plan":
 			var steps: Array = Match.clean_steps(d.get("steps", []))
@@ -758,33 +755,25 @@ func _on_terra(result: Dictionary) -> void:
 					err = m.step_problem(0, s)
 					if err != "":
 						break
-			if reply != "":
-				hud.log_line(reply, "terra", "Terra")
 			if err != "":
 				hud.log_line("That plan can't be done yet: " + err, "warn")
 				return
-			pending = {"req": terra_ctx.get("req", {}), "steps": steps, "who": terra_ctx.get("who", "your people")}
-			var lines: Array[String] = []
-			for i in steps.size():
-				var s: Dictionary = steps[i]
-				var cost := ""
-				if s["action"] == "build":
-					cost = " (%s)" % Defs.cost_text(Defs.BUILDINGS[s["subject"]]["cost"])
-				lines.append("%d. %s%s" % [i + 1, _describe_order(s, pending["req"]).capitalize(), cost])
-			hud.log_line("Plan for %s:  %s" % [pending["who"], "   ".join(lines)], "terra")
-			hud.log_line("Say 'go' to start, change it, or 'cancel'.", "terra")
-		"confirm":
-			if not pending.is_empty():
-				var p := pending
-				pending = {}
-				_execute(p["req"], p["steps"], p["who"])
-			elif reply != "":
-				hud.log_line(reply, "terra", "Terra")
+			_execute(ctx["req"], steps, ctx["who"])
 		"cancel":
-			pending = {}
-			hud.log_line(reply if reply != "" else "Plan dropped.", "terra", "Terra")
-		_:
-			hud.log_line(reply, "terra", "Terra")
+			_stop_orders(ctx["req"])
+
+
+func _discard_terra_request(req: Dictionary) -> bool:
+	if terra_ctx.is_empty() or (not req.is_empty() and not req.get("all", false) and req != terra_ctx["req"]):
+		return false
+	terra_ctx = {}
+	hud.set_thinking("")
+	return true
+
+
+func _stop_orders(req: Dictionary) -> void:
+	var n: int = m.cancel(0, req if not req.is_empty() else {"all": true})
+	hud.log_line("Stopped." if n > 0 else "Nobody was doing anything.", "crew")
 
 
 func _execute(req: Dictionary, steps: Array, who: String) -> void:
@@ -798,6 +787,9 @@ func _execute(req: Dictionary, steps: Array, who: String) -> void:
 			needs.append(i)
 	if needs.is_empty():
 		_issue(req, steps, who)
+		return
+	if placing:
+		hud.log_line("Finish or cancel the current placement before giving another build order.", "warn")
 		return
 	for i in needs:
 		var why: String = m.unlock_problem(0, steps[i]["subject"])
@@ -815,7 +807,7 @@ func _describe_order(step: Dictionary, req: Dictionary) -> String:
 	return Defs.describe_step(step)
 
 
-func _issue(req: Dictionary, steps: Array, who: String) -> void:
+func _issue(req: Dictionary, steps: Array, who: String, sites: Array = []) -> void:
 	var full := req.duplicate()
 	full["steps"] = steps
 	var r: Dictionary = m.command(0, full)
@@ -834,9 +826,8 @@ func _issue(req: Dictionary, steps: Array, who: String) -> void:
 			tutorial.on_command(steps, r)
 	else:
 		hud.log_line(r.get("error", "That order didn't work."), "warn")
-		for id in placed_ids:
+		for id in sites:
 			m.remove_site(id)
-	placed_ids = []
 
 
 # --- Placement --------------------------------------------------------------------------
@@ -952,7 +943,9 @@ func _site_done(ids: Array) -> void:
 	placing = false
 	hud.set_prompt("")
 	place_req = {}
-	_issue(pr["req"], pr["steps"], pr["who"])
+	var sites := placed_ids
+	placed_ids = []
+	_issue(pr["req"], pr["steps"], pr["who"], sites)
 
 
 func _cancel_place() -> void:
@@ -997,6 +990,7 @@ func _slash(text: String) -> void:
 		"h":
 			_menu_help()
 		"cancel":
+			_discard_terra_request(addressee)
 			var n: int = m.cancel(0, addressee if not addressee.is_empty() else {"all": true})
 			if addressee.get("individual", false):
 				hud.log_line("Released %s." % address_label.trim_suffix(" alone") if n > 0 else "They had no assignment.", "crew")
@@ -1242,8 +1236,9 @@ func _menu_help() -> void:
    build a hut · build a palisade · make 32 arrows · arm 6 with spears · to arms! · fall back
    send two scouts east · scout their camp · attack their camp · guard the mark · follow me · hold
    tame 3 horses · mount up · smelt bronze · upgrade the armory · research gunpowder · man the cannon
-   promote (makes a captain) · dismiss · status · then chains steps · 'go' confirms Terra's plans
+   promote (makes a captain) · dismiss · status · then chains steps
    join @Name moves the addressed villager or crew to that person's crew.
+   Terra starts orders when you send them. For construction, you choose each site.
 
 [b]Winning[/b]  Kill Commander Rook (he wears a crown). If you fall, the match is lost.
 [b]Growing[/b]  People are born only when the village is [i]well fed[/i] and there is free housing."""

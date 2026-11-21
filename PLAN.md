@@ -289,8 +289,8 @@ Menus are navigated with number keys or the mouse and can be closed with **Esc**
 ### Terra
 
 - **Per-request snapshot:** unlocked tech and costs, stockpiles, food state, housing, crews and their plans, and *known* map features (from the commander's own knowledge and scout reports only, never hidden truth).
-- **Response kinds** (from the prototype): `plan`, `clarify`, `reply`, `confirm`, `cancel`. Plans are up to 8 steps per crew, and the step schema is generated from the data tables.
-- **Plan card:** a plan appears in chat as numbered steps with costs and any missing prerequisites. Reply "go", amend it, or cancel.
+- **Response kinds** are `plan`, `clarify`, `reply`, and `cancel`. Plans are up to 8 steps per crew, and the step schema is generated from the data tables.
+- **Order execution** uses reasonable defaults for details the player leaves open. The game validates and submits the plan when Terra responds. Construction opens manual placement for every structure or wall before the crew receives its orders.
 - **Prerequisite reasoning:** *"Make iron swords"* before you have iron → Terra explains what's needed and offers to plan it.
 - **Standing orders:** captains keep jobs running, e.g. *"keep the archers stocked with arrows"*, *"keep two scouts watching the east road."*
 - **Cost and latency:** slash commands and a local parser handle simple orders ("hold", "follow me", "fall back") with no model call; per-match request limits; model names are configuration, not code.
