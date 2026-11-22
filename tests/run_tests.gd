@@ -29,7 +29,7 @@ func _initialize() -> void:
 
 func _run_tests() -> void:
 	var only := OS.get_environment("MH_TEST")
-	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "crews", "selection", "delegation", "walls", "combat", "parser", "schema", "chatgpt", "terra_orders", "duel"]
+	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "crews", "selection", "delegation", "posts", "walls", "combat", "parser", "schema", "chatgpt", "terra_orders", "duel"]
 	var t0 := Time.get_ticks_msec()
 	for name in tests:
 		if only != "" and only != name:
@@ -366,6 +366,92 @@ func test_delegation() -> void:
 		game._show_messages()
 		check(game.hud.log_lines[-1]["node"].get_parsed_text().contains("19"), "the rest arrive as one summary")
 	game.free()
+
+
+func grown_village(m, size: int) -> Array:
+	var home: Vector2 = m.home_pos(0)
+	while m.idle_adults(0, home).size() < size:
+		var u = m.spawn_unit(0, "villager", home + Vector2.from_angle(m.units.size() * 0.7) * 9.0)
+		u.name = m.pick_name(m.fac(0))
+	m.fac(0).stock["food"] = 140.0
+	m._refresh_counts(m.fac(0))
+	return m.idle_adults(0, home)
+
+
+func test_posts() -> void:
+	if not "mandate" in Defs.ACTIONS:
+		check(false, "captains can be given a mandate")
+		return
+	var m = new_match(414)
+	var home: Vector2 = m.home_pos(0)
+	var adults: Array = grown_village(m, 30)
+	var steward = adults[0]
+	var r: Dictionary = m.command(0, {"unit": steward.id, "individual": true, "steps": [step("mandate", "village")]})
+	check(r["ok"], "a village mandate is accepted: %s" % r.get("error", ""))
+	if not r["ok"]:
+		return
+	var village = m.posts[r["post"]]
+	check(village.captain == steward.id and steward.captain and village.center.distance_to(home) < 1.0, "the village captain runs the main camp")
+
+	# The steward takes everyone free and gives them work.
+	run(m, 8.0)
+	check(adults.all(func(u): return u.post == village.id), "the village absorbs every idle adult")
+	var jobs := {}
+	var idle := 0
+	for u in adults:
+		var c = m.crew_of(u)
+		if c and c.idx < c.steps.size():
+			jobs[c.steps[c.idx]["subject"]] = true
+		elif u != steward:
+			idle += 1
+	check(jobs.has("wood") and jobs.has("berries"), "they gather food and wood without being told (%s)" % str(jobs.keys()))
+	check(idle <= 3, "almost nobody is left idle (%d)" % idle)
+	var child = m.spawn_unit(0, "villager", home + Vector2(5, 0))
+	child.child = true
+	child.born = m.t - Defs.MATURE_TIME
+	run(m, 6.0)
+	check(not child.child and child.post == village.id and child.crew >= 0, "someone who grows up gets a job by themselves")
+
+	# A second post far away draws its people from the village.
+	var far: Vector2 = home + (Vector2(m.map_size, m.map_size) * 0.5 - home).normalized() * 180.0
+	m.set_mark(0, far)
+	var warden = adults[1]
+	r = m.command(0, {"unit": warden.id, "individual": true, "steps": [step("mandate", "garrison", 0, "marked", 8)]})
+	check(r["ok"], "a remote garrison is accepted: %s" % r.get("error", ""))
+	if not r["ok"]:
+		return
+	var garrison = m.posts[r["post"]]
+	check(garrison.center.distance_to(far) < 1.0 and garrison.target == 8, "a mandate has a place and a size")
+	run(m, 100.0)
+	var there: Array = m.post_members(garrison)
+	check(there.size() == 8, "the village staffs other posts to their size (%d of 8)" % there.size())
+	var arrived: Array = there.filter(func(u): return u.pos.distance_to(far) < garrison.radius)
+	check(arrived.size() == there.size(), "they live at their post, not at the campfire (%d of %d there)" % [arrived.size(), there.size()])
+	check(m.resting_place(warden).distance_to(far) < 1.0, "idle, fleeing and wounded people make for their post")
+
+	# A direct order always wins, then they go back to their post's work.
+	var picked: Array = m.post_members(village).filter(func(u): return u != steward).slice(0, 3)
+	var ids: Array = picked.map(func(u): return u.id)
+	r = m.command(0, {"units": ids, "steps": [step("hold")]})
+	check(r["ok"], "a captain's people still take direct orders")
+	run(m, 20.0)
+	check(picked.all(func(u): return u.task == "hold"), "captains never undo a direct order")
+	m.cancel(0, {"units": ids})
+	run(m, 6.0)
+	check(picked.all(func(u): return u.task != "hold" and u.crew >= 0), "released people go back to the post's work")
+
+	# Succession keeps the mandate.
+	m.kill_unit(warden)
+	run(m, 2.0)
+	var heir = m.unit(garrison.captain)
+	check(m.posts.has(garrison.id) and heir != null and not heir.dead and heir.captain and heir.post == garrison.id, "a fallen captain's post passes to one of its people")
+	check(garrison.mandate == "garrison" and garrison.center.distance_to(far) < 1.0, "the successor keeps the mandate")
+
+	# Nobody is governed without a mandate.
+	var untouched = new_match(414)
+	grown_village(untouched, 12)
+	run(untouched, 8.0)
+	check(untouched.crews_of(0).is_empty() and untouched.posts.is_empty(), "without a mandate nobody is ordered about")
 
 
 func test_walls() -> void:

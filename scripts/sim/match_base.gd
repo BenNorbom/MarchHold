@@ -29,6 +29,7 @@ class Unit:
 	var born := 0.0
 	var female := false
 	var crew := -1
+	var post := -1              # the captain's post they belong to
 	var captain := false
 	var task := "idle"
 	var phase := ""
@@ -124,6 +125,21 @@ class Crew:
 	var done := false
 	var loop := false
 	var origin := Vector2.ZERO
+	var post := -1              # the post whose captain set this job, -1 for a direct order
+
+
+## A captain's place and purpose. Plain data, so it can be saved.
+class Post:
+	var id := 0
+	var faction := 0
+	var name := ""
+	var mandate := ""
+	var center := Vector2.ZERO
+	var radius := 60.0
+	var captain := -1
+	var target := 0             # people including the captain, 0 for everyone free
+	var members: Array = []     # unit ids, longest-serving first
+	var jobs := {}              # role -> crew id
 
 
 class Faction:
@@ -196,6 +212,7 @@ var unit_by_id := {}
 var buildings: Array = []
 var bld_by_id := {}
 var crews := {}
+var posts := {}
 var factions: Array = []
 var shots: Array = []
 var messages: Array = []

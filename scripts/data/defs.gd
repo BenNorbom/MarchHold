@@ -193,12 +193,21 @@ const DEPOSITS := ["bronze_ore", "coal", "iron_ore"]
 
 # --- Orders ----------------------------------------------------------------------
 const ACTIONS := ["gather", "build", "upgrade", "craft", "arm", "mount", "man", "smelt", "research", "tame",
-	"scout", "guard", "attack", "follow", "hold", "recall", "promote", "dismiss", "status"]
+	"scout", "guard", "attack", "follow", "hold", "recall", "promote", "mandate", "dismiss", "status"]
 const WHERE := ["", "here", "marked", "home", "enemy", "north", "northeast", "east", "southeast",
 	"south", "southwest", "west", "northwest"]
 const ONGOING := ["guard", "attack", "follow", "hold"]
 const AMOUNT_ACTIONS := ["gather", "craft", "smelt", "tame"]
 const MAX_STEPS := 8
+
+# What a captain can be put in charge of. size: people when the order gives no number (0 = everyone free).
+const MANDATES := {
+	"village": {"name": "village", "does": "run the village", "radius": 90.0, "size": 0},
+	"farming": {"name": "farms", "does": "run the farms", "radius": 70.0, "size": 8},
+	"industry": {"name": "works", "does": "run the mines and works", "radius": 90.0, "size": 10},
+	"garrison": {"name": "garrison", "does": "hold a garrison", "radius": 45.0, "size": 8},
+	"army": {"name": "army", "does": "raise an army", "radius": 35.0, "size": 10},
+}
 
 const NAMES := ["Hal", "Wren", "Ana", "Bram", "Cora", "Dunstan", "Edda", "Finn", "Gil", "Hilda", "Ivo", "Jory",
 	"Kit", "Lena", "Mabel", "Ned", "Osric", "Pell", "Quinn", "Rolf", "Sigrid", "Tam", "Una", "Vance", "Walt",
@@ -281,6 +290,9 @@ static func subjects_for(action: String) -> Array[String]:
 				out.append(k)
 		"tame":
 			out = ["horses", ""]
+		"mandate":
+			for k in MANDATES:
+				out.append(k)
 		_:
 			out = [""]
 	return out
@@ -334,6 +346,8 @@ static func validate_steps(steps) -> String:
 		var w: String = str(s.get("where", ""))
 		if not w in WHERE:
 			return "Step %d has an unknown place '%s'." % [i + 1, w]
+		if a == "mandate" and steps.size() > 1:
+			return "A mandate is an order by itself."
 		if i < steps.size() - 1 and step_is_ongoing(s):
 			return "Step %d (%s) never finishes, so it has to be the last step." % [i + 1, describe_step(s)]
 	return ""
@@ -382,6 +396,8 @@ static func describe_step(s: Dictionary) -> String:
 			txt = "come home"
 		"promote":
 			txt = "become a captain"
+		"mandate":
+			txt = "take charge: " + MANDATES.get(subj, {}).get("does", subj)
 		"dismiss":
 			txt = "disband the crew"
 		"status":

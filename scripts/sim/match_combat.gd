@@ -44,7 +44,7 @@ func combat_update(u: Unit, dt: float, radius: float) -> bool:
 		return _maybe_flee(u, dt, 10.0)
 	if u.flee_t > 0.0:
 		u.flee_t -= dt
-		var home := home_pos(u.faction)
+		var home := resting_place(u)
 		move_to(u, home + _ring(u, 6.0), dt, 3.0, true)
 		return true
 	if not armed(u):
@@ -70,7 +70,7 @@ func combat_update(u: Unit, dt: float, radius: float) -> bool:
 func _maybe_flee(u: Unit, dt: float, r: float) -> bool:
 	if u.flee_t > 0.0:
 		u.flee_t -= dt
-		move_to(u, home_pos(u.faction) + _ring(u, 5.0), dt, 3.0, true)
+		move_to(u, resting_place(u) + _ring(u, 5.0), dt, 3.0, true)
 		return true
 	var foe := nearest_enemy(u.pos, r, u.faction, func(o): return armed(o))
 	if foe:

@@ -2,6 +2,7 @@ extends "res://scripts/sim/match_combat.gd"
 ## Public match API: setup, the fixed-step tick, validated commands, the
 ## commander's actions and read-only queries for menus and Terra.
 
+const Captains = preload("res://scripts/sim/captains.gd")
 const START_FOOD := 40.0
 
 
@@ -70,6 +71,10 @@ func tick(dt: float = Defs.TICK) -> void:
 		upkeep_t = 0.0
 		check_morale()
 	update_crews(dt)
+	for p: Post in posts.values():
+		# Once a second each, staggered so they don't all think on the same tick.
+		if (ticks + p.id) % 10 == 0:
+			Captains.think(self, p)
 	var n := units.size()
 	for i in n:
 		var u: Unit = units[i]
@@ -441,6 +446,77 @@ func reassign_crew(faction: int, req: Dictionary, destination_id: int) -> Dictio
 	return {"ok": true, "crew": destination.id}
 
 
+## Puts someone in charge of a place and a purpose, or changes the charge they have.
+func give_mandate(faction: int, req: Dictionary, s: Dictionary) -> Dictionary:
+	var kind: String = s["subject"]
+	var d: Dictionary = Defs.MANDATES[kind]
+	var people: Array = []
+	if req.has("units"):
+		for id in req["units"]:
+			var su := orderable_unit(faction, int(id))
+			if su:
+				people.append(su)
+	elif req.has("unit"):
+		var u := orderable_unit(faction, int(req["unit"]))
+		if u:
+			people.append(u)
+			var c := crew_of(u)
+			if c and c.post < 0 and c.leader == u.id and not req.get("individual", false):
+				for id in c.members:
+					if id != u.id:
+						people.append(unit(id))
+	elif req.has("crew"):
+		var c := _addressed_crew(faction, req)
+		if c:
+			people.append(unit(c.leader))
+			for id in c.members:
+				if id != c.leader:
+					people.append(unit(id))
+	elif req.is_empty() or not req.get("all", false):
+		var free := idle_adults(faction, home_pos(faction))
+		if not free.is_empty():
+			people.append(free[0])
+	if people.is_empty():
+		return {"ok": false, "error": "Say who is in charge: look at someone, or start with their name."}
+	var lead: Unit = people[0]
+	var at = home_pos(faction)
+	var where: String = s["where"]
+	if kind != "village":
+		if where == "":
+			at = lead.pos
+		else:
+			var here := Crew.new()
+			here.faction = faction
+			here.members = [lead.id]
+			at = resolve_where(here, where, 120.0)
+			if at == null:
+				return {"ok": false, "error": "Mark a spot first (look at the ground and press R)." if where == "marked" else "We don't know where that is yet."}
+	var p: Post = village_post(faction) if kind == "village" else null
+	if p == null and leads_post(lead):
+		p = post_of(lead)
+	if p == null:
+		p = Post.new()
+		p.id = new_id()
+		p.faction = faction
+		posts[p.id] = p
+	elif p.captain != lead.id and leads_post(lead):
+		leave_post(lead)
+	for u: Unit in people:
+		# Taking charge ends whatever they were doing.
+		if u.crew >= 0:
+			release_member(u)
+		join_post(p, u)
+	p.captain = lead.id
+	lead.captain = true
+	p.mandate = kind
+	p.center = at
+	p.radius = float(d["radius"])
+	var count := int(s.get("count", 0))
+	p.target = count if count > 0 else maxi(int(d["size"]), people.size() if kind != "village" else 0)
+	p.name = "village" if kind == "village" else "%s %s" % [Terrain.compass_name(p.center - home_pos(faction)), d["name"]]
+	return {"ok": true, "crews": [], "post": p.id}
+
+
 ## Orders accept {"unit": id} (their crew), {"unit": id, "individual": true},
 ## {"units": [ids]} (an exact selection), {"crew": id}, {"all": true}, or an empty
 ## address for free villagers, plus steps.
@@ -456,6 +532,8 @@ func command(faction: int, req: Dictionary) -> Dictionary:
 	var e3 := first_step_problem(faction, steps[0])
 	if e3 != "":
 		return {"ok": false, "error": e3}
+	if steps[0]["action"] == "mandate":
+		return give_mandate(faction, req, steps[0])
 	var targets := []
 	var first: Dictionary = steps[0]
 	if req.get("all", false):
@@ -543,6 +621,7 @@ func command(faction: int, req: Dictionary) -> Dictionary:
 	for c in targets:
 		if c.members.is_empty():
 			continue
+		c.post = -1         # a direct order overrides the captain's
 		start_plan(c, steps.duplicate(true))
 		ids.append(c.id)
 	if ids.is_empty():

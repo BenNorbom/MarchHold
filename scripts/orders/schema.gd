@@ -72,6 +72,7 @@ static func action_guide() -> String:
 	lines.append("scout: go out, look, come back and report. where = direction, enemy (their camp, or across the map if unknown), or marked.")
 	lines.append("guard / attack / hold / follow: military orders that never end, so they must be the last step. attack defaults to where=enemy.")
 	lines.append("recall: come home. promote: make the crew leader or addressed individual a captain. dismiss: release the addressed individual or disband the whole crew. status: report.")
+	lines.append("mandate: put the addressed person in charge of a place and a purpose, as the only step. subject village (runs the main camp and takes everyone idle), farming, industry, garrison or army. count = how many people the post should have (0 = default). where = its place. The captain then assigns the work without further orders.")
 	lines.append("where: here = the commander's position, marked = the spot the player marked with R, home = the campfire, or a compass direction from home.")
 	return "\n".join(lines)
 
