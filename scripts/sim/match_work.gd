@@ -923,33 +923,34 @@ func _work_building(u: Unit, type: String, subj: String) -> Building:
 
 func _do_hunt(u: Unit, c: Crew, dt: float) -> void:
 	var g: Dictionary = Defs.GATHER["hunt"]
-	var lodge := bld(u.tgt_bld)
-	if lodge == null or lodge.dead:
-		lodge = nearest_building(u.faction, u.pos, ["lodge"])
-		if lodge == null:
+	# Hunters range out from the drop-off that was nearest when they set out.
+	var base := bld(u.tgt_bld)
+	if base == null or base.dead:
+		base = nearest_dropoff(u.faction, u.pos, "food")
+		if base == null:
 			_set_task(u, "idle")
 			return
-		u.tgt_bld = lodge.id
+		u.tgt_bld = base.id
 	match u.phase:
 		"", "find":
 			if u.carry >= float(g["carry"]):
 				u.phase = "haul"
 				return
-			var meat = nearest_node("carcass", lodge.pos, 230.0)
+			var meat = nearest_node("carcass", base.pos, 230.0)
 			if meat:
 				_claim(u, meat)
 				u.phase = "go"
 				return
 			var deer: Unit = null
 			var bd := 230.0 * 230.0
-			for o: Unit in units_near(lodge.pos, 230.0, -1):
-				if o.kind == "deer" and o.pos.distance_squared_to(lodge.pos) < bd:
-					bd = o.pos.distance_squared_to(lodge.pos)
+			for o: Unit in units_near(base.pos, 230.0, -1):
+				if o.kind == "deer" and o.pos.distance_squared_to(base.pos) < bd:
+					bd = o.pos.distance_squared_to(base.pos)
 					deer = o
 			if deer == null:
 				u.anim = Anim.IDLE
-				if go_to_building(u, lodge, dt) and c.faction == 0 and not c.state.get("warned", false):
-					post(0, "%s: no deer left near the lodge." % crew_label(c), "warn")
+				if go_to_building(u, base, dt) and c.faction == 0 and not c.state.get("warned", false):
+					post(0, "%s: no deer left near the %s." % [crew_label(c), Defs.building_name(base.type).to_lower()], "warn")
 					c.state["warned"] = true
 				return
 			u.tgt_unit = deer.id

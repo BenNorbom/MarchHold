@@ -19,7 +19,6 @@ flowchart TB
     fire(["Campfire<br/>housing 8"]):::bld
     hut(["Hut<br/>+6 housing"]):::bld
     stock(["Stockpile"]):::bld
-    lodge(["Hunter's lodge"]):::bld
     farm(["Farm"]):::bld
     armory1(["Armory · wood"]):::key
     palisade(["Palisade + gate"]):::bld
@@ -31,8 +30,6 @@ flowchart TB
     quarry(["Quarry"]):::key
     swall(["Stone wall + gate"]):::bld
     tower(["Stone tower"]):::bld
-    house(["House<br/>+10 housing"]):::bld
-    granary(["Granary"]):::bld
     stable(["Stable"]):::bld
     ladders["Siege ladders"]:::item
     mounted["Mounted archery research<br/>~60 s"]:::item
@@ -58,10 +55,10 @@ flowchart TB
     cannon["Cannon + shot"]:::item
   end
 
-  fire --> hut & stock & lodge & farm & armory1
+  fire --> hut & stock & farm & armory1
   armory1 --> palisade & post & w_items
   armory1 --> quarry
-  quarry --> swall & tower & house & granary & stable & ladders
+  quarry --> swall & tower & stable & ladders
   stable --> mounted
   quarry --> mine --> ores --> smelter1
   smelter1 -->|"bronze"| armory2 --> b_items

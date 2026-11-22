@@ -60,8 +60,6 @@ const BUILDINGS := {
 		"housing": 6, "desc": "+6 housing."},
 	"stockpile": {"name": "Stockpile", "age": 0, "cost": {"wood": 40}, "work": 30, "hp": 120, "size": Vector2(5, 5),
 		"dropoff": true, "food_cap": 50, "desc": "Drop-off point near work. +50 food storage."},
-	"lodge": {"name": "Hunter's lodge", "age": 0, "cost": {"wood": 75}, "work": 60, "hp": 160, "size": Vector2(6, 5),
-		"workers": 4, "food_dropoff": true, "desc": "Hunters shoot deer nearby and bring the meat here."},
 	"farm": {"name": "Farm", "age": 0, "cost": {"wood": 65}, "work": 45, "hp": 80, "size": Vector2(14, 14),
 		"workers": 2, "walkable": true, "desc": "Grain. One farm with a farmer feeds about five."},
 	"armory": {"name": "Armory", "age": 0, "cost": {"wood": 125}, "work": 100, "hp": 320, "size": Vector2(8, 6),
@@ -82,10 +80,6 @@ const BUILDINGS := {
 	"tower": {"name": "Stone tower", "age": 1, "cost": {"stone": 125, "wood": 25}, "work": 120, "hp": 900,
 		"size": Vector2(5, 5), "sight": 95, "alarm": true, "archers": 4,
 		"desc": "Alarm and archer position. Archers posted here shoot farther."},
-	"house": {"name": "House", "age": 1, "cost": {"wood": 65, "stone": 50}, "work": 105, "hp": 320,
-		"size": Vector2(7, 6), "housing": 10, "desc": "+10 housing."},
-	"granary": {"name": "Granary", "age": 1, "cost": {"wood": 100, "stone": 50}, "work": 90, "hp": 300,
-		"size": Vector2(7, 7), "food_cap": 300, "food_dropoff": true, "desc": "+300 food storage, so you stay well fed through raids."},
 	"stable": {"name": "Stable", "age": 1, "cost": {"wood": 125, "stone": 25}, "work": 90, "hp": 260,
 		"size": Vector2(10, 7), "horse_cap": 12, "desc": "Holds horses driven in from the wild and breeds them. Researches mounted archery."},
 	"mine": {"name": "Mine", "age": 1, "cost": {"wood": 100, "stone": 50}, "work": 90, "hp": 300, "size": Vector2(6, 6),
@@ -179,7 +173,7 @@ const GATHER := {
 	"wood": {"name": "wood", "resource": "wood", "node": "tree", "rate": 1.0, "carry": 5},
 	"stone": {"name": "stone", "resource": "stone", "node": "rock", "building": "quarry", "rate": 0.6, "carry": 4, "building_rate": 0.5},
 	"berries": {"name": "berries", "resource": "food", "node": "berry", "rate": 1.2, "carry": 5},
-	"hunt": {"name": "hunting", "resource": "food", "building": "lodge", "rate": 1.5, "carry": 5},
+	"hunt": {"name": "hunting", "resource": "food", "rate": 1.5, "carry": 5},
 	"farm": {"name": "farming", "resource": "food", "building": "farm", "building_rate": 0.14},
 	"bronze_ore": {"name": "bronze ore", "resource": "bronze_ore", "building": "mine", "building_rate": 0.4},
 	"coal": {"name": "coal", "resource": "coal", "building": "mine", "building_rate": 0.45},
@@ -192,6 +186,33 @@ const SMELT := {
 }
 
 const DEPOSITS := ["bronze_ore", "coal", "iron_ore"]
+
+# --- Hotkeys ---------------------------------------------------------------------
+# /b or /c, then a page (b basic, v advanced), then one key. Shown in this order.
+# Every structure, upgrade, research and item has exactly one key.
+const HOTKEY_PAGES := ["b", "v"]
+const HOTKEYS := {
+	"b": {
+		"b": {"name": "Basic structures", "keys": {
+			"h": "build:hut", "f": "build:farm", "s": "build:stockpile", "a": "build:armory",
+			"p": "build:palisade", "g": "build:palisade_gate", "w": "build:watch_post", "q": "build:quarry"}},
+		"v": {"name": "Advanced structures", "keys": {
+			"w": "build:stone_wall", "g": "build:stone_gate", "t": "build:tower", "h": "build:stable", "m": "build:mine",
+			"s": "build:smelter", "u": "build:university",
+			"a": "upgrade:armory", "f": "upgrade:smelter", "r": "research:gunpowder"}},
+	},
+	"c": {
+		"b": {"name": "Basic weapons", "keys": {
+			"w": "craft:wood_spear", "d": "craft:wood_shield", "b": "craft:bow", "a": "craft:arrows",
+			"r": "craft:ram",
+			"e": "craft:bronze_spear", "s": "craft:bronze_sword", "h": "craft:bronze_shield", "m": "craft:bronze_armor",
+			"p": "craft:bronze_pike", "l": "craft:bronze_lance"}},
+		"v": {"name": "Advanced weapons", "keys": {
+			"e": "craft:iron_spear", "s": "craft:iron_sword", "h": "craft:iron_shield", "m": "craft:iron_armor",
+			"p": "craft:iron_pike", "l": "craft:iron_lance",
+			"c": "craft:cannon", "t": "craft:shot"}},
+	},
+}
 
 # --- Orders ----------------------------------------------------------------------
 const ACTIONS := ["gather", "build", "upgrade", "craft", "arm", "mount", "man", "smelt", "research", "tame",

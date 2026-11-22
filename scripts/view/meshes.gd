@@ -51,8 +51,6 @@ func building(type: String, tier: int = 0, length: float = 4.0) -> ArrayMesh:
 			h = _hut(g)
 		"stockpile":
 			h = _stockpile(g, size)
-		"lodge":
-			h = _lodge(g, size)
 		"farm":
 			h = _farm(g, size)
 		"armory":
@@ -71,10 +69,6 @@ func building(type: String, tier: int = 0, length: float = 4.0) -> ArrayMesh:
 			h = _stone_gate(g, length)
 		"tower":
 			h = _tower(g)
-		"house":
-			h = _house(g, size)
-		"granary":
-			h = _granary(g, size)
 		"stable":
 			h = _stable(g, size)
 		"mine":
@@ -183,19 +177,6 @@ func _cabin(g: Geo, size: Vector2, wall_h: float, roof_h: float, wall: String = 
 	g.gable(Vector3(0, 0, 0), size.x - 0.2, size.y - 0.2, 0.3 + wall_h - 0.15, 0.3 + wall_h + roof_h, 0.55, 1.0)
 	g.slot("roughwood", m("roughwood"))
 	g.cylinder(Vector3(-size.x * 0.5 - 0.5, 0.3 + wall_h + roof_h + 0.05, 0), Vector3(size.x * 0.5 + 0.5, 0.3 + wall_h + roof_h + 0.05, 0), 0.12, 0.12, 6)
-
-
-func _lodge(g: Geo, size: Vector2) -> float:
-	_cabin(g, size, 2.2, 2.0)
-	_door(g, 0.8, size.y * 0.5 - 0.05, 0.9, 1.8)
-	# Drying rack with hides.
-	g.slot("roughwood", m("roughwood"))
-	g.cylinder(Vector3(-2.0, 0, size.y * 0.5 + 1.3), Vector3(-2.0, 1.8, size.y * 0.5 + 1.3), 0.06, 0.05, 5)
-	g.cylinder(Vector3(-0.6, 0, size.y * 0.5 + 1.3), Vector3(-0.6, 1.8, size.y * 0.5 + 1.3), 0.06, 0.05, 5)
-	g.cylinder(Vector3(-2.1, 1.7, size.y * 0.5 + 1.3), Vector3(-0.5, 1.7, size.y * 0.5 + 1.3), 0.05, 0.05, 5)
-	g.slot("darkwood", m("darkwood"))
-	g.box(Vector3(-1.3, 1.25, size.y * 0.5 + 1.3), Vector3(1.0, 0.85, 0.04), 1.0)
-	return 4.6
 
 
 func _farm(g: Geo, size: Vector2) -> float:
@@ -364,50 +345,6 @@ func _tower(g: Geo) -> float:
 	return 10.5
 
 
-func _house(g: Geo, size: Vector2) -> float:
-	_foundation(g, size, 0.3)
-	g.slot("stone", m("stone"))
-	g.box(Vector3(0, 0.3 + 1.2, 0), Vector3(size.x - 0.2, 2.4, size.y - 0.2), 1.0)
-	g.slot("plaster", m("plaster"))
-	g.box(Vector3(0, 2.7 + 1.0, 0), Vector3(size.x - 0.1, 2.0, size.y - 0.1), 1.0)
-	g.gable_ends(Vector3.ZERO, size.x - 0.1, size.y - 0.1, 4.7, 7.0, 1.0)
-	# Timber framing.
-	g.slot("darkwood", m("darkwood"))
-	for i in 5:
-		var x := -size.x * 0.5 + 0.1 + i * (size.x - 0.2) / 4.0
-		for z in [size.y * 0.5 - 0.02, -size.y * 0.5 + 0.02]:
-			g.box(Vector3(x, 3.7, z), Vector3(0.18, 2.0, 0.06), 1.0)
-	for z in [size.y * 0.5 - 0.02, -size.y * 0.5 + 0.02]:
-		g.box(Vector3(0, 2.75, z), Vector3(size.x - 0.1, 0.18, 0.06), 1.0)
-		g.box(Vector3(0, 4.65, z), Vector3(size.x - 0.1, 0.18, 0.06), 1.0)
-	g.slot("thatch", m("thatch"))
-	g.gable(Vector3.ZERO, size.x - 0.1, size.y - 0.1, 4.55, 7.0, 0.6, 1.0)
-	g.slot("stone", m("stone"))
-	g.box(Vector3(size.x * 0.3, 6.6, -0.8), Vector3(0.7, 2.2, 0.7), 1.0)
-	_door(g, -0.8, size.y * 0.5 - 0.02, 1.0, 2.0)
-	g.slot("darkwood", m("darkwood"))
-	for x in [1.0, 2.3]:
-		g.box(Vector3(x, 1.5, size.y * 0.5), Vector3(0.6, 0.6, 0.06), 1.0)
-	return 7.8
-
-
-func _granary(g: Geo, size: Vector2) -> float:
-	g.slot("stone", m("stone"))
-	for sx in [-1.0, 0.0, 1.0]:
-		for sz in [-1.0, 1.0]:
-			g.cylinder(Vector3(sx * (size.x * 0.5 - 0.5), 0, sz * (size.y * 0.5 - 0.5)), Vector3(sx * (size.x * 0.5 - 0.5), 0.8, sz * (size.y * 0.5 - 0.5)), 0.3, 0.2, 6)
-	g.slot("planks", m("planks"))
-	g.box(Vector3(0, 0.9, 0), Vector3(size.x, 0.2, size.y), 1.0)
-	g.box(Vector3(0, 2.4, 0), Vector3(size.x - 0.4, 2.8, size.y - 0.4), 1.0)
-	g.gable_ends(Vector3.ZERO, size.x - 0.4, size.y - 0.4, 3.8, 6.2, 1.0)
-	g.slot("thatch", m("thatch"))
-	g.gable(Vector3.ZERO, size.x - 0.4, size.y - 0.4, 3.7, 6.2, 0.6, 1.0)
-	_door(g, 0, size.y * 0.5 - 0.15, 1.2, 1.9)
-	g.slot("darkwood", m("darkwood"))
-	g.obox(Vector3(0, 0.45, size.y * 0.5 + 0.7), Vector3(1.0, 0.08, 1.6), Basis(Vector3.RIGHT, -0.55), 1.0)
-	return 6.4
-
-
 func _stable(g: Geo, size: Vector2) -> float:
 	g.slot("planks", m("planks"))
 	g.box(Vector3(0, 1.4, -size.y * 0.5 + 0.2), Vector3(size.x, 2.8, 0.25), 1.0)
@@ -506,8 +443,6 @@ func banner_spot(type: String, size: Vector2 = Vector2.ZERO) -> Array:
 			return [Vector3(0, 4.1, 0), 2.0, 0.9]
 		"stockpile":
 			return [Vector3(2.15, 2.0, 2.15), 2.2, 0.8]
-		"lodge":
-			return [Vector3(0.4 - hx, 4.3, 0), 2.0, 0.9]
 		"farm":
 			return [Vector3(-hx, -0.2, -hz), 3.6, 0.9]
 		"armory":
@@ -526,10 +461,6 @@ func banner_spot(type: String, size: Vector2 = Vector2.ZERO) -> Array:
 			return [Vector3(0.35 - hx, 5.0, 0), 2.4, 1.0]
 		"tower":
 			return [Vector3(0, 9.4, 0), 3.6, 1.4]
-		"house":
-			return [Vector3(0.4 - hx, 6.8, 0), 2.0, 0.9]
-		"granary":
-			return [Vector3(0.6 - hx, 6.0, 0), 2.0, 0.9]
 		"stable":
 			return [Vector3(0.4 - hx, 2.8, -hz * 0.3), 2.8, 1.0]
 		"mine":

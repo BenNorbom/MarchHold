@@ -5,20 +5,20 @@ signal chat_submitted(text: String)
 signal chat_changed(text: String)
 signal chat_closed
 signal chat_cycle(backward: bool)
-signal chat_choice(index: int)
+signal picker_page(page: String)
+signal picker_key(key: String)
 signal menu_clicked(index: int)
 signal pause_choice(name: String)
 
 const UiTheme = preload("res://scripts/ui/ui_theme.gd")
 const Defs = preload("res://scripts/data/defs.gd")
+const HotkeyPopup = preload("res://scripts/ui/hotkey_popup.gd")
 
 const RESOURCE_DISPLAY_ORDER := ["food", "wood", "stone", "bronze_ore", "coal", "iron_ore", "bronze", "iron"]
 
 # Widths are in base 1600x900 pixels: the "expand" stretch never gives less room than that.
 const MENU_SIZE := Vector2(720, 483)
-const MENU_GRID_WIDTH := 1140.0
 const HINT_WIDTH := 460.0
-const HINT_GRID_WIDTH := 1100.0
 
 const KIND_COLORS := {
 	"info": "e8dcc2", "warn": "f0c060", "alarm": "ff6a50", "death": "e07060", "done": "a8d890",
@@ -44,7 +44,7 @@ var chat_usage: Button
 var chat_hint: PanelContainer
 var chat_hint_title: Label
 var chat_hint_text: RichTextLabel
-var chat_hint_choices: RichTextLabel
+var picker: HotkeyPopup
 var menu_panel: PanelContainer
 var menu_title: Label
 var menu_body: RichTextLabel
@@ -89,7 +89,7 @@ func _ready() -> void:
 	_build_map()
 	_build_village()
 	_build_objective()
-	_build_menu()   # after the village widgets, so the wide menus draw over them
+	_build_menu()   # after the village widgets, so menus draw over them
 	_build_caption()
 	_build_pause()
 	_build_end()
@@ -243,6 +243,7 @@ func _build_chat() -> void:
 	chat_edit.gui_input.connect(_on_chat_key)
 	h.add_child(chat_edit)
 	_build_chat_hint()
+	_build_picker()
 
 
 func _build_chat_hint() -> void:
@@ -263,18 +264,9 @@ func _build_chat_hint() -> void:
 	chat_hint_text.scroll_active = false
 	chat_hint_text.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	rows.add_child(chat_hint_text)
-	chat_hint_choices = RichTextLabel.new()
-	chat_hint_choices.bbcode_enabled = true
-	chat_hint_choices.focus_mode = Control.FOCUS_NONE
-	chat_hint_choices.fit_content = true
-	chat_hint_choices.scroll_active = false
-	chat_hint_choices.meta_underlined = false
-	chat_hint_choices.meta_clicked.connect(func(meta): chat_choice.emit(int(str(meta))))
-	rows.add_child(chat_hint_choices)
-	for label in [chat_hint_text, chat_hint_choices]:
-		label.add_theme_font_size_override("normal_font_size", 17)
-		label.add_theme_font_size_override("bold_font_size", 17)
-		label.add_theme_constant_override("line_separation", 0)
+	chat_hint_text.add_theme_font_size_override("normal_font_size", 17)
+	chat_hint_text.add_theme_font_size_override("bold_font_size", 17)
+	chat_hint_text.add_theme_constant_override("line_separation", 0)
 	chat_hint.resized.connect(_position_chat_hint)
 	chat_hint.minimum_size_changed.connect(chat_hint.reset_size)
 	chat_panel.item_rect_changed.connect(_position_chat_hint)
@@ -284,18 +276,52 @@ func _position_chat_hint() -> void:
 	chat_hint.position = chat_panel.position - Vector2(0, chat_hint.size.y + 6)
 
 
-func show_chat_hint(title: String, body: String, choices: String) -> void:
+func show_chat_hint(title: String, body: String) -> void:
+	picker.hide()
 	chat_hint_title.text = title
 	chat_hint_text.text = body
-	chat_hint_choices.visible = choices != ""
-	var width := HINT_GRID_WIDTH if choices != "" else HINT_WIDTH
 	# fit_content needs a known width, or it measures the text wrapped at zero.
-	chat_hint_text.custom_minimum_size.x = width
-	chat_hint_choices.custom_minimum_size.x = width
-	chat_hint_choices.text = choices
+	chat_hint_text.custom_minimum_size.x = HINT_WIDTH
 	chat_hint.show()
 	chat_hint.reset_size()
 	_position_chat_hint()
+
+
+func _build_picker() -> void:
+	picker = HotkeyPopup.new()
+	picker.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	picker.hide()
+	root.add_child(picker)
+	picker.page_picked.connect(picker_page.emit)
+	picker.key_picked.connect(picker_key.emit)
+	picker.resized.connect(_position_picker)
+	chat_panel.item_rect_changed.connect(_position_picker)
+
+
+func _position_picker() -> void:
+	picker.position = chat_panel.position - Vector2(0, picker.size.y + 6)
+
+
+func show_picker_pages(command: String) -> void:
+	picker.show_pages(command)
+	_show_picker()
+
+
+func show_picker_entries(command: String, pick: Dictionary, entries: Array, quick: bool) -> void:
+	picker.show_entries(command, pick, entries, quick)
+	_show_picker()
+
+
+func _show_picker() -> void:
+	chat_hint.hide()
+	picker.show()
+	picker.reset_size()
+	_position_picker()
+
+
+func set_draft(text: String) -> void:
+	chat_edit.text = text
+	chat_edit.caret_column = text.length()
 
 
 func _on_chat_submit(text: String) -> void:
@@ -331,6 +357,10 @@ func _on_chat_key(ev: InputEvent) -> void:
 
 
 func _input(ev: InputEvent) -> void:
+	if chat_open and picker.visible and ev is InputEventKey and ev.echo and ev.unicode > 32:
+		# A held hotkey is one press, not a string of letters.
+		get_viewport().set_input_as_handled()
+		return
 	if chat_open and chat_can_cycle and ev is InputEventKey and ev.keycode == KEY_TAB:
 		if ev.pressed and not ev.echo:
 			chat_cycle.emit(ev.shift_pressed)
@@ -361,6 +391,7 @@ func close_chat() -> void:
 	chat_panel.visible = false
 	chat_usage.visible = false
 	chat_hint.hide()
+	picker.hide()
 	chat_edit.release_focus()
 	_refresh_log_visibility()
 
@@ -391,13 +422,8 @@ func _build_menu() -> void:
 	v.add_child(menu_footer)
 
 
-func show_menu(title: String, bbcode: String, footer: String = "Number keys or click to choose · Esc to close", grid: bool = false) -> void:
+func show_menu(title: String, bbcode: String, footer: String = "Number keys or click to choose · Esc to close") -> void:
 	menu_open = true
-	# Grid menus grow to fit their content; the text menus keep a fixed, scrolling box.
-	menu_body.custom_minimum_size = Vector2(MENU_GRID_WIDTH, 0) if grid else MENU_SIZE
-	menu_body.fit_content = grid
-	menu_body.scroll_active = not grid
-	menu_body.meta_underlined = not grid
 	menu_title.text = title
 	menu_body.text = bbcode
 	menu_body.scroll_to_line(0)

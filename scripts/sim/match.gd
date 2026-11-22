@@ -757,10 +757,8 @@ func resolve_steps(faction: int, steps: Array) -> Array:
 					st["subject"] = "farm"
 				elif nearest_node("berry", home_pos(faction), 200.0) != null:
 					st["subject"] = "berries"
-				elif has_building(faction, "lodge"):
-					st["subject"] = "hunt"
 				else:
-					st["subject"] = "berries"
+					st["subject"] = "hunt"
 		out.append(st)
 	return out
 

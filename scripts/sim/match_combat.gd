@@ -1,7 +1,7 @@
 extends "res://scripts/sim/match_work.gd"
 ## Combat, projectiles, siege engines, animals, vision, intelligence and alarms.
 
-const WOOD_TYPES := ["hut", "stockpile", "lodge", "farm", "armory", "palisade", "palisade_gate", "watch_post", "stable"]
+const WOOD_TYPES := ["hut", "stockpile", "farm", "armory", "palisade", "palisade_gate", "watch_post", "stable"]
 const STONE_TYPES := ["stone_wall", "stone_gate", "tower"]
 
 var vision_t := 0.0

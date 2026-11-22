@@ -6,6 +6,7 @@ extends RefCounted
 const Defs = preload("res://scripts/data/defs.gd")
 const Terrain = preload("res://scripts/world/terrain.gd")
 
+const FOOD_HEADROOM := 75.0   # storage kept beyond what "well fed" needs
 const STRATEGIES := ["rush", "boom", "turtle", "cavalry", "cannons"]
 
 var m                       # the Match
@@ -139,14 +140,12 @@ func _economy(f) -> void:
 	if food_comfy:
 		food_need = mini(food_need, 2)
 		_keep_gathering("wood", "wood", maxi(wood_need, _size("wood") + f.idle))
-	# Food: berries first, then farms, then hunting.
+	# Food: berries first, then farms.
 	var farms := _count("farm", false)
 	var food_src := "farm" if farms > 0 else "berries"
-	if food_src == "berries" and m.nearest_node("berry", _home(), 150.0) == null:
-		food_src = "hunt" if m.has_building(fid, "lodge") else "berries"
 	_keep_gathering("food", food_src, mini(food_need, farms * 2) if food_src == "farm" else food_need)
 	if food_src == "farm" and food_need > farms * 2:
-		var extra := "berries" if m.nearest_node("berry", _home(), 160.0) != null else ("hunt" if m.has_building(fid, "lodge") else "")
+		var extra := "berries" if m.nearest_node("berry", _home(), 160.0) != null else ""
 		if extra != "":
 			_keep_gathering("food2", extra, food_need - farms * 2)
 	if not food_comfy:
@@ -257,7 +256,7 @@ func _orphan_site():
 ## Births stop when housing runs out, so a hut is due once the free beds drop low enough.
 func _housing_needed(f) -> bool:
 	var lookahead: int = 0 if _saving_for_armory() else maxi(3, f.pop / 6)
-	return f.housing < 200 and f.pop < max_pop and f.housing - f.pop <= lookahead and not _site_pending(["hut", "house"])
+	return f.housing < 200 and f.pop < max_pop and f.housing - f.pop <= lookahead and not _site_pending(["hut"])
 
 
 func _construction(f) -> void:
@@ -266,7 +265,7 @@ func _construction(f) -> void:
 		var hrole := "build" if not _busy("build") else ("build2" if not _busy("build2") and f.adults >= 10 else "")
 		if hrole != "":
 			var reserve := 0.0 if slack <= 0 else _weapon_reserve(f)
-			_place_and_build(f, hrole, "house" if f.age >= 1 and m.can_afford(fid, Defs.BUILDINGS["house"]["cost"]) else "hut", reserve, slack <= 0)
+			_place_and_build(f, hrole, "hut", reserve, slack <= 0)
 			return
 	# A site whose builders were killed would otherwise wait forever.
 	var orphan = _orphan_site()
@@ -344,8 +343,8 @@ func _next_building(f) -> String:
 		return ""
 	if _count("stockpile") == 0 and t > 240.0:
 		return "stockpile"
-	if pop > 35 and _count("granary") == 0:
-		return "granary"
+	if pop > 35 and f.food_cap < pop * Defs.WELL_FED_STOCK + FOOD_HEADROOM and not _site_pending(["stockpile"]):
+		return "stockpile"
 	if strategy == "cavalry" and _count("stable") == 0:
 		return "stable"
 	for dep in ["bronze_ore", "coal"]:
@@ -478,6 +477,8 @@ func _find_site(type: String):
 	var r0 := 12.0
 	var r1 := 42.0
 	match type:
+		"hut":
+			r1 += maxi(0, _count("hut") - 8) * 1.5   # room for all the huts it takes to house 200
 		"farm":
 			r0 = 26.0
 			r1 = 70.0

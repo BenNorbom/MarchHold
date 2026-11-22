@@ -9,6 +9,7 @@ const Match = preload("res://scripts/sim/match.gd")
 const Rival = preload("res://scripts/ai/rival.gd")
 const Parser = preload("res://scripts/orders/parser.gd")
 const Schema = preload("res://scripts/orders/schema.gd")
+const Hotkeys = preload("res://scripts/game/hotkeys.gd")
 const ChatGPTCallback = preload("res://scripts/orders/chatgpt_callback.gd")
 const ChatGPTVault = preload("res://scripts/orders/chatgpt_vault.gd")
 
@@ -22,7 +23,7 @@ func _initialize() -> void:
 
 func _run_tests() -> void:
 	var only := OS.get_environment("MH_TEST")
-	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "crews", "selection", "walls", "combat", "research", "shield", "parser", "schema", "chatgpt", "terra_orders", "duel"]
+	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "crews", "selection", "walls", "combat", "research", "shield", "parser", "schema", "chatgpt", "terra_orders", "hotkeys", "removed_buildings", "duel"]
 	var t0 := Time.get_ticks_msec()
 	for name in tests:
 		if only != "" and only != name:
@@ -192,8 +193,8 @@ func test_economy() -> void:
 	m._refresh_counts(f)
 	check(f.housing == 14, "housing rose to 14 (%d)" % f.housing)
 	check(f.pop > Defs.START_VILLAGERS, "births happened while well fed (%d people)" % f.pop)
-	var bad: Dictionary = m.place_site(0, "house", home + Vector2(30, 30), 0.0)
-	check(not bad.get("ok", true), "house locked in the Wood age")
+	var bad: Dictionary = m.place_site(0, "tower", home + Vector2(30, 30), 0.0)
+	check(not bad.get("ok", true), "tower locked in the Wood age")
 	# Berries feed the village.
 	var food_before := float(f.stock["food"])
 	r = m.command(0, {"steps": [step("gather", "berries", 0, "", 3)]})
@@ -513,6 +514,115 @@ func test_terra_orders() -> void:
 	var huts: Array = m.buildings_of(0, "hut", false)
 	check(not game.placing and worker.task == "build" and huts.size() == 1 and huts[0].pos == game.place_pos, "the chosen site becomes the addressed villager's construction job")
 	game.free()
+
+
+func test_hotkeys() -> void:
+	var wanted := {}
+	for id in Defs.buildable_ids():
+		wanted["build:" + id] = true
+	for id in Defs.UPGRADES:
+		wanted["upgrade:" + Defs.UPGRADES[id]["building"]] = true
+	for id in Defs.RESEARCH:
+		wanted["research:" + id] = true
+	for id in Defs.ITEMS:
+		wanted["craft:" + id] = true
+	var keyed := {}
+	for command in Defs.HOTKEYS:
+		for page in Defs.HOTKEYS[command]:
+			var keys: Dictionary = Defs.HOTKEYS[command][page]["keys"]
+			for key: String in keys:
+				var slot: String = keys[key]
+				check(key.length() == 1 and key == key.to_lower(), "%s %s %s is one letter" % [command, page, key])
+				check(wanted.has(slot), "%s %s %s points at something in the game (%s)" % [command, page, key, slot])
+				check(not keyed.has(slot), "%s has only one key" % slot)
+				check(ResourceLoader.exists("res://assets/icons/%s.png" % slot.replace(":", "_")), "%s has a picture" % slot)
+				keyed[slot] = true
+	for slot in wanted:
+		check(keyed.has(slot), "%s has a key" % slot)
+
+	var m = new_match(21)
+	var f = m.fac(0)
+	var read := func(command: String, words: String) -> Dictionary:
+		return Hotkeys.read(m, command, words.split(" ", false))
+	check(read.call("b", "B H")["entry"]["id"] == "hut", "hotkeys ignore case")
+	check(read.call("b", "hut").is_empty() and read.call("c", "bow").is_empty(), "names are left to the name lookup")
+	check(read.call("b", "b z")["error"] != "", "an unused key is explained")
+	check(read.call("b", "b h 2")["error"] != "", "a structure takes no count")
+	check(read.call("b", "v w")["error"].contains("Stone age"), "a locked key says what it needs")
+	check(read.call("b", "v a")["error"].contains("armory"), "an upgrade needs its building")
+	check(read.call("c", "b w")["error"].contains("armory"), "weapons need an armory")
+	m.add_building(0, "armory", m.home_pos(0) + Vector2(20, 0), 0.0, true)
+	var two: Dictionary = read.call("c", "b w 2")
+	check(two["error"] == "" and two["batches"] == 2 and two["entry"]["id"] == "wood_spear", "/c b w 2 is two batches of spears")
+	for bad in ["b w 0", "b w x", "b w 100", "b w 2 2"]:
+		check(read.call("c", bad)["error"] != "", "bad batch count refused: " + bad)
+	check(Array(Hotkeys.split_keys(PackedStringArray(["bh"]))) == ["b", "h"], "quick keys need no space")
+	check(Array(Hotkeys.split_keys(PackedStringArray(["hut"]))) == ["hut"], "quick keys still allow names")
+
+	var game = load("res://scripts/game/game.gd").new()
+	game.m = m
+	game.hud = game.Hud.new()
+	game.add_child(game.hud)
+	game.view = game.WorldView.new()
+	game.add_child(game.view)
+	root.add_child(game)
+	game._slash("/b b h")
+	check(game.placing and game.place_type == "hut", "/b b h places a hut")
+	game.placing = false
+	game._slash("/b v w")
+	check(not game.placing, "a locked structure can't be placed by key")
+	f.age = 1
+	game._slash("/build v w")
+	check(game.placing and game.place_type == "stone_wall", "/build v w places a stone wall")
+	game.placing = false
+	game._slash("/b hut")
+	check(game.placing and game.place_type == "hut", "names still work")
+	game.placing = false
+	f.stock["wood"] = 100.0
+	game._slash("/c b w 2")
+	var made := []
+	for c in m.crews_of(0):
+		for s in c.steps:
+			if s["action"] == "craft":
+				made.append([s["subject"], int(s["amount"])])
+	check(made == [["wood_spear", 2 * int(Defs.ITEMS["wood_spear"]["batch"])]], "/c b w 2 orders two batches (%s)" % str(made))
+	game.free()
+
+
+func test_removed_buildings() -> void:
+	for id in ["lodge", "granary", "house"]:
+		check(not Defs.BUILDINGS.has(id) and not id in Defs.all_subjects(), "%s is gone from the game and Terra's schema" % id)
+	for order in ["build a house", "build a granary", "build a hunter's lodge", "build a hunting lodge"]:
+		check(not Parser.parse(order)["ok"], "'%s' isn't taken for another order" % order)
+	check(Parser.parse("build a storehouse")["steps"][0]["subject"] == "stockpile", "a storehouse is still a stockpile")
+
+	var m = new_match(33)
+	var home: Vector2 = m.home_pos(0)
+	for k in 3:
+		m.spawn_unit(-1, "deer", home + Vector2(30 + k * 2, 0)).goal = home + Vector2(30, 0)
+	var r: Dictionary = m.command(0, {"steps": [step("gather", "hunt", 0, "", 3)]})
+	check(r.get("ok", false), "hunting needs no building: %s" % r.get("error", ""))
+	if r.get("ok", false):
+		run(m, 120.0)
+		var crew = m.crews.get(r["crews"][0])
+		check(crew != null and float(crew.state.get("delivered", 0.0)) > 0.0, "hunters bring meat to the nearest drop-off")
+
+	var full = new_match(4242, true)
+	var ai = Rival.new()
+	ai.setup(full, {"faction": 1, "difficulty": 1, "strategy": "boom", "seed": 5})
+	var f = full.fac(1)
+	f.age = 1
+	for type in ["hut", "stockpile"]:
+		for i in 70:
+			full._refresh_counts(f)
+			if (type == "hut" and f.housing >= Defs.POP_HARD_CAP) or (type == "stockpile" and f.food_cap >= Defs.POP_HARD_CAP * Defs.WELL_FED_STOCK):
+				break
+			var at = ai._find_site(type)
+			if at != null:
+				full.add_building(1, type, at[0], at[1], true)
+	full._refresh_counts(f)
+	check(f.housing == Defs.POP_HARD_CAP, "the rival has room for huts to house 200 (%d)" % f.housing)
+	check(f.food_cap >= Defs.POP_HARD_CAP * Defs.WELL_FED_STOCK, "the rival has room to store food for 200 (%d)" % f.food_cap)
 
 
 func test_map_sizes() -> void:
