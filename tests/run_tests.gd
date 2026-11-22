@@ -32,7 +32,7 @@ func _initialize() -> void:
 
 func _run_tests() -> void:
 	var only := OS.get_environment("MH_TEST")
-	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "crews", "selection", "walls", "combat", "research", "shield", "parser", "schema", "chatgpt", "terra_orders", "hotkeys", "removed_buildings", "rings", "settlements", "path_queue", "rivals", "menu", "gathering", "construction", "back_to_work", "delegation", "order_moves", "posts", "post_orders", "places", "mandate_building", "threats", "post_review", "towers", "duel"]
+	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "crews", "selection", "walls", "attack_hunts_people", "combat", "research", "shield", "parser", "schema", "chatgpt", "terra_orders", "hotkeys", "removed_buildings", "rings", "settlements", "path_queue", "rivals", "menu", "gathering", "construction", "back_to_work", "delegation", "order_moves", "posts", "post_orders", "places", "mandate_building", "threats", "post_review", "towers", "duel"]
 	if only == "absence":
 		tests.append(only)
 	var t0 := Time.get_ticks_msec()
@@ -1184,6 +1184,49 @@ func test_walls() -> void:
 	if b0:
 		var c: Vector2i = m.cell_of(b0.pos)
 		check(m.solid_for(1, c), "palisade blocks the enemy")
+
+
+func test_attack_hunts_people() -> void:
+	# Attackers beside a building go for an enemy villager they can see, not the building.
+	var m = new_match(21)
+	var hut = m.add_building(1, "hut", m.home_pos(0) + Vector2(150, 0), 0.0, true)
+	var squad := []
+	for k in 3:
+		var a = m.spawn_unit(0, "villager", hut.pos + Vector2(-8, k * 2.0))
+		a.weapon = "wood_spear"
+		squad.append(a)
+	var c = m.make_crew(0, squad)
+	c.steps = [step("attack", "", 0, "enemy")]
+	c.state = {"target": hut.pos, "foe": 1}
+	c.idx = 0
+	for a in squad:
+		m._set_task(a, "attack")
+		a.enemy_bld = hut.id
+	var runner = m.spawn_unit(1, "villager", squad[0].pos + Vector2(-50, 0))
+	runner.name = "Runner"
+	m.rebuild_unit_hash()
+	run(m, 1.5)
+	check(squad.any(func(a): return a.enemy == runner.id), "attackers go after the villager they can see (%s)" % str(squad.map(func(a): return a.enemy)))
+	# Walled in, the same villager is left alone.
+	var m2 = new_match(21)
+	var hut2 = m2.add_building(1, "hut", m2.home_pos(0) + Vector2(150, 0), 0.0, true)
+	var squad2 := []
+	for k in 3:
+		var a2 = m2.spawn_unit(0, "villager", hut2.pos + Vector2(-8, k * 2.0))
+		a2.weapon = "wood_spear"
+		squad2.append(a2)
+	var c2 = m2.make_crew(0, squad2)
+	c2.steps = [step("attack", "", 0, "enemy")]
+	c2.state = {"target": hut2.pos, "foe": 1}
+	c2.idx = 0
+	for a2 in squad2:
+		m2._set_task(a2, "attack")
+		a2.enemy_bld = hut2.id
+	var inside = m2.spawn_unit(1, "villager", squad2[0].pos + Vector2(-50, 0))
+	m2.add_building(1, "stone_wall", squad2[0].pos + Vector2(-25, 0), 1.5708, true)
+	m2.rebuild_unit_hash()
+	run(m2, 1.5)
+	check(not squad2.any(func(a): return a.enemy == inside.id), "a villager shut in behind a wall is not hunted")
 
 
 func test_combat() -> void:

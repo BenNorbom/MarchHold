@@ -209,6 +209,8 @@ const MOUNTED := {"hp_bonus": 60.0, "speed": 8.5}
 const SCOUT_SIGHT := 62.0
 ## How far an armed person sees. Enough to recognise a camp they are marching on.
 const SOLDIER_SIGHT := 34.0
+## How far an attacking crew picks out enemy people to go after, before touching buildings.
+const HUNT_SIGHT := 55.0
 
 # --- Work ------------------------------------------------------------------------
 # node: a resource node on the map. building: work happens at a building.

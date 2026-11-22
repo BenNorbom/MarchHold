@@ -81,6 +81,9 @@ func combat_update(u: Unit, dt: float, radius: float) -> bool:
 		gone = gone or (foe.in_tower >= 0 and (not can_shoot_bow(u) or u.arrows <= 0))
 		if not gone and (ticks + u.id) % 5 == 0:
 			gone = not _may_fight(u, foe, _fight_area(u, c, order, radius), radius)
+			# An attacking crew keeps after anyone it can still see, wherever they run.
+			if gone and order == "attack" and _hunted(u, c, foe):
+				gone = false
 		if gone:
 			foe = null
 			u.enemy = -1
@@ -90,6 +93,10 @@ func combat_update(u: Unit, dt: float, radius: float) -> bool:
 		u.scan_t = 0.0
 	if t + EPS >= u.scan_t:
 		foe = _pick_target(u, foe, c, order, radius)
+		if foe == null and order == "attack":
+			# Nobody close: go after the nearest enemy person any of the crew can see
+			# before touching a building, unless walls shut them in.
+			foe = _hunt_target(u, c)
 		var again := 0.5
 		if foe:
 			again = (2.2 if u.front else 1.0) if u.engaged else 0.8
@@ -105,6 +112,51 @@ func combat_update(u: Unit, dt: float, radius: float) -> bool:
 		return false
 	_fight(u, foe, dt, order, c)
 	return true
+
+
+## The ids of enemy people any member of this crew can see, refreshed twice a second.
+func _crew_sightings(c: Crew) -> Array:
+	if t - float(c.state.get("hunt_t", -9.0)) < 0.5:
+		return c.state.get("hunt", [])
+	c.state["hunt_t"] = t
+	var rivals := rivals_mask(c.faction)
+	var seen := {}
+	for id in c.members:
+		var m := unit(id)
+		if m == null or m.dead or not sides_near(m.pos, Defs.HUNT_SIGHT, rivals):
+			continue
+		for o: Unit in units_near(m.pos, Defs.HUNT_SIGHT, -3, c.faction):
+			if is_hostile(c.faction, o) and is_person(o) and o.in_tower < 0:
+				seen[o.id] = true
+	c.state["hunt"] = seen.keys()
+	return c.state["hunt"]
+
+
+## Is this foe in the crew's sight and reachable, i.e. not shut in behind walls?
+func _hunted(u: Unit, c: Crew, foe: Unit) -> bool:
+	return foe.id in _crew_sightings(c) and wall_between(u.faction, u.pos, foe.pos) == null
+
+
+## The nearest enemy person the crew can see and reach. Claims them like any other target.
+func _hunt_target(u: Unit, c: Crew) -> Unit:
+	var best: Unit = null
+	var bd := INF
+	for id in _crew_sightings(c):
+		var o := unit(id)
+		if o == null or not is_hostile(u.faction, o) or o.in_tower >= 0 or (o.id == u.avoid_id and t < u.avoid_t):
+			continue
+		var d := u.pos.distance_squared_to(o.pos)
+		if d >= bd or wall_between(u.faction, u.pos, o.pos) != null:
+			continue
+		bd = d
+		best = o
+	if best:
+		pressure[best.id] = int(pressure.get(best.id, 0)) + 1
+		u.engage_from = u.pos
+		u.engaged = false
+		u.front = true
+		u.enemy = best.id
+	return best
 
 
 func _maybe_flee(u: Unit, dt: float, r: float) -> bool:
