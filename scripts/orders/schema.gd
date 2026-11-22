@@ -66,7 +66,7 @@ static func action_guide() -> String:
 	lines.append("build: subject is a structure id; the player places each site. One step builds one structure, or one whole wall line for palisade/stone_wall.")
 	lines.append("resume: carry on construction that is already placed (see unfinished), with no placement. subject is that structure id, or empty for whatever was left. Use it to continue, resume, finish or help with construction.")
 	lines.append("upgrade: subject smelter (smelter->iron furnace). Armories are not upgraded by hand: research armory_bronze, then armory_iron, and every armory improves.")
-	lines.append("craft: subject an item id; amount = how many items (0 = one batch). Siege items (cannon, ram) are made one per batch.")
+	lines.append("craft: subject an item id; amount = how many items (0 = one). No villagers work on it: the armory queues the items and makes them one at a time, paying for each as it starts. Ammo (arrows, shot) comes in bundles. Siege items (cannon, ram) come out next to the armory.")
 	lines.append("arm: crew members take gear from the armory; subject an item id, or empty for the best kit available.")
 	lines.append("mount: crew members take horses from a stable. man: subject cannon or ram, crew members crew a siege engine.")
 	lines.append("smelt: subject bronze or iron. research: subject gunpowder (university), mounted_archery (stable; riders may only shoot after it), armory_bronze or armory_iron (armory; iron needs bronze first). Research is paid up front and runs by itself, so it takes no villagers. tame: drive wild horses into a stable; amount = horses.")

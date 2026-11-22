@@ -1513,12 +1513,17 @@ func test_hotkeys() -> void:
 	game.placing = false
 	f.stock["wood"] = 100.0
 	game._slash("/c b w 2")
-	var made := []
+	var arm = m.buildings_of(0, "armory")[0]
+	check(arm.queue == ["wood_spear", "wood_spear"], "/c b w 2 queues two spears at the armory (%s)" % str(arm.queue))
+	var crewed := false
 	for c in m.crews_of(0):
 		for s in c.steps:
-			if s["action"] == "craft":
-				made.append([s["subject"], int(s["amount"])])
-	check(made == [["wood_spear", 2 * int(Defs.ITEMS["wood_spear"]["batch"])]], "/c b w 2 orders two batches (%s)" % str(made))
+			crewed = crewed or s["action"] == "craft"
+	check(not crewed, "queued weapons take no crew")
+	m._update_armories(float(Defs.ITEMS["wood_spear"]["time"]))
+	check(int(f.gear.get("wood_spear", 0)) == 1, "the armory makes one spear in %d s" % int(Defs.ITEMS["wood_spear"]["time"]))
+	check(is_equal_approx(float(f.stock["wood"]), 60.0), "the armory pays 40 wood for that spear")
+	check(arm.queue.size() == 1, "one spear is still waiting")
 	game.free()
 
 

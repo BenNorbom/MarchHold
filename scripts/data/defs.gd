@@ -127,45 +127,46 @@ const RESEARCH := {
 }
 
 # --- Gear ----------------------------------------------------------------------
-# tier: armory tier required (0 wood, 1 bronze, 2 iron). batch: items per craft.
+# tier: armory tier required (0 wood, 1 bronze, 2 iron). batch: items per order step (ammo comes in bundles; all else one at a time).
+# cost: paid for each item when the armory starts it. time: seconds for one item at one armory.
 # block_*: share a carried shield stops. up_*: share it stops when raised, from the front.
 const SHIELD_ARC := 0.34          # cosine of the half angle a raised shield covers (70 degrees)
 const ITEMS := {
 	"wood_spear": {"name": "wooden spear", "plural": "wooden spears", "slot": "weapon", "tier": 0, "cost": {"wood": 40},
-		"batch": 4, "time": 12.0, "dmg": 9.0, "reach": 2.4, "rate": 1.2, "vs_mounted": 2.0},
+		"batch": 1, "time": 10.0, "dmg": 9.0, "reach": 2.4, "rate": 1.2, "vs_mounted": 2.0},
 	"wood_shield": {"name": "wooden shield", "plural": "wooden shields", "slot": "shield", "tier": 0, "cost": {"wood": 50},
-		"batch": 4, "time": 12.0, "block_arrow": 0.4, "block_melee": 0.15, "up_arrow": 0.75, "up_melee": 0.5, "slow": 0.05},
-	"bow": {"name": "bow", "plural": "bows", "slot": "bow", "tier": 0, "cost": {"wood": 50}, "batch": 4, "time": 14.0},
+		"batch": 1, "time": 10.0, "block_arrow": 0.4, "block_melee": 0.15, "up_arrow": 0.75, "up_melee": 0.5, "slow": 0.05},
+	"bow": {"name": "bow", "plural": "bows", "slot": "bow", "tier": 0, "cost": {"wood": 50}, "batch": 1, "time": 10.0},
 	"arrows": {"name": "arrow", "plural": "arrows", "slot": "ammo", "tier": 0, "cost": {"wood": 4, "stone": 2},
 		"batch": 16, "time": 10.0, "tier_cost": [{"wood": 4, "stone": 2}, {"wood": 4, "bronze": 1}, {"wood": 4, "iron": 1}]},
 	"bronze_spear": {"name": "bronze spear", "plural": "bronze spears", "slot": "weapon", "tier": 1, "cost": {"wood": 20, "bronze": 15},
-		"batch": 4, "time": 12.0, "dmg": 12.0, "reach": 2.4, "rate": 1.2, "vs_mounted": 2.0},
+		"batch": 1, "time": 15.0, "dmg": 12.0, "reach": 2.4, "rate": 1.2, "vs_mounted": 2.0},
 	"bronze_sword": {"name": "bronze sword", "plural": "bronze swords", "slot": "weapon", "tier": 1, "cost": {"bronze": 25},
-		"batch": 4, "time": 14.0, "dmg": 15.0, "reach": 1.7, "rate": 1.0},
+		"batch": 1, "time": 20.0, "dmg": 15.0, "reach": 1.7, "rate": 1.0},
 	"bronze_shield": {"name": "bronze shield", "plural": "bronze shields", "slot": "shield", "tier": 1, "cost": {"wood": 20, "bronze": 15},
-		"batch": 4, "time": 12.0, "block_arrow": 0.55, "block_melee": 0.25, "up_arrow": 0.85, "up_melee": 0.65, "slow": 0.06},
+		"batch": 1, "time": 15.0, "block_arrow": 0.55, "block_melee": 0.25, "up_arrow": 0.85, "up_melee": 0.65, "slow": 0.06},
 	"bronze_armor": {"name": "bronze armor", "plural": "sets of bronze armor", "slot": "armor", "tier": 1, "cost": {"bronze": 40},
-		"batch": 4, "time": 16.0, "armor": 0.25, "slow": 0.08},
+		"batch": 1, "time": 25.0, "armor": 0.25, "slow": 0.08},
 	"bronze_pike": {"name": "bronze pike", "plural": "bronze pikes", "slot": "weapon", "tier": 1, "cost": {"wood": 30, "bronze": 15},
-		"batch": 4, "time": 12.0, "dmg": 11.0, "reach": 4.0, "rate": 1.4, "vs_mounted": 3.0, "close": 0.7},
+		"batch": 1, "time": 15.0, "dmg": 11.0, "reach": 4.0, "rate": 1.4, "vs_mounted": 3.0, "close": 0.7},
 	"bronze_lance": {"name": "bronze lance", "plural": "bronze lances", "slot": "weapon", "tier": 1, "cost": {"wood": 30, "bronze": 15},
-		"batch": 4, "time": 12.0, "dmg": 14.0, "reach": 3.0, "rate": 1.3, "charge": 2.0},
-	"ram": {"name": "battering ram", "plural": "battering rams", "slot": "siege", "tier": 1, "cost": {"wood": 40, "bronze": 5},
-		"batch": 1, "time": 25.0, "crew": 4},
+		"batch": 1, "time": 20.0, "dmg": 14.0, "reach": 3.0, "rate": 1.3, "charge": 2.0},
+	"ram": {"name": "battering ram", "plural": "battering rams", "slot": "siege", "tier": 1, "cost": {"wood": 300, "bronze": 50},
+		"batch": 1, "time": 40.0, "crew": 4},
 	"iron_spear": {"name": "iron spear", "plural": "iron spears", "slot": "weapon", "tier": 2, "cost": {"wood": 20, "iron": 15},
-		"batch": 4, "time": 12.0, "dmg": 16.0, "reach": 2.4, "rate": 1.2, "vs_mounted": 2.0},
+		"batch": 1, "time": 25.0, "dmg": 16.0, "reach": 2.4, "rate": 1.2, "vs_mounted": 2.0},
 	"iron_sword": {"name": "iron sword", "plural": "iron swords", "slot": "weapon", "tier": 2, "cost": {"iron": 25},
-		"batch": 4, "time": 14.0, "dmg": 20.0, "reach": 1.7, "rate": 1.0},
+		"batch": 1, "time": 30.0, "dmg": 20.0, "reach": 1.7, "rate": 1.0},
 	"iron_shield": {"name": "iron shield", "plural": "iron shields", "slot": "shield", "tier": 2, "cost": {"wood": 20, "iron": 15},
-		"batch": 4, "time": 12.0, "block_arrow": 0.65, "block_melee": 0.3, "up_arrow": 0.9, "up_melee": 0.75, "slow": 0.07},
+		"batch": 1, "time": 25.0, "block_arrow": 0.65, "block_melee": 0.3, "up_arrow": 0.9, "up_melee": 0.75, "slow": 0.07},
 	"iron_armor": {"name": "iron armor", "plural": "sets of iron armor", "slot": "armor", "tier": 2, "cost": {"iron": 40},
-		"batch": 4, "time": 16.0, "armor": 0.35, "slow": 0.1},
+		"batch": 1, "time": 35.0, "armor": 0.35, "slow": 0.1},
 	"iron_pike": {"name": "iron pike", "plural": "iron pikes", "slot": "weapon", "tier": 2, "cost": {"wood": 30, "iron": 15},
-		"batch": 4, "time": 12.0, "dmg": 15.0, "reach": 4.0, "rate": 1.4, "vs_mounted": 3.0, "close": 0.7},
+		"batch": 1, "time": 25.0, "dmg": 15.0, "reach": 4.0, "rate": 1.4, "vs_mounted": 3.0, "close": 0.7},
 	"iron_lance": {"name": "iron lance", "plural": "iron lances", "slot": "weapon", "tier": 2, "cost": {"wood": 30, "iron": 15},
-		"batch": 4, "time": 12.0, "dmg": 18.0, "reach": 3.0, "rate": 1.3, "charge": 2.0},
+		"batch": 1, "time": 25.0, "dmg": 18.0, "reach": 3.0, "rate": 1.3, "charge": 2.0},
 	"cannon": {"name": "cannon", "plural": "cannons", "slot": "siege", "tier": 2, "research": "gunpowder",
-		"cost": {"iron": 12, "wood": 20, "coal": 4}, "batch": 1, "time": 30.0, "crew": 3},
+		"cost": {"iron": 200, "wood": 200, "coal": 40}, "batch": 1, "time": 60.0, "crew": 3},
 	"shot": {"name": "cannon shot", "plural": "cannon shot", "slot": "shot", "tier": 2, "research": "gunpowder",
 		"cost": {"iron": 2, "coal": 2}, "batch": 8, "time": 10.0},
 }
@@ -263,7 +264,7 @@ const ACTIONS := ["gather", "build", "resume", "upgrade", "craft", "arm", "mount
 	"scout", "guard", "attack", "follow", "hold", "recall", "promote", "mandate", "reserve", "forbid", "allow", "posture", "dismiss", "status", "resume_work"]
 ## Orders that pull people off their work. The sim remembers the work they leave so "back to work" can restore it.
 const MILITARY_ACTIONS := ["arm", "mount", "man", "scout", "guard", "attack", "follow", "hold", "recall"]
-const WORK_ACTIONS := ["gather", "build", "upgrade", "craft", "smelt", "research", "tame"]
+const WORK_ACTIONS := ["gather", "build", "upgrade", "smelt", "research", "tame"]
 # Settings for a captain. They take effect at once and can only be combined with each other.
 const SETTINGS := ["mandate", "reserve", "forbid", "allow", "posture"]
 const WHERE := ["", "here", "marked", "home", "enemy", "north", "northeast", "east", "southeast",

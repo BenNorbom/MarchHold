@@ -83,6 +83,7 @@ func tick(dt: float = Defs.TICK) -> void:
 		upkeep_t = 0.0
 		check_morale()
 	update_crews(dt)
+	_update_armories(dt)
 	for p: Post in posts.values():
 		# Once a second each, staggered so they don't all think on the same tick.
 		if (ticks + p.id) % 10 == 0:
@@ -834,6 +835,12 @@ func command(faction: int, req: Dictionary) -> Dictionary:
 		for id in laid:
 			remove_site(id)
 		return {"ok": false, "error": e3}
+	if steps.size() == 1 and steps[0]["action"] == "craft":
+		# Weapons take no villagers: they go into an armory's queue.
+		var queued := step_problem(faction, steps[0])
+		if queued == "":
+			queued = queue_craft(faction, steps[0]["subject"], int(steps[0].get("amount", 0)))
+		return {"ok": queued == "", "error": queued.substr(0, 1).to_upper() + queued.substr(1), "crews": []}
 	if steps.size() == 1 and steps[0]["action"] == "research":
 		# Research takes no villagers: it is paid for and runs in the building.
 		var why := start_research(faction, steps[0]["subject"])

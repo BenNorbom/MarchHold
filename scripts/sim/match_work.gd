@@ -621,13 +621,14 @@ func _prepare_step(c: Crew, s: Dictionary) -> String:
 				b.up_work = 0.0
 				b.up_paid = false
 		"craft":
-			var why := craft_problem(c.faction, subj)
-			if why != "":
-				return why
-			var it: Dictionary = Defs.ITEMS[subj]
+			# Nobody works at the armory. The order goes into an armory's queue and the armory makes it.
 			var amt := int(s.get("amount", 0))
-			c.state["want"] = amt if amt > 0 else int(it["batch"])
-			c.state["bld"] = nearest_building(c.faction, crew_center(c), ["armory"]).id
+			var queued_why := queue_craft(c.faction, subj, amt)
+			if queued_why != "":
+				return queued_why
+			var n := amt if amt > 0 else int(Defs.ITEMS[subj]["batch"])
+			c.state["want"] = n
+			c.state["made"] = n
 		"arm":
 			var arm := nearest_building(c.faction, crew_center(c), ["armory"])
 			if arm == null:
@@ -786,6 +787,74 @@ func _free_lab(faction: int, type: String) -> Building:
 		if b.research == "":
 			return b
 	return null
+
+
+## Most items an armory will hold in its queue. A full queue refuses the order.
+const QUEUE_MAX := 12
+
+
+## Puts items into the queue of the least busy armory that can make them. Nobody works there.
+## The armory pays for each item as it starts it, and makes them one at a time.
+func queue_craft(faction: int, item: String, amount: int) -> String:
+	var why := craft_problem(faction, item)
+	if why != "":
+		return why
+	var it: Dictionary = Defs.ITEMS[item]
+	var batch := int(it["batch"])
+	var entries := ceili(float(amount if amount > 0 else batch) / float(batch))
+	var arm: Building = null
+	for b: Building in buildings_of(faction, "armory"):
+		if not b.complete or b.tier < int(it["tier"]):
+			continue
+		if arm == null or b.queue.size() < arm.queue.size():
+			arm = b
+	if arm == null:
+		return "no armory is ready to make %s." % Defs.item_name(item, 2)
+	if arm.queue.size() + entries > QUEUE_MAX:
+		return "the armory queue is full (%d waiting)." % arm.queue.size()
+	for i in entries:
+		arm.queue.append(item)
+	if faction == 0:
+		var made := entries * batch
+		post(0, "The armory will make %d %s." % [made, Defs.item_name(item, made)], "info")
+	return ""
+
+
+## Each armory works its queue by itself, one item at a time, paying for each item as it starts.
+func _update_armories(dt: float) -> void:
+	for b: Building in buildings:
+		if b.dead or not b.complete or b.queue.is_empty():
+			continue
+		var item: String = b.queue[0]
+		var it: Dictionary = Defs.ITEMS[item]
+		if b.make_t <= 0.0:
+			var cost := Defs.item_cost(item, armory_tier(b.faction))
+			if not pay(b.faction, cost):
+				if b.faction == 0 and t - b.waiting_msg_t > 25.0:
+					b.waiting_msg_t = t
+					post(0, "The armory is waiting for %s to make %s." % [Defs.cost_text(missing_cost(0, cost)), Defs.item_name(item, 2)], "warn")
+				continue
+		b.make_t += dt
+		if b.make_t < float(it["time"]):
+			continue
+		b.make_t = 0.0
+		b.queue.pop_front()
+		_finish_make(b, item)
+
+
+func _finish_make(b: Building, item: String) -> void:
+	var it: Dictionary = Defs.ITEMS[item]
+	var n := int(it["batch"])
+	sound("anvil" if int(it["tier"]) > 0 else "hammer", b.pos)
+	if it["slot"] == "siege":
+		var e := spawn_unit(b.faction, item, b.pos + Vector2.from_angle(b.rot + PI * 0.5) * (b.size.y * 0.5 + 3.0))
+		e.ammo = 0
+		emit({"type": "unit", "id": e.id})
+	else:
+		var f := fac(b.faction)
+		f.gear[item] = int(f.gear.get(item, 0)) + n
+	if b.faction == 0 and b.queue.is_empty():
+		post(0, "The armory has finished its queue.", "done")
 
 
 ## Pays for the research and sets it going in a free building. It then runs by itself.
@@ -1317,8 +1386,6 @@ func update_worker(u: Unit, dt: float) -> void:
 			_do_build(u, c, dt)
 		"upgrade":
 			_do_upgrade(u, c, dt)
-		"craft":
-			_do_craft(u, c, s, dt)
 		"arm":
 			_do_arm(u, c, s, dt)
 		"mount":
@@ -1552,7 +1619,7 @@ func _work_building(u: Unit, type: String, subj: String) -> Building:
 			continue
 		var n := 0
 		for o: Unit in units:
-			if not o.dead and o.tgt_bld == b.id and o.faction == u.faction and o.task in ["gather", "smelt", "craft"]:
+			if not o.dead and o.tgt_bld == b.id and o.faction == u.faction and o.task in ["gather", "smelt"]:
 				n += 1
 		if n >= cap:
 			continue
@@ -1805,53 +1872,6 @@ func _do_upgrade(u: Unit, c: Crew, dt: float) -> void:
 		if up.has("opens_age"):
 			_open_age(fac(b.faction), int(up["opens_age"]))
 		c.state["up"] = id
-
-
-func _do_craft(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
-	var b := bld(c.state.get("bld", -1))
-	if b == null or b.dead:
-		b = nearest_building(u.faction, u.pos, ["armory"])
-		if b == null:
-			c.state["stuck"] = true
-			return
-		c.state["bld"] = b.id
-	u.tgt_bld = b.id
-	if u.phase != "work":
-		if go_to_building(u, b, dt):
-			u.phase = "work"
-		return
-	face(u, b.pos)
-	var item: String = s["subject"]
-	var it: Dictionary = Defs.ITEMS[item]
-	if not c.state["batch_paid"]:
-		var cost := Defs.item_cost(item, armory_tier(u.faction))
-		if not pay(u.faction, cost):
-			u.anim = Anim.IDLE
-			if u.faction == 0 and t - b.waiting_msg_t > 25.0:
-				b.waiting_msg_t = t
-				post(0, "%s is waiting for %s to make %s." % [crew_label(c), Defs.cost_text(missing_cost(0, cost)), Defs.item_name(item, 2)], "warn")
-			return
-		c.state["batch_paid"] = true
-	u.anim = Anim.HAMMER
-	u.work_t -= dt
-	if u.work_t <= 0.0:
-		u.work_t = 0.8
-		sound("anvil" if int(it["tier"]) > 0 else "hammer", b.pos)
-	c.state["batch_t"] = float(c.state["batch_t"]) + work_mult(u.faction) * dt
-	if c.state["batch_t"] >= float(it["time"]):
-		c.state["batch_t"] = 0.0
-		c.state["batch_paid"] = false
-		var n := int(it["batch"])
-		var f := fac(u.faction)
-		if it["slot"] == "siege":
-			var e := spawn_unit(u.faction, item, b.pos + Vector2.from_angle(b.rot + PI * 0.5) * (b.size.y * 0.5 + 3.0))
-			e.ammo = 0
-			emit({"type": "unit", "id": e.id})
-		else:
-			f.gear[item] = int(f.gear.get(item, 0)) + n
-		c.state["made"] = int(c.state["made"]) + n
-		if u.faction == 0 and c.state["made"] >= int(c.state["want"]):
-			post(0, "%s made %d %s." % [crew_label(c), c.state["made"], Defs.item_name(item, c.state["made"])], "done")
 
 
 func _do_arm(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
