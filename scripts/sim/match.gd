@@ -4,6 +4,7 @@ extends "res://scripts/sim/match_combat.gd"
 
 const Captains = preload("res://scripts/sim/captains.gd")
 const START_FOOD := 40.0
+const FRESH_MARK := 120.0       # seconds a mark counts as "this"
 
 
 func setup(opts: Dictionary) -> void:
@@ -204,6 +205,9 @@ func on_commander_dead(u: Unit) -> void:
 func step_problem(faction: int, s: Dictionary) -> String:
 	var f := fac(faction)
 	var subj: String = s.get("subject", "")
+	var at: String = s.get("where", "")
+	if at.begins_with(Defs.PLACE) and not places_of(faction).has(at.substr(Defs.PLACE.length())):
+		return "There's no place called %s. Mark it (R), then say 'call this %s'." % [at.substr(Defs.PLACE.length()).capitalize(), at.substr(Defs.PLACE.length()).capitalize()]
 	match s["action"]:
 		"build":
 			return unlock_problem(faction, subj)
@@ -446,12 +450,106 @@ func reassign_crew(faction: int, req: Dictionary, destination_id: int) -> Dictio
 	return {"ok": true, "crew": destination.id}
 
 
+func posts_of(faction: int) -> Array:
+	var out := []
+	for p: Post in posts.values():
+		if p.faction == faction:
+			out.append(p)
+	out.sort_custom(func(a, b): return a.id < b.id)
+	return out
+
+
+func post_label(p: Post) -> String:
+	var lead := unit(p.captain)
+	return "Captain %s (%s)" % [lead.name if lead else "", p.name]
+
+
+func post_status(p: Post) -> String:
+	var doing: Array[String] = []
+	var working := {}
+	var ordered := 0
+	for u in post_members(p):
+		var c := crew_of(u)
+		if c == null or c.idx >= c.steps.size():
+			continue
+		if c.post != p.id:
+			ordered += 1
+		else:
+			var s: Dictionary = c.steps[c.idx]
+			var what: String = s["action"]
+			if what == "gather":
+				what = Defs.GATHER[s["subject"]]["name"]
+			elif what == "smelt":
+				what = "smelting"
+			working[what] = int(working.get(what, 0)) + 1
+	for what in working:
+		doing.append("%d %s" % [working[what], what])
+	if ordered > 0:
+		doing.append("%d on your orders" % ordered)
+	var size := str(p.members.size())
+	if p.target > 0:
+		size += " of %d" % p.target
+	return "%s: %s people. %s." % [post_label(p), size, ", ".join(doing) if not doing.is_empty() else "standing by"]
+
+
+## Who carries out an order given to a captain: as many of their people as it needs.
+func _post_detail(p: Post, first: Dictionary) -> Array:
+	var pool: Array = post_members(p).filter(func(u): return u.id != p.captain and not u.child and u.siege < 0)
+	var a: String = first["action"]
+	var want := int(first.get("count", 0))
+	if want == 0:
+		var soldiers: bool = p.mandate in ["garrison", "army"]
+		if a == "recall" or (soldiers and a in ["attack", "follow", "guard", "hold", "arm"]):
+			want = pool.size()
+		elif a in ["attack", "follow", "guard", "hold"]:
+			# A working post sends its fighters, not its farmers.
+			var fighters := pool.filter(func(u): return armed(u)).size()
+			want = fighters if fighters > 0 else 4
+		elif a == "arm":
+			want = 4
+		elif a == "gather":
+			want = 3
+		else:
+			want = _default_size(p.faction, first)
+	# People free or on the captain's jobs go before anyone already on your orders.
+	var key := func(u):
+		return (0 if u.crew < 0 else (1 if not under_direct_order(u) else 2))
+	pool.sort_custom(func(x, y):
+		var kx: int = key.call(x)
+		var ky: int = key.call(y)
+		if kx != ky:
+			return kx < ky
+		var fighting: bool = a in ["attack", "guard", "hold", "follow"]
+		if fighting and armed(x) != armed(y):
+			return armed(x)
+		return x.id < y.id)
+	var out := pool.slice(0, want)
+	var lead := unit(p.captain)
+	if out.is_empty() and lead and not lead.dead:
+		out.append(lead)
+	return out
+
+
+## Stands a post down. Its people are free again.
+func close_post(p: Post) -> void:
+	for u in post_members(p):
+		var c := crew_of(u)
+		if c and c.post == p.id:
+			release_member(u)
+		u.post = -1
+	posts.erase(p.id)
+
+
 ## Puts someone in charge of a place and a purpose, or changes the charge they have.
 func give_mandate(faction: int, req: Dictionary, s: Dictionary) -> Dictionary:
 	var kind: String = s["subject"]
 	var d: Dictionary = Defs.MANDATES[kind]
 	var people: Array = []
-	if req.has("units"):
+	if req.has("post"):
+		var held: Post = posts.get(int(req["post"]))
+		if held and held.faction == faction:
+			people.append(unit(held.captain))
+	elif req.has("units"):
 		for id in req["units"]:
 			var su := orderable_unit(faction, int(id))
 			if su:
@@ -468,10 +566,15 @@ func give_mandate(faction: int, req: Dictionary, s: Dictionary) -> Dictionary:
 	elif req.has("crew"):
 		var c := _addressed_crew(faction, req)
 		if c:
-			people.append(unit(c.leader))
-			for id in c.members:
-				if id != c.leader:
-					people.append(unit(id))
+			var chosen := orderable_unit(faction, int(req.get("person", c.leader)))
+			if chosen == null or not c.members.has(chosen.id):
+				chosen = unit(c.leader)
+			people.append(chosen)
+			# A captain brings their own crew. Anyone else comes alone.
+			if c.captain and c.post < 0 and chosen.id == c.leader:
+				for id in c.members:
+					if id != chosen.id:
+						people.append(unit(id))
 	elif req.is_empty() or not req.get("all", false):
 		var free := idle_adults(faction, home_pos(faction))
 		if not free.is_empty():
@@ -513,7 +616,18 @@ func give_mandate(faction: int, req: Dictionary, s: Dictionary) -> Dictionary:
 	p.radius = float(d["radius"])
 	var count := int(s.get("count", 0))
 	p.target = count if count > 0 else maxi(int(d["size"]), people.size() if kind != "village" else 0)
-	p.name = "village" if kind == "village" else "%s %s" % [Terrain.compass_name(p.center - home_pos(faction)), d["name"]]
+	var title: String = "village"
+	if kind != "village":
+		if where.begins_with(Defs.PLACE) and fac(faction).places.has(where.substr(Defs.PLACE.length())):
+			title = fac(faction).places[where.substr(Defs.PLACE.length())]["name"]
+		else:
+			title = "%s %s" % [Terrain.compass_name(p.center - home_pos(faction)), d["name"]]
+		var base := title
+		var nth := 1
+		while posts_of(faction).any(func(o): return o != p and o.name == title):
+			nth += 1
+			title = "%s %d" % [base, nth]
+	p.name = title
 	return {"ok": true, "crews": [], "post": p.id}
 
 
@@ -543,6 +657,25 @@ func command(faction: int, req: Dictionary) -> Dictionary:
 		var idle := idle_adults(faction, home_pos(faction))
 		if not idle.is_empty():
 			targets.append(make_crew(faction, idle))
+	elif req.has("post"):
+		var p: Post = posts.get(int(req["post"]))
+		if p == null or p.faction != faction:
+			return {"ok": false, "error": "That post has been stood down."}
+		if steps.size() == 1 and first["action"] in ["status", "dismiss"]:
+			if first["action"] == "status":
+				post(faction, post_status(p), "info")
+			else:
+				post(faction, "The %s is stood down." % p.name, "info")
+				close_post(p)
+			return {"ok": true, "crews": []}
+		var detail := _post_detail(p, first)
+		if detail.is_empty():
+			return {"ok": false, "error": "%s has nobody to send." % post_label(p)}
+		for s in steps:
+			s["count"] = 0      # their own people, not whoever is nearest
+		for u in detail:
+			release_member(u)
+		targets.append(make_crew(faction, detail))
 	elif req.has("crew"):
 		var c := _addressed_crew(faction, req)
 		if c == null:
@@ -636,6 +769,13 @@ func cancel(faction: int, req: Dictionary) -> int:
 			if c.faction == faction:
 				cancel_plan(c)
 				n += 1
+	elif req.has("post"):
+		var p: Post = posts.get(int(req["post"]))
+		if p and p.faction == faction:
+			for u in post_members(p):
+				if under_direct_order(u):
+					release_member(u)
+					n += 1
 	elif req.has("units"):
 		for id in req["units"]:
 			var su := orderable_unit(faction, int(id))
@@ -719,7 +859,21 @@ func remove_site(id: int) -> void:
 func set_mark(faction: int, p: Vector2) -> void:
 	var f := fac(faction)
 	f.mark = p
+	f.mark_t = t
 	f.has_mark = true
+
+
+## "Call this East Hill": the spot just marked, or else where the commander stands.
+func name_place(faction: int, title: String) -> Dictionary:
+	var f := fac(faction)
+	var p := f.mark
+	if not f.has_mark or t - f.mark_t > FRESH_MARK:
+		var me := commander(faction)
+		if me == null:
+			return {"ok": false, "error": "Mark a spot first (look at the ground and press R)."}
+		p = me.pos
+	f.places[title.to_lower()] = {"name": title, "pos": p}
+	return {"ok": true}
 
 
 # --- The commander -----------------------------------------------------------------
@@ -978,7 +1132,11 @@ func brief(faction: int, addressed: String, crew_id: int, individual: bool = fal
 			locked.append(row)
 	var crew_rows := []
 	for c in crews_of(faction):
-		crew_rows.append(crew_status(c))
+		if c.post < 0:      # a post's own jobs are summed up in its status
+			crew_rows.append(crew_status(c))
+	var post_rows := []
+	for p in posts_of(faction):
+		post_rows.append(post_status(p))
 	var known := {}
 	var camp = known_enemy_camp(faction)
 	if camp != null:
@@ -997,6 +1155,11 @@ func brief(faction: int, addressed: String, crew_id: int, individual: bool = fal
 	for g in f.gear:
 		if int(f.gear[g]) > 0:
 			gear[g] = int(f.gear[g])
+	var named := {}
+	var places := places_of(faction)
+	for key: String in places:
+		var away: Vector2 = places[key]["pos"] - home_pos(faction)
+		named[Defs.PLACE + key] = "%s, %d m %s of home" % [places[key]["name"], int(away.length()), Terrain.compass_name(away)]
 	var addressed_info := {"who": addressed, "individual": individual}
 	if selected > 0:
 		addressed_info["selected"] = selected
@@ -1013,6 +1176,8 @@ func brief(faction: int, addressed: String, crew_id: int, individual: bool = fal
 		"food": {"state": Defs.FOOD_STATES[f.food_state], "stored": int(f.stock.get("food", 0)), "storage": f.food_cap,
 			"well_fed_needs": int(ceil(f.pop * Defs.WELL_FED_STOCK))},
 		"addressed": addressed_info,
+		"posts": post_rows,
+		"places": named,
 		"crews": crew_rows,
 		"can_build": can_build,
 		"can_craft": can_craft,

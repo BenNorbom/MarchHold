@@ -196,6 +196,7 @@ const ACTIONS := ["gather", "build", "upgrade", "craft", "arm", "mount", "man", 
 	"scout", "guard", "attack", "follow", "hold", "recall", "promote", "mandate", "dismiss", "status"]
 const WHERE := ["", "here", "marked", "home", "enemy", "north", "northeast", "east", "southeast",
 	"south", "southwest", "west", "northwest"]
+const PLACE := "place:"       # a where may also be PLACE + a place the player named
 const ONGOING := ["guard", "attack", "follow", "hold"]
 const AMOUNT_ACTIONS := ["gather", "craft", "smelt", "tame"]
 const MAX_STEPS := 8
@@ -344,7 +345,7 @@ static func validate_steps(steps) -> String:
 		if int(amount) > 0 and not a in AMOUNT_ACTIONS:
 			return "Step %d: amounts only apply to gathering, crafting, smelting and taming." % (i + 1)
 		var w: String = str(s.get("where", ""))
-		if not w in WHERE:
+		if not w in WHERE and not (w.begins_with(PLACE) and w.length() > PLACE.length()):
 			return "Step %d has an unknown place '%s'." % [i + 1, w]
 		if a == "mandate" and steps.size() > 1:
 			return "A mandate is an order by itself."
@@ -359,6 +360,8 @@ static func describe_step(s: Dictionary) -> String:
 	var amount := int(s.get("amount", 0))
 	var count := int(s.get("count", 0))
 	var where: String = s.get("where", "")
+	if where.begins_with(PLACE):
+		where = where.substr(PLACE.length()).capitalize()
 	var txt := ""
 	match a:
 		"gather":

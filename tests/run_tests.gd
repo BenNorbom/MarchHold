@@ -29,7 +29,7 @@ func _initialize() -> void:
 
 func _run_tests() -> void:
 	var only := OS.get_environment("MH_TEST")
-	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "crews", "selection", "delegation", "posts", "walls", "combat", "parser", "schema", "chatgpt", "terra_orders", "duel"]
+	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "crews", "selection", "delegation", "posts", "post_orders", "places", "walls", "combat", "parser", "schema", "chatgpt", "terra_orders", "duel"]
 	var t0 := Time.get_ticks_msec()
 	for name in tests:
 		if only != "" and only != name:
@@ -447,11 +447,127 @@ func test_posts() -> void:
 	check(m.posts.has(garrison.id) and heir != null and not heir.dead and heir.captain and heir.post == garrison.id, "a fallen captain's post passes to one of its people")
 	check(garrison.mandate == "garrison" and garrison.center.distance_to(far) < 1.0, "the successor keeps the mandate")
 
+	# The last bush doesn't get the whole village.
+	var bare = new_match(414)
+	var camp: Vector2 = bare.home_pos(0)
+	var kept := false
+	for n in bare.terrain.nodes:
+		if n.kind == "berry" and n.pos.distance_to(camp) < 200.0:
+			if kept:
+				n.amount = 0.0
+			kept = true
+	var few: Array = grown_village(bare, 30)
+	bare.command(0, {"unit": few[0].id, "individual": true, "steps": [step("mandate", "village")]})
+	run(bare, 8.0)
+	var pickers: int = few.filter(func(u):
+		var c = bare.crew_of(u)
+		return c != null and c.idx < c.steps.size() and c.steps[c.idx]["subject"] == "berries").size()
+	check(pickers <= 4, "pickers are capped by the bushes left (%d on one bush)" % pickers)
+
 	# Nobody is governed without a mandate.
 	var untouched = new_match(414)
 	grown_village(untouched, 12)
 	run(untouched, 8.0)
 	check(untouched.crews_of(0).is_empty() and untouched.posts.is_empty(), "without a mandate nobody is ordered about")
+
+
+func test_post_orders() -> void:
+	for pair in [["run the village", "village"], ["look after the farms", "farming"], ["take twenty and run a mine here", "industry"],
+			["set up a garrison at the mark", "garrison"], ["raise an army", "army"]]:
+		var p: Dictionary = Parser.parse(pair[0])
+		check(p["ok"] and p["steps"][0]["action"] == "mandate" and p["steps"][0]["subject"] == pair[1], "'%s' is a mandate" % pair[0])
+	var mine: Dictionary = Parser.parse("take twenty and run a mine here")
+	check(mine["ok"] and mine["steps"][0]["count"] == 20 and mine["steps"][0]["where"] == "here", "a mandate takes a size and a place")
+	for phrase in ["run back to camp", "build a farm", "don't run the village", "set up a farm"]:
+		check(not Parser.parse(phrase)["steps"].any(func(s): return s["action"] == "mandate"), "'%s' is not a mandate" % phrase)
+
+	var m = new_match(77)
+	var adults: Array = grown_village(m, 24)
+	var game = chat_game(m)
+	var steward = adults[0]
+	game._on_chat("%s, run the village" % steward.name)
+	var village = m.village_post(0)
+	check(village != null and village.captain == steward.id, "'Name, run the village' gives the mandate")
+	if village == null:
+		game.free()
+		return
+	run(m, 6.0)
+	game.selected.assign([steward.id])
+	game.open_chat()
+	check(game.addressee.get("post", -1) == village.id, "talking to a captain addresses their post")
+	game.hud.close_chat()
+	game.selected.clear()
+	game.addressee = {}
+	game._on_chat("Captain %s, send two scouts east" % steward.name)
+	var scouts: Array = m.post_members(village).filter(func(u): return u.task == "scout")
+	check(scouts.size() == 2 and steward.task != "scout", "an order to a captain is carried out by that many of their people (%d)" % scouts.size())
+	run(m, 3.0)
+	check(scouts.all(func(u): return u.task == "scout"), "and the captain leaves them to it")
+	var gatherer = null
+	for u in m.post_members(village):
+		var c = m.crew_of(u)
+		if c and c.post == village.id and c.leader != u.id:
+			gatherer = u
+			break
+	check(gatherer != null, "the village has job crews")
+	if gatherer:
+		game._on_chat("%s, take twenty and run a mine here" % gatherer.name)
+		var works: Array = m.posts.values().filter(func(p): return p.mandate == "industry")
+		check(works.size() == 1 and works[0].captain == gatherer.id, "the person named takes charge, not their crew's leader")
+		check(works.size() == 1 and works[0].members.size() == 1 and works[0].target == 20, "they bring only themselves, and the size sticks")
+	game.selected.assign([m.post_members(village)[-1].id])
+	game.open_chat()
+	game.hud.close_chat()
+	game._on_chat("take twelve and set up a garrison here")
+	var forts: Array = m.posts.values().filter(func(p): return p.mandate == "garrison")
+	check(forts.size() == 1 and forts[0].target == 12, "a size given to a selected person sticks")
+	game.selected.clear()
+	game.addressee = {}
+	game._menu_people()
+	check(not game.menu_items.is_empty() and game.menu_items[0].get("post", -1) == village.id, "/p lists captains first")
+	var facts: Dictionary = m.brief(0, "your people", -1)
+	check(facts.get("posts", []).size() == m.posts.size(), "Terra is told about the posts")
+	game.free()
+
+
+func test_places() -> void:
+	var m = new_match(77)
+	if not m.has_method("places_of"):
+		check(false, "places can be named")
+		return
+	var adults: Array = grown_village(m, 12)
+	var game = chat_game(m)
+	var home: Vector2 = m.home_pos(0)
+	var hill: Vector2 = home + (Vector2(m.map_size, m.map_size) * 0.5 - home).normalized() * 110.0
+	m.set_mark(0, hill)
+	game._on_chat("call this East Hill")
+	var places: Dictionary = m.places_of(0)
+	check(places.has("east hill") and places["east hill"]["pos"].distance_to(hill) < 1.0, "a place just marked gets the name")
+	m.t += 200.0
+	game._on_chat("call this Home Ford")
+	places = m.places_of(0)
+	check(places.has("home ford") and places["home ford"]["pos"].distance_to(m.commander(0).pos) < 1.0, "with no fresh mark, 'this' is where you stand")
+	for word in ["off", "wood", "Stone Wall", "north", "home", "farms", "attack"]:
+		game._on_chat("call this %s" % word)
+		check(not m.places_of(0).has(word.to_lower()), "a place can't be called '%s'" % word)
+	game._on_chat("%s, hold East Hill" % adults[0].name)
+	var c = m.crew_of(adults[0])
+	check(c != null and c.steps[c.idx]["action"] == "hold" and c.state["target"].distance_to(hill) < 1.0, "orders can name a place")
+	game._on_chat("%s, gather wood at East Hill" % adults[1].name)
+	c = m.crew_of(adults[1])
+	check(c != null and c.steps[c.idx]["subject"] == "wood" and c.state["origin"].distance_to(hill) < 1.0, "work can happen at a named place")
+	game._on_chat("%s, set up a garrison at East Hill" % adults[2].name)
+	var held = m.post_of(adults[2])
+	check(held != null and held.center.distance_to(hill) < 1.0 and held.name == "East Hill", "a post takes its place's name")
+	check(not Parser.parse("hold East Hill")["steps"].any(func(s): return s["where"].begins_with("place:")), "only known places are recognized")
+	var r: Dictionary = m.command(0, {"unit": adults[3].id, "steps": [step("hold", "", 0, "place:nowhere")]})
+	check(not r["ok"], "an unknown place is refused")
+	var facts: Dictionary = m.brief(0, "your people", -1)
+	check(facts.get("places", {}).has("place:east hill"), "Terra is told the places")
+	var wheres: Array = Schema.plan_schema(facts.get("places", {}).keys())["properties"]["steps"]["items"]["properties"]["where"]["enum"]
+	check("place:east hill" in wheres and "marked" in wheres, "Terra may answer with a named place")
+	check(Defs.describe_step(step("guard", "", 0, "place:east hill")) == "guard East Hill", "places read as names")
+	game.free()
 
 
 func test_walls() -> void:

@@ -49,6 +49,28 @@ const HERE_WORDS := ["line", "position", "ground", "spot", "area"]
 const EVERYONE_BACK := ["fall back", "retreat", "recall", "come back", "come home", "go home"]
 
 
+# "Run the village", "take twenty and run a mine here": a place and a purpose for a captain.
+const MANDATE_RES := [
+	["village", " (run|manage|look after|take charge of|take care of|be in charge of) (the |our )?(village|town|camp|settlement|home camp|base) "],
+	["farming", " (run|manage|look after|take charge of|take care of) (the |our |a |some )?(farm|farms|farming) "],
+	["industry", " (run|manage|take charge of|set up|look after) (the |our |a |an )?(mine|mines|mining|works|industry|mining outpost) "],
+	["garrison", " (run|command|take charge of|set up|lead) (the |our |a )?(garrison|defence|defences|defense|defenses) "],
+	["army", " (raise|lead|command|muster|take charge of) (an |the |our )?army "],
+]
+
+
+static func mandate_in(s: String) -> Dictionary:
+	for no in [" don't ", " do not ", " never ", " stop ", " then "]:
+		if s.contains(no):
+			return {}
+	for pair in MANDATE_RES:
+		if RegEx.create_from_string(pair[1]).search(s) == null:
+			continue
+		var where := "" if pair[0] == "village" else where_in(s)
+		return _step("mandate", pair[0], 0, where, clampi(number_in(s), 0, 100))
+	return {}
+
+
 static func _promotes(p: String) -> bool:
 	return RegEx.create_from_string(PROMOTE_RE).search(p) != null
 
@@ -144,7 +166,39 @@ static func _step(action: String, subject: String = "", amount: int = 0, where: 
 	return st
 
 
-static func parse(text: String) -> Dictionary:
+## A name that would change what other orders mean can't be a place.
+static func can_name_place(title: String) -> bool:
+	var key := normalize(title).strip_edges()
+	if key == "" or key.length() > 32 or key.split(" ", false).size() > 4:
+		return false
+	if key in VERBS or key in HERE_WORDS or key in DIRECTIONS or key in Defs.WHERE:
+		return false
+	if key in ["off", "mark", "the mark", "camp", "village", "base", "town", "campfire", "there", "me", "them", "everyone", "everybody"]:
+		return false
+	for table in [BUILD_WORDS, ITEM_WORDS, GATHER_WORDS]:
+		for pair in table:
+			if key in [pair[0], pair[0] + "s", pair[0] + "es"]:
+				return false
+	return true
+
+
+## places holds the lower-case names this side knows. One may stand in for "the mark".
+static func parse(text: String, places: Array = []) -> Dictionary:
+	var s := normalize(text)
+	var place := ""
+	for key: String in places:
+		if key.length() > place.length() and s.contains(normalize(key)):
+			place = key
+	if place == "" or s.contains(" the mark "):
+		return _parse(text)
+	var out := _parse(s.replace(normalize(place), " the mark "))
+	for st in out["steps"]:
+		if st["where"] == "marked" or (st["action"] == "gather" and st["where"] == ""):
+			st["where"] = Defs.PLACE + place
+	return out
+
+
+static func _parse(text: String) -> Dictionary:
 	var s := normalize(text)
 	var out := {"ok": false, "steps": [], "all": false, "cancel": false, "confirm": false}
 	var bare := s.strip_edges()
@@ -158,6 +212,12 @@ static func parse(text: String) -> Dictionary:
 		return out
 	if s.contains(" everyone ") or s.contains(" everybody ") or s.contains(" all of you ") or s.contains(" all hands "):
 		out["all"] = true
+	var charge := mandate_in(s)
+	if not charge.is_empty():
+		out["steps"] = [charge]
+		out["all"] = false
+		out["ok"] = Defs.validate_steps(_clean(out["steps"])) == ""
+		return out
 	# Split into sequential parts.
 	var parts: Array[String] = []
 	var tmp := s.replace(" and then ", " | ").replace(" , then ", " | ").replace(" then ", " | ").replace(" after that ", " | ").replace(" ; ", " | ")

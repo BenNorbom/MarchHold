@@ -140,6 +140,8 @@ class Post:
 	var target := 0             # people including the captain, 0 for everyone free
 	var members: Array = []     # unit ids, longest-serving first
 	var jobs := {}              # role -> crew id
+	var pickers := 0            # people the bushes nearby have room for
+	var pickers_t := -999.0
 
 
 class Faction:
@@ -166,7 +168,9 @@ class Faction:
 	var attack_msg_t := -99.0
 	var is_ai := false
 	var mark := Vector2.ZERO
+	var mark_t := -999.0
 	var has_mark := false
+	var places := {}            # lower-case name -> {name, pos}
 	var pop := 0
 	var adults := 0
 	var children := 0

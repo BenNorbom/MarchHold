@@ -7,6 +7,8 @@ const Defs = preload("res://scripts/data/defs.gd")
 const Planner = preload("res://scripts/ai/planner.gd")
 
 const STEWARD_KEEPS := 6       # the village never lends itself below this
+const BUSH_REACH := 160.0
+const PICKERS_PER_BUSH := 3    # as many as can claim one bush
 const SLACK := 1               # a job may run this far over before people are moved, so they don't dither
 
 
@@ -118,14 +120,24 @@ static func _food_jobs(m, p, jobs: Array, n: int) -> int:
 	var placed := mini(n, _places(m, p, "farm"))
 	_add(jobs, "farm", "gather", "farm", placed)
 	if placed < n:
-		var rest := n - placed
-		if m.nearest_node("berry", p.center, 160.0) != null:
-			_add(jobs, "berries", "gather", "berries", rest)
-			placed += rest
-		elif m.has_building(p.faction, "lodge"):
-			_add(jobs, "hunt", "gather", "hunt", rest)
-			placed += rest
+		var picking := mini(n - placed, _bush_places(m, p))
+		_add(jobs, "berries", "gather", "berries", picking)
+		placed += picking
+		if placed < n and m.has_building(p.faction, "lodge"):
+			var hunting := mini(n - placed, m.buildings_of(p.faction, "lodge").size() * int(Defs.BUILDINGS["lodge"]["workers"]))
+			_add(jobs, "hunt", "gather", "hunt", hunting)
+			placed += hunting
 	return placed
+
+
+static func _bush_places(m, p) -> int:
+	if m.t - p.pickers_t >= 5.0:
+		p.pickers_t = m.t
+		p.pickers = 0
+		for node in m._nodes_within(p.center, BUSH_REACH):
+			if node.kind == "berry" and node.amount != 0.0:
+				p.pickers += PICKERS_PER_BUSH
+	return p.pickers
 
 
 ## Working places this post can fill at its own buildings of a type.

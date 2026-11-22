@@ -96,6 +96,12 @@ func _draw() -> void:
 		if b.type == "campfire":
 			draw_circle(p, 7, Color(0.15, 0.25, 0.5))
 			draw_string(font, p + Vector2(9, 5), "Home", HORIZONTAL_ALIGNMENT_LEFT, -1, 15, ink)
+	# Places you named, and your captains' posts.
+	var places: Dictionary = m.places_of(0)
+	for key in places:
+		var p := _to_screen(r, places[key]["pos"])
+		draw_arc(p, 6.0, 0, TAU, 16, ink, 1.5)
+		draw_string(font, p + Vector2(9, 5), places[key]["name"], HORIZONTAL_ALIGNMENT_LEFT, -1, 15, ink)
 	# What you know about the enemy.
 	for key in f.intel:
 		var e: Dictionary = f.intel[key]

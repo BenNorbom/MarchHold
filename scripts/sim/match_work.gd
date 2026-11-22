@@ -22,6 +22,16 @@ func post_members(p: Post) -> Array:
 	return out
 
 
+## Everywhere an order can name: places the player named, and posts (the village is just home).
+func places_of(faction: int) -> Dictionary:
+	var out: Dictionary = fac(faction).places.duplicate()
+	for p: Post in posts.values():
+		var key := p.name.to_lower()
+		if p.faction == faction and p.mandate != "village" and not out.has(key):
+			out[key] = {"name": p.name, "pos": p.center}
+	return out
+
+
 func village_post(faction: int) -> Post:
 	for p: Post in posts.values():
 		if p.faction == faction and p.mandate == "village":
@@ -347,6 +357,9 @@ func resolve_where(c: Crew, where: String, default_dist: float = 140.0):
 			return f.mark if f.has_mark else null
 		"enemy":
 			return known_enemy_camp(c.faction)
+	if where.begins_with(Defs.PLACE):
+		var place: Dictionary = places_of(c.faction).get(where.substr(Defs.PLACE.length()), {})
+		return place.get("pos")
 	var v := Terrain.direction_vector(where)
 	var p := home_pos(c.faction) + v * default_dist
 	return p.clamp(Vector2(20, 20), Vector2(map_size - 20, map_size - 20))

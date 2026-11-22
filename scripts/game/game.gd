@@ -21,6 +21,7 @@ const Hints = preload("res://scripts/game/hints.gd")
 const Digest = preload("res://scripts/ui/digest.gd")
 
 const MENU_COLUMNS := 3
+const PEOPLE_PER_PAGE := 9      # keys 1-9, with 0 for the next page
 const SLASH_ALIASES := {
 	"build": "b", "craft": "c", "make": "c", "ledger": "l",
 	"people": "p", "crews": "p", "scouts": "s", "reports": "s",
@@ -71,6 +72,8 @@ var wall_points: Array = []
 var placed_ids: Array = []
 var menu_kind := ""
 var menu_items: Array = []
+var people_page := 0
+var people_pages := 1
 var chat_hint_command := ""
 var chat_hint_items: Array = []
 var map_open := false
@@ -328,6 +331,8 @@ func _describe_unit(u) -> String:
 		what = Defs.describe_step(c.steps[c.idx])
 	elif c and c.captain:
 		what = "captain, standing by"
+	elif m.leads_post(u):
+		what = "captain of the %s" % m.post_of(u).name
 	var gear := ""
 	if u.weapon != "" or u.bow:
 		gear = " · " + (Defs.item_name(u.weapon) if u.weapon != "" else "bow")
@@ -593,8 +598,11 @@ func _selection_label() -> String:
 func _show_selection() -> void:
 	var label := _selection_label()
 	if selected.size() == 1:
+		var held = _captains_post(selected[0])
 		var led = _captains_crew(selected[0])
-		if led:
+		if held:
+			label = m.post_label(held)
+		elif led:
 			label = m.crew_label(led)
 	hud.set_selection(("Selected: " + label + "  ·  Enter to order · Esc to clear") if not selected.is_empty() else "")
 	view.selected_ids = selected
@@ -621,6 +629,11 @@ func open_chat(prefill: String = "") -> void:
 	addressee = {}
 	address_label = "your people"
 	_prune_selection()
+	var captain_id: int = selected[0] if selected.size() == 1 else (look_unit if selected.is_empty() else -1)
+	var held = _captains_post(captain_id)
+	if held:
+		_open_post_chat(held, prefill)
+		return
 	if selected.size() == 1:
 		var led = _captains_crew(selected[0])
 		if led:
@@ -647,6 +660,19 @@ func open_chat(prefill: String = "") -> void:
 	hud.open_chat(address_label, prefill)
 
 
+func _captains_post(id: int):
+	var u = m.unit(id)
+	return m.post_of(u) if u and u.faction == 0 and m.leads_post(u) else null
+
+
+func _open_post_chat(p, prefill: String = "") -> void:
+	chat_crew = -1
+	addressee = {"post": p.id}
+	address_label = m.post_label(p)
+	cmd.move_enabled = false
+	hud.open_chat(address_label, prefill)
+
+
 ## The crew this person captains, if anyone else is in it.
 func _captains_crew(id: int):
 	var u = m.unit(id)
@@ -659,7 +685,7 @@ func _captains_crew(id: int):
 func _open_crew_chat(c, first_member: int, prefill: String = "") -> void:
 	chat_crew = c.id if c.members.size() > 1 else -1
 	chat_first_member = first_member
-	addressee = {"crew": c.id}
+	addressee = {"crew": c.id, "person": first_member}
 	address_label = m.crew_label(c)
 	cmd.move_enabled = false
 	hud.open_chat(address_label, prefill, chat_crew >= 0)
@@ -683,7 +709,7 @@ func _cycle_chat_address(backward: bool) -> void:
 	var current := members.find(addressee.get("unit", -1)) + 1
 	var next := posmod(current + (-1 if backward else 1), members.size() + 1)
 	if next == 0:
-		addressee = {"crew": c.id}
+		addressee = {"crew": c.id, "person": chat_first_member}
 		address_label = m.crew_label(c)
 	else:
 		var u = m.unit(members[next - 1])
@@ -819,8 +845,12 @@ func _on_chat(text: String) -> void:
 				hud.log_line("%s is a child and can't work yet." % u.name, "warn")
 				return
 			var c = m.crew_of(u)
-			if c and c.members.size() > 1:
-				req = {"crew": c.id}
+			var held = _captains_post(u.id)
+			if held:
+				req = {"post": held.id}
+				who = m.post_label(held)
+			elif c and c.members.size() > 1:
+				req = {"crew": c.id, "person": u.id}
 				who = m.crew_label(c)
 			else:
 				req = {"unit": u.id}
@@ -841,7 +871,11 @@ func _on_chat(text: String) -> void:
 		else:
 			hud.log_line(result["error"], "warn")
 		return
-	var parsed: Dictionary = Parser.parse(text)
+	var naming := RegEx.create_from_string("(?i)^(?:call|name) (?:this|that|here)(?: place| spot)? (.+?)[.!]*$").search(text.strip_edges())
+	if naming:
+		_name_place(naming.get_string(1).strip_edges())
+		return
+	var parsed: Dictionary = Parser.parse(text, m.places_of(0).keys())
 	if parsed.get("cancel", false):
 		if _discard_terra_request(req):
 			hud.log_line("Order dropped.", "terra", "Terra")
@@ -914,6 +948,17 @@ func _discard_terra_request(req: Dictionary) -> bool:
 	return true
 
 
+func _name_place(title: String) -> void:
+	if not Parser.can_name_place(title):
+		hud.log_line("'%s' already means something in orders. Pick another name." % title, "warn")
+		return
+	var r: Dictionary = m.name_place(0, title)
+	if r["ok"]:
+		hud.log_line("This is %s now. Orders can use the name." % title, "system")
+	else:
+		hud.log_line(r["error"], "warn")
+
+
 func _stop_orders(req: Dictionary) -> void:
 	var n: int = m.cancel(0, req if not req.is_empty() else {"all": true})
 	hud.log_line("Stopped." if n > 0 else "Nobody was doing anything.", "crew")
@@ -923,7 +968,8 @@ func _execute(req: Dictionary, steps: Array, who: String) -> void:
 	steps = m.resolve_steps(0, steps)
 	if req.get("individual", false) or req.has("units"):
 		for s in steps:
-			s["count"] = 0
+			if s["action"] != "mandate":    # there, the number is the post's size
+				s["count"] = 0
 	var needs := []
 	for i in steps.size():
 		if steps[i]["action"] == "build":
@@ -1238,10 +1284,16 @@ func _menu_craft() -> void:
 
 func _menu_select(i: int) -> void:
 	if menu_kind == "people":
-		if i >= 1 and i <= menu_items.size():
-			var c = menu_items[i - 1]
+		if i == 10 and people_pages > 1:
+			_menu_people((people_page + 1) % people_pages)
+		elif i >= 1 and i <= menu_items.size():
+			var row: Dictionary = menu_items[i - 1]
 			_close_menu()
-			_open_crew_chat(c, c.leader)
+			if row.has("post") and m.posts.has(row["post"]):
+				_open_post_chat(m.posts[row["post"]])
+			elif row.has("crew") and m.crews.has(row["crew"]):
+				var c = m.crews[row["crew"]]
+				_open_crew_chat(c, c.leader)
 		return
 	if not menu_kind in ["build", "craft"]:
 		return
@@ -1332,13 +1384,21 @@ func _menu_ledger() -> void:
 	_open_menu("ledger", "Ledger", "\n".join(lines), "Tab or Esc to close")
 
 
-func _menu_people() -> void:
-	var crews: Array = m.crews_of(0)
-	menu_items = crews
+func _menu_people(page: int = 0) -> void:
+	var rows := []
+	for p in m.posts_of(0):
+		rows.append({"post": p.id, "text": m.post_status(p)})
+	for c in m.crews_of(0):
+		if c.post < 0:      # a post's own jobs are summed up in its line
+			rows.append({"crew": c.id, "text": m.crew_status(c)})
+	people_pages = maxi(1, ceili(rows.size() / float(PEOPLE_PER_PAGE)))
+	people_page = clampi(page, 0, people_pages - 1)
+	menu_items = rows.slice(people_page * PEOPLE_PER_PAGE, (people_page + 1) * PEOPLE_PER_PAGE)
 	var lines: Array[String] = []
-	for i in crews.size():
-		var key := str(i + 1) if i < 9 else ("0" if i == 9 else "·")
-		lines.append("[url=%d][b][color=#ffd870]%s[/color][/b][/url]  %s" % [i + 1, key, m.crew_status(crews[i])])
+	for i in menu_items.size():
+		lines.append("[url=%d][b][color=#ffd870]%d[/color][/b][/url]  %s" % [i + 1, i + 1, menu_items[i]["text"]])
+	if people_pages > 1:
+		lines.append("[url=10][b][color=#ffd870]0[/color][/b][/url]  More (page %d of %d)" % [people_page + 1, people_pages])
 	var f = m.fac(0)
 	lines.append("")
 	lines.append("[color=#b8b0a0]%d idle adults, %d children. Choose a crew to talk to it, or say @Name in chat.[/color]" % [f.idle, f.children])
@@ -1409,6 +1469,9 @@ func _menu_help() -> void:
    send two scouts east · scout their camp · attack their camp · guard the mark · follow me · hold
    tame 3 horses · mount up · smelt bronze · upgrade the armory · research gunpowder · man the cannon
    promote (makes a captain) · dismiss · status · then chains steps
+   Name, run the village · take twenty and run a mine here · set up a garrison at the mark · raise an army
+   call this East Hill names the spot you just marked (R), or where you stand. Then: hold East Hill
+   A captain with a post staffs and runs it. Talk to the captain and their people carry out the order.
    join @Name moves the addressed villager or crew to that person's crew.
    Terra starts orders when you send them. For construction, you choose each site.
 
