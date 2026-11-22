@@ -35,7 +35,7 @@ func on_message(msg: Dictionary) -> void:
 		if f.age < AGE_TIPS.size():
 			_hint("age%d" % f.age, AGE_TIPS[f.age])
 	elif msg["kind"] == "alarm":
-		_hint("alarm", "'to arms' arms everyone and guards home; 'fall back' brings everyone back to camp; 'back to work' returns them to what they were doing.")
+		_hint("alarm", "'to arms' arms everyone and guards home; 'fall back' brings everyone back to camp; 'back to work' sends them to the armory to hand their weapons back (and riders their horses), then on to what they were doing.")
 	elif msg["kind"] == "report":
 		_hint("report", "Reports are kept under /s, and the field map (M) shows what your scouts saw and when.")
 

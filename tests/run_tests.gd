@@ -32,7 +32,7 @@ func _initialize() -> void:
 
 func _run_tests() -> void:
 	var only := OS.get_environment("MH_TEST")
-	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "births", "crews", "selection", "walls", "combat", "research", "shield", "parser", "schema", "chatgpt", "terra_orders", "hotkeys", "removed_buildings", "rings", "settlements", "path_queue", "rivals", "menu", "gathering", "construction", "back_to_work", "delegation", "posts", "post_orders", "places", "mandate_building", "threats", "post_review", "towers", "stables_militia", "duel"]
+	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "births", "crews", "selection", "walls", "combat", "research", "shield", "parser", "schema", "chatgpt", "terra_orders", "hotkeys", "removed_buildings", "rings", "settlements", "path_queue", "rivals", "menu", "gathering", "construction", "back_to_work", "back_to_work_returns_gear", "ram_keeps_arms", "delegation", "posts", "post_orders", "places", "mandate_building", "threats", "post_review", "towers", "stables_militia", "duel"]
 	if only == "absence":
 		tests.append(only)
 	var t0 := Time.get_ticks_msec()
@@ -377,6 +377,114 @@ func test_back_to_work() -> void:
 	r = m.command(0, {"unit": miners[0].id, "steps": [step("resume_work")]})
 	check(r["ok"] and miners[0].task == "gather" and miners[0].crew >= 0 and woodcutters[1].task == "guard", "addressed back to work only returns that crew")
 	check(Defs.validate_steps([step("resume_work"), step("gather", "wood")]) != "", "back to work can't be mixed with other steps")
+
+
+## A militia hands its gear back at the armory before it works again.
+func test_back_to_work_returns_gear() -> void:
+	var m = new_match(92)
+	var f = m.fac(0)
+	f.stock["wood"] = 200.0
+	f.gear["wood_spear"] = 40
+	f.gear["wood_shield"] = 40
+	var home: Vector2 = m.home_pos(0)
+	var site: Dictionary = {}
+	for k in 30:
+		site = m.place_site(0, "armory", home + Vector2.from_angle(k * 0.5) * (16.0 + k * 0.5), 0.0)
+		if site.get("ok", false):
+			break
+	var armory = m.bld(site["id"])
+	armory.progress = 1.0
+	m._complete(armory)
+	var adults: Array = m.idle_adults(0, home)
+	var wood_crew = m.make_crew(0, [adults[0], adults[1]])
+	m.command(0, {"crew": wood_crew.id, "steps": [step("gather", "wood")]})
+	var idler = adults[4]
+	run(m, 3.0)
+	m.command(0, {"all": true, "steps": [step("arm"), step("guard", "", 0, "home")]})
+	run(m, 40.0)
+	check(adults[0].weapon != "" and adults[0].shield != "" and idler.weapon != "", "the call to arms equips everyone")
+	check(int(f.gear["wood_spear"]) < 40, "the weapons came out of the armory")
+	var r: Dictionary = m.command(0, {"all": true, "steps": [step("resume_work")]})
+	check(r["ok"], "back to work is accepted")
+	check(adults[0].task == "disarm" and adults[0].weapon != "", "they go to the armory still holding their weapons")
+	check(m.crew_of(adults[0]) == wood_crew and wood_crew.steps[1]["subject"] == "wood", "the crew's work waits behind returning the gear")
+	check(adults[0].task != "gather", "nobody works while carrying a weapon")
+	var worked_armed := false
+	for i in int(120.0 / Defs.TICK):
+		m.tick(Defs.TICK)
+		m.events.clear()
+		for u in [adults[0], adults[1], idler]:
+			if u.task == "gather" and u.weapon != "":
+				worked_armed = true
+	check(not worked_armed, "nobody gathered while still armed")
+	check(adults[0].weapon == "" and adults[0].shield == "" and idler.weapon == "" and idler.shield == "", "they hand their gear in")
+	check(adults[0].task == "gather" and m.crew_of(adults[0]) == wood_crew, "then the woodcutters work again")
+	check(idler.task == "idle" and m.crew_of(idler) == null, "an idler returns the gear and goes back to idle")
+	check(int(f.gear["wood_spear"]) == 40 and int(f.gear["wood_shield"]) == 40, "every weapon is back in the armory (%d spears)" % int(f.gear["wood_spear"]))
+	check(wood_crew.steps.size() == 2 and wood_crew.steps[0]["action"] == "disarm", "the plan keeps the disarm step only at its start")
+	# A rider leads the horse back to the stable before working.
+	var stable_site: Dictionary = {}
+	f.age = 1
+	for k in 40:
+		stable_site = m.place_site(0, "stable", home + Vector2.from_angle(2.0 + k * 0.5) * (22.0 + k * 0.5), 0.0)
+		if stable_site.get("ok", false):
+			break
+	var stable = m.bld(stable_site["id"])
+	stable.progress = 1.0
+	m._complete(stable)
+	var rider = adults[2]
+	m.command(0, {"unit": rider.id, "individual": true, "steps": [step("guard", "", 0, "home")]})
+	rider.mounted = true
+	rider.max_hp += Defs.MOUNTED["hp_bonus"]
+	var riding_hp: float = rider.max_hp
+	m.command(0, {"unit": rider.id, "individual": true, "steps": [step("resume_work")]})
+	check(rider.task == "disarm" and rider.mounted, "a rider stays mounted until the stable")
+	run(m, 60.0)
+	check(not rider.mounted and rider.max_hp < riding_hp, "the rider gets off")
+	check(m._stable_count(stable) == 1, "the horse is back in the stable (%d)" % m._stable_count(stable))
+	# With the armory gone there is nowhere to walk to: the gear is put down on the spot.
+	m.command(0, {"unit": adults[0].id, "steps": [step("guard", "", 0, "home")]})
+	adults[0].weapon = "wood_spear"
+	adults[0].bow = true
+	adults[0].arrows = 12
+	f.gear["arrows"] = 0
+	m.remove_building(armory, "destroyed")
+	m.command(0, {"unit": adults[0].id, "steps": [step("resume_work")]})
+	run(m, 2.0)
+	check(adults[0].weapon == "" and not adults[0].bow and adults[0].arrows == 0 and int(f.gear["arrows"]) == 12, "without an armory the gear is put down where they stand")
+
+
+func test_ram_keeps_arms() -> void:
+	for type in ["ram", "hut"]:
+		var m = new_match(93)
+		var f = m.fac(0)
+		f.age = 2
+		f.researched["armory_bronze"] = true
+		f.stock["wood"] = 500.0
+		f.stock["bronze"] = 100.0
+		var home: Vector2 = m.home_pos(0)
+		m.add_building(0, "armory", home + Vector2(20, 0), 0.0, true)
+		var site: Dictionary = {}
+		for k in 40:
+			site = m.place_site(0, type, home + Vector2.from_angle(2.0 + k * 0.5) * (22.0 + k * 0.5), 0.0)
+			if site.get("ok", false):
+				break
+		check(site.get("ok", false), "a %s site can be placed" % type)
+		var builder = m.idle_adults(0, home)[0]
+		var build := step("build", type)
+		build["sites"] = [site["id"]]
+		m.command(0, {"unit": builder.id, "individual": true, "steps": [build]})
+		m.command(0, {"unit": builder.id, "individual": true, "steps": [step("guard", "", 0, "home")]})
+		builder.weapon = "wood_spear"
+		check(m.command(0, {"unit": builder.id, "individual": true, "steps": [step("resume_work")]})["ok"], "back to work on the %s" % type)
+		if type == "ram":
+			check(builder.task == "build" and builder.weapon == "wood_spear", "a field ram is built under arms")
+			run(m, 10.0)
+			check(builder.weapon == "wood_spear", "the ram builder keeps the spear while working")
+		else:
+			check(builder.task == "disarm", "a hut builder hands the spear in first")
+			run(m, 30.0)
+			check(builder.weapon == "", "the hut builder works unarmed")
 
 
 func chat_game(m):

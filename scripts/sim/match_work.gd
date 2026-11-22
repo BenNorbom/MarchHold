@@ -400,12 +400,17 @@ func resume_work(faction: int, only: Array = []) -> int:
 	var back := 0
 	for g in groups.values():
 		var us: Array = g["units"]
-		var steps: Array = g["entry"]["steps"]
+		var steps: Array = g["entry"]["steps"].duplicate(true)
 		back += us.size()
-		if steps.is_empty():
+		# Nobody works with a weapon in hand or on horseback: gear goes back to the armory, horses to the stable.
+		# The one exception is a field ram, which is built under arms.
+		var carrying := not _keeps_arms(steps) and us.any(func(u): return _needs_stowing(u))
+		if steps.is_empty() and not carrying:
 			for u in us:
 				release_member(u)
 			continue
+		if carrying:
+			steps.push_front({"action": "disarm", "subject": "", "count": 0, "amount": 0, "where": "", "sites": []})
 		var crew := crew_of(us[0])
 		var same := crew != null and crew.members.size() == us.size()
 		if same:
@@ -417,8 +422,21 @@ func resume_work(faction: int, only: Array = []) -> int:
 				release_member(u)
 			crew = make_crew(faction, us)
 		crew.loop = bool(g["entry"]["loop"])
-		start_plan(crew, steps.duplicate(true))
+		start_plan(crew, steps)
 	return back
+
+
+## Whether the work being returned to is done under arms. Only the job in hand counts:
+## a ram that is already finished doesn't let the crew carry weapons to the next job.
+func _keeps_arms(steps: Array) -> bool:
+	for s: Dictionary in steps:
+		if not s["action"] in ["build", "resume"]:
+			return false
+		for sid in s.get("sites", []):
+			var b := bld(sid)
+			if b != null and not b.dead and not b.complete:
+				return bool(Defs.BUILDINGS.get(b.type, {}).get("keeps_arms", false))
+	return false
 
 
 ## The rival drops its unstarted sites. A player's sites wait to be resumed.
@@ -636,6 +654,9 @@ func _prepare_step(c: Crew, s: Dictionary) -> String:
 			c.state["bld"] = arm.id
 			if subj != "" and int(f.gear.get(subj, 0)) <= 0:
 				return "there are no %s in the armory. Make some with /c." % Defs.item_name(subj, 2)
+		"disarm":
+			var arm := nearest_building(c.faction, crew_center(c), ["armory"])
+			c.state["bld"] = arm.id if arm != null else -1
 		"mount":
 			var st := _stable_with_horse(c.faction, crew_center(c))
 			if st == null:
@@ -992,7 +1013,8 @@ func _advance(c: Crew) -> void:
 func _finish_plan(c: Crew) -> void:
 	c.done = true
 	if c.loop and not c.steps.is_empty():
-		c.idx = 0
+		# Returning gear is a one-off at the start of the plan, not part of the loop.
+		c.idx = 1 if c.steps.size() > 1 and c.steps[0]["action"] == "disarm" else 0
 		c.done = false
 		_begin_step(c)
 		return
@@ -1157,7 +1179,7 @@ func _step_done(c: Crew, s: Dictionary) -> bool:
 		"tame":
 			var amt := int(s.get("amount", 0))
 			return c.state.get("full", false) or (amt > 0 and c.state["delivered"] >= amt)
-		"arm", "mount", "man", "scout", "recall":
+		"arm", "disarm", "mount", "man", "scout", "recall":
 			for id in c.members:
 				var u := unit(id)
 				if u and not u.dead and u.phase != "done":
@@ -1408,6 +1430,8 @@ func update_worker(u: Unit, dt: float) -> void:
 			_do_upgrade(u, c, dt)
 		"arm":
 			_do_arm(u, c, s, dt)
+		"disarm":
+			_do_disarm(u, c, dt)
 		"mount":
 			_do_mount(u, c, dt)
 		"man":
@@ -1957,6 +1981,66 @@ func _ride_after_arming(u: Unit, c: Crew, dt: float) -> void:
 		u.hp += Defs.MOUNTED["hp_bonus"]
 		_equip_best(u, fac(u.faction))   # a lance beats a spear on horseback
 	u.phase = "done"
+
+
+## Walk to the armory and hand back everything carried, then a rider leads the horse back
+## to a stable. With no armory left the gear is put down here; with no stable room the horse
+## is let go.
+func _do_disarm(u: Unit, c: Crew, dt: float) -> void:
+	if u.phase == "done":
+		u.anim = Anim.IDLE
+		return
+	if u.phase != "horse":
+		var b := bld(c.state.get("bld", -1))
+		if _has_gear(u) and b != null and not b.dead and not go_to_building(u, b, dt):
+			return
+		_stow_gear(u, fac(u.faction))
+		u.phase = "horse"
+	if u.mounted:
+		var st := _stable_with_room(u.faction, u.pos)
+		if st != null and not go_to_building(u, st, dt):
+			return
+		_dismount(u, st)
+	u.phase = "done"
+
+
+func _has_gear(u: Unit) -> bool:
+	return u.weapon != "" or u.shield != "" or u.armor != "" or u.bow or u.arrows > 0
+
+
+## Anyone with gear or a horse has something to hand back before working.
+func _needs_stowing(u: Unit) -> bool:
+	return _has_gear(u) or u.mounted
+
+
+## Get off: the horse goes into the stable `st`, or runs wild if there is none.
+func _dismount(u: Unit, st: Building) -> void:
+	u.mounted = false
+	u.max_hp -= Defs.MOUNTED["hp_bonus"]
+	u.hp = minf(u.hp, u.max_hp)
+	var h := spawn_unit(u.faction, "horse", st.pos if st != null else u.pos + Vector2(1.5, 0))
+	if st != null:
+		h.stable = st.id
+	else:
+		h.faction = -1
+		h.herd = -1
+		h.goal = u.pos
+
+
+## Everything a person carries goes back into the faction's stock.
+func _stow_gear(u: Unit, f: Faction) -> void:
+	for item in [u.weapon, u.shield, u.armor]:
+		if item != "":
+			f.gear[item] = int(f.gear.get(item, 0)) + 1
+	if u.bow:
+		f.gear["bow"] = int(f.gear.get("bow", 0)) + 1
+	f.gear["arrows"] = int(f.gear.get("arrows", 0)) + u.arrows
+	u.weapon = ""
+	u.shield = ""
+	u.armor = ""
+	u.bow = false
+	u.arrows = 0
+	emit({"type": "unit", "id": u.id})
 
 
 func _equip(u: Unit, f: Faction, item: String) -> bool:

@@ -107,7 +107,7 @@ const BUILDINGS := {
 		"size": Vector2(6, 6), "workers": 3, "desc": "Bronze ore + coal -> bronze. Upgrades to an iron furnace."},
 	# Built in the field by villagers. When finished the site turns into a free battering ram (needs a crew, see "man").
 	# needs: research required first. becomes: the engine it turns into.
-	# keeps_arms: builders do NOT have to put their weapons down for this. See MERGE_NOTES.md: the stow-gear branch must honour it.
+	# keeps_arms: builders do NOT have to put their weapons down for this, even on 'back to work'.
 	"ram": {"name": "Battering ram", "age": 2, "needs": "armory_bronze", "cost": {"wood": 40, "bronze": 5}, "work": 60,
 		"hp": 150, "size": Vector2(3, 6.5), "becomes": "ram", "keeps_arms": true,
 		"desc": "Villagers build a ram in the field. Needs the bronze armory."},
@@ -509,6 +509,8 @@ static func describe_step(s: Dictionary) -> String:
 			txt = ("make %d %s" % [amount, item_name(subj, amount)]) if amount > 0 else ("make a batch of " + item_name(subj, 2))
 		"arm":
 			txt = "arm with " + item_name(subj, 2) if subj != "" else "arm with the best gear in the armory"
+		"disarm":
+			txt = "return their gear to the armory and horses to the stable"
 		"mount":
 			txt = "take horses from the stable"
 		"man":
