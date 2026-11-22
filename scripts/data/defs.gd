@@ -260,12 +260,12 @@ const HOTKEYS := {
 
 # --- Orders ----------------------------------------------------------------------
 const ACTIONS := ["gather", "build", "resume", "upgrade", "craft", "arm", "mount", "man", "smelt", "research", "tame",
-	"scout", "guard", "attack", "follow", "hold", "recall", "promote", "mandate", "reserve", "forbid", "allow", "posture", "dismiss", "status", "resume_work"]
+	"scout", "guard", "attack", "follow", "hold", "recall", "promote", "mandate", "reserve", "forbid", "allow", "posture", "dismiss", "status", "resume_work", "free", "assign"]
 ## Orders that pull people off their work. The sim remembers the work they leave so "back to work" can restore it.
 const MILITARY_ACTIONS := ["arm", "mount", "man", "scout", "guard", "attack", "follow", "hold", "recall"]
 const WORK_ACTIONS := ["gather", "build", "upgrade", "craft", "smelt", "research", "tame"]
 # Settings for a captain. They take effect at once and can only be combined with each other.
-const SETTINGS := ["mandate", "reserve", "forbid", "allow", "posture"]
+const SETTINGS := ["mandate", "reserve", "forbid", "allow", "posture", "assign"]
 const WHERE := ["", "here", "marked", "home", "enemy", "north", "northeast", "east", "southeast",
 	"south", "southwest", "west", "northwest"]
 const PLACE := "place:"       # a where may also be PLACE + a place the player named
@@ -408,6 +408,11 @@ static func subjects_for(action: String) -> Array[String]:
 			out = buildable_ids()
 		"posture":
 			out = ["hold", "fall_back"]
+		"free", "assign":
+			# Where the people come from: a resource they are gathering, or "" for anyone free.
+			out.append("")
+			for k in GATHER:
+				out.append(k)
 		_:
 			out = [""]
 	return out
@@ -529,6 +534,10 @@ static func describe_step(s: Dictionary) -> String:
 			txt = "build a %s when needed" % building_name(subj).to_lower()
 		"posture":
 			txt = "hold at all costs" if subj == "hold" else "fall back if outnumbered"
+		"free":
+			txt = "take %s off %s" % ["everyone" if count == 0 else str(count), GATHER.get(subj, {}).get("name", "their work") if subj != "" else "their work"]
+		"assign":
+			txt = "take on %s %s" % ["everyone free" if count == 0 else "%d more" % count, "people" if subj == "" else "from " + str(GATHER.get(subj, {}).get("name", subj))]
 		"dismiss":
 			txt = "disband the crew"
 		"status":

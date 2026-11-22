@@ -263,6 +263,66 @@ func _pull_workers(faction: int, p: Vector2, n: int, exclude: Crew) -> Array:
 	return out
 
 
+## Everyone in the faction's crews who is gathering `subject` ("" = anything), latest joiners first.
+## Captains' own loose crews are left alone. Work a captain handed out counts: the order overrides it.
+func gatherers_of(faction: int, subject: String) -> Array:
+	var out := []
+	for c: Crew in crews.values():
+		if c.faction != faction or c.captain or c.idx >= c.steps.size():
+			continue
+		var s: Dictionary = c.steps[c.idx]
+		if s["action"] != "gather" or (subject != "" and s["subject"] != subject):
+			continue
+		for i in range(c.members.size() - 1, -1, -1):
+			var u := unit(c.members[i])
+			if u and not u.dead and not u.child:
+				out.append(u)
+	return out
+
+
+## "Take n people off wood": they stop and are free again. n = 0 means everyone gathering it.
+func free_workers(faction: int, subject: String, n: int) -> Array:
+	var taken := gatherers_of(faction, subject)
+	if n > 0:
+		taken = taken.slice(0, n)
+	for u: Unit in taken:
+		_remember_worker(u)
+		release_member(u)
+	return taken
+
+
+## "Put n more people under this captain": free hands first, then people on the named work.
+## They join the post, so the captain gives them whatever job is short, within about a second.
+func assign_to_post(p: Post, subject: String, n: int) -> int:
+	var f := p.faction
+	var pool := []
+	if subject == "":
+		for u in idle_adults(f, p.center):
+			if u.post != p.id:
+				pool.append(u)
+	if n == 0 and subject == "":
+		pass      # everyone who is free
+	else:
+		for u in gatherers_of(f, subject):
+			if u.post != p.id and not pool.has(u):
+				pool.append(u)
+	if n > 0:
+		pool = pool.slice(0, n)
+	put_in_post(p, pool)
+	return pool.size()
+
+
+## Make these people members of the post, ending whatever they were doing for someone else.
+func put_in_post(p: Post, people: Array) -> void:
+	for u: Unit in people:
+		if u.crew >= 0:
+			_remember_worker(u)
+			release_member(u)
+		join_post(p, u)
+	if p.target > 0:
+		p.target = maxi(p.target, p.members.size())
+
+
 func _is_food_worker(u: Unit) -> bool:
 	var c := crew_of(u)
 	if c == null or c.idx >= c.steps.size():

@@ -855,6 +855,19 @@ func _captains_post(id: int):
 	return m.post_of(u) if u and u.faction == 0 and m.leads_post(u) else null
 
 
+## The post whose captain a message names, by full name or first name. null when none.
+func _post_named_in(text: String):
+	var low := " " + Parser.normalize(text).strip_edges() + " "
+	for p in m.posts_of(0):
+		var lead = m.unit(p.captain)
+		if lead == null:
+			continue
+		var full: String = lead.name.to_lower()
+		if low.contains(" " + full + " ") or low.contains(" " + full.get_slice(" ", 0) + " "):
+			return p
+	return null
+
+
 func _open_post_chat(p, prefill: String = "") -> void:
 	chat_crew = -1
 	addressee = {"post": p.id}
@@ -1083,6 +1096,16 @@ func _on_chat(text: String) -> void:
 		if destination == null:
 			hud.log_line(named_dest["error"] if named_dest["error"] != "" else "Use 'join @Name' with the name of someone in the destination crew.", "warn")
 			return
+		var dest_post = _captains_post(destination.id)
+		if dest_post and not req.is_empty():
+			# Joining a captain means joining their post, and so whatever they are doing.
+			var joiners: Array = m.people_in(0, req)
+			if joiners.is_empty():
+				hud.log_line("Choose who should join first.", "warn")
+				return
+			m.put_in_post(dest_post, joiners.filter(func(jp): return jp.id != destination.id))
+			hud.log_line("%s joined %s." % [who.trim_suffix(" alone"), m.post_label(dest_post)], "crew")
+			return
 		var result: Dictionary = m.reassign_crew(0, req, destination.id)
 		if result["ok"]:
 			hud.log_line("%s joined %s." % [who.trim_suffix(" alone"), m.crew_label(m.crews[result["crew"]])], "crew")
@@ -1093,6 +1116,14 @@ func _on_chat(text: String) -> void:
 	if naming:
 		_name_place(naming.get_string(1).strip_edges())
 		return
+	var give := Parser.assign_in(text)
+	if not give.is_empty():
+		# "Add 3 villagers to Captain Hal": they join his post and take up whatever he needs done.
+		var named_cap: Dictionary = m.find_person(0, give["name"], true)
+		var held = _captains_post(named_cap["unit"].id) if named_cap["unit"] != null else null
+		if held:
+			_execute({"post": held.id}, [{"action": "assign", "subject": give["subject"], "count": give["count"], "amount": 0, "where": ""}], m.post_label(held))
+			return
 	var parsed: Dictionary = Parser.parse(text, m.places_of(0).keys())
 	if parsed.get("cancel", false):
 		if _discard_terra_request(req):
@@ -1158,7 +1189,17 @@ func _on_terra(result: Dictionary) -> void:
 			if err != "":
 				hud.log_line("That plan can't be done yet: " + err, "warn")
 				return
-			_execute(ctx["req"], steps, ctx["who"], site)
+			var req: Dictionary = ctx["req"]
+			var who: String = ctx["who"]
+			if steps[0]["action"] == "assign" and not req.has("post"):
+				# "Add 3 to Captain Hal" names the captain in the message, not the address.
+				var named_post = _post_named_in(ctx["text"])
+				if named_post == null:
+					hud.log_line("Say which captain should take them on, e.g. 'add 3 villagers to Captain Hal'.", "warn")
+					return
+				req = {"post": named_post.id}
+				who = m.post_label(named_post)
+			_execute(req, steps, who, site)
 		"cancel":
 			_stop_orders(ctx["req"])
 
@@ -1214,7 +1255,7 @@ func _execute(req: Dictionary, steps: Array, who: String, site: int = -1) -> voi
 			s["subject"] = found[0].type
 	if req.get("individual", false) or req.has("units"):
 		for s in steps:
-			if s["action"] != "mandate":    # there, the number is the post's size
+			if not s["action"] in ["mandate", "free", "assign"]:    # there, the number is a head count
 				s["count"] = 0
 	var needs := []
 	for i in steps.size():

@@ -210,6 +210,9 @@ static func count_in(s: String) -> int:
 			return n
 		if i > 0 and words[i - 1] in ["send", "take", "with", "use", "get", "need", "arm"]:
 			return n
+		# "put 2 on stone", "move 3 to wood": a number of people, since the next word isn't a thing.
+		if i > 0 and words[i - 1] in ["put", "move", "switch", "shift", "swap"] and nxt in ["on", "onto", "to", "into", "off", "from"]:
+			return n
 	return 0
 
 
@@ -281,6 +284,123 @@ static func parse(text: String, places: Array = []) -> Dictionary:
 	return out
 
 
+const PEOPLE_WORDS := ["people", "person", "men", "man", "villagers", "villager", "workers", "worker", "hands", "folks", "peasants", "peasant"]
+const ASSIGN_VERBS := ["add", "send", "give", "assign", "attach", "allocate", "transfer", "move", "put", "post"]
+
+
+## The gather subject named at word i, and how many words it takes: [subject, span] or [].
+static func _gather_at(words: PackedStringArray, i: int) -> Array:
+	for span in [2, 1]:
+		if i + span > words.size():
+			continue
+		var phrase := " ".join(words.slice(i, i + span))
+		for pair in GATHER_WORDS:
+			var key: String = pair[0]
+			if phrase == key or phrase == key + "s" or phrase == key + "es":
+				return [] if pair[1].contains(":generic") else [pair[1], span]
+	return []
+
+
+## "take 2 people off wood and put them on stone", "move 3 from stone to wood":
+## [free <from> n, gather <to>], or [] when the sentence doesn't name both.
+static func transfer_in(s: String) -> Array:
+	var words := s.strip_edges().split(" ", false)
+	var src := ""
+	var dst := ""
+	var i := 0
+	while i < words.size():
+		var hit := _gather_at(words, i)
+		if hit.is_empty():
+			i += 1
+			continue
+		# The word just before (or two before, "off the wood") says what the resource is for.
+		var marker := ""
+		for back in [1, 2]:
+			if i - back < 0:
+				break
+			var w: String = words[i - back]
+			if w in ["off", "from"]:
+				marker = "src"
+				break
+			if w in ["on", "onto", "to", "into", "for"]:
+				marker = "dst"
+				break
+			if not w in ["the", "some", "all", "of"]:
+				break
+		if marker == "src" and src == "":
+			src = hit[0]
+		elif marker == "dst" and src != "" and dst == "" and hit[0] != src:
+			dst = hit[0]
+		i += hit[1]
+	if src == "" or dst == "":
+		return []
+	var n := 0 if (s.contains(" everyone ") or s.contains(" everybody ") or s.contains(" all of them ") or s.contains(" all the ")) else number_in(s)
+	return [_step("free", src, 0, "", n), _step("gather", dst)]
+
+
+## "add 3 villagers to Captain Hal", "give Hal two more men", "reinforce Hal":
+## {count, subject, name} where name is the text to look for the captain in, or {}.
+static func assign_in(text: String) -> Dictionary:
+	var s := normalize(text)
+	var lead := RegEx.create_from_string("^ (?:(?:please|now|ok|okay|can you|could you|i want you to|i need you to|let's|go ahead and) )+").search(s)
+	if lead:
+		s = " " + s.substr(lead.get_end())
+	var words := s.strip_edges().split(" ", false)
+	if words.size() < 2:
+		return {}
+	var verb: String = words[0]
+	var count_all: bool = s.contains(" everyone ") or s.contains(" all the ") or s.contains(" every ") or s.contains(" all free ") or s.contains(" all idle ")
+	if verb == "reinforce" or verb == "bolster":
+		var tail := " ".join(words.slice(1)).trim_prefix("captain ").trim_prefix("cap ")
+		return {"count": 0 if count_all else _assign_count(s), "subject": "", "name": tail}
+	if not verb in ASSIGN_VERBS:
+		return {}
+	var people_at := -1
+	for k in words.size():
+		if words[k] in PEOPLE_WORDS or words[k] in ["them", "more"]:
+			people_at = k
+			break
+	if people_at < 0:
+		return {}
+	# "give Hal 3 more men": the name comes before the people.
+	if verb == "give" and not words.slice(1, people_at).is_empty() and not (words[1] in ["a", "an", "one", "two", "three", "four", "five", "six", "some", "more"] or words[1].is_valid_int()):
+		var name_part := " ".join(words.slice(1, people_at)).trim_prefix("captain ").trim_prefix("cap ")
+		# Drop the number and filler words at the end of the name.
+		var bits := name_part.split(" ", false)
+		while not bits.is_empty() and (bits[-1].is_valid_int() or bits[-1] in ["a", "an", "more", "extra", "another", "new", "free", "idle", "spare", "some", "two", "three", "four", "five", "six", "one"]):
+			bits.remove_at(bits.size() - 1)
+		if bits.is_empty():
+			return {}
+		return {"count": 0 if count_all else _assign_count(s), "subject": "", "name": " ".join(bits)}
+	var marker_at := -1
+	for k in range(people_at + 1, words.size()):
+		if words[k] in ["to", "under", "with", "into", "onto"]:
+			marker_at = k
+			break
+	if marker_at < 0 or marker_at + 1 >= words.size():
+		return {}
+	var middle := " " + " ".join(words.slice(0, marker_at)) + " "
+	var subject := ""
+	for key in [" from ", " off "]:
+		if middle.contains(key):
+			subject = find_in(" " + middle.substr(middle.find(key) + key.length()), GATHER_WORDS)
+			if subject.contains(":generic"):
+				subject = ""
+	var name := " ".join(words.slice(marker_at + 1)).trim_prefix("the ").trim_prefix("captain ").trim_prefix("cap ")
+	return {"count": 0 if (count_all and subject == "") else _assign_count(middle), "subject": subject, "name": name}
+
+
+## How many people an "add people to a captain" order means. One for "a villager", two
+## when no number is given, and the number said otherwise.
+static func _assign_count(s: String) -> int:
+	var n := number_in(s)
+	if n > 0:
+		return n
+	if s.contains(" a villager ") or s.contains(" a man ") or s.contains(" a worker ") or s.contains(" a person ") or s.contains(" another ") or s.contains(" one more "):
+		return 1
+	return 2
+
+
 static func _parse(text: String) -> Dictionary:
 	var s := normalize(text)
 	var out := {"ok": false, "steps": [], "all": false, "cancel": false, "confirm": false}
@@ -303,6 +423,12 @@ static func _parse(text: String) -> Dictionary:
 		out["steps"] = settings
 		out["all"] = false
 		out["ok"] = Defs.validate_steps(_clean(settings)) == ""
+		return out
+	var moved := transfer_in(s)
+	if not moved.is_empty():
+		out["steps"] = moved
+		out["all"] = false
+		out["ok"] = Defs.validate_steps(_clean(moved)) == ""
 		return out
 	# Split into sequential parts.
 	var parts: Array[String] = []
@@ -356,6 +482,14 @@ const VERBS := ["gather", "collect", "chop", "cut", "harvest", "get", "fetch", "
 	"stay", "follow", "come", "fall", "retreat", "go", "return", "recall", "mount", "ride", "man", "crew", "tame", "catch",
 	"round", "bring", "smelt", "research", "study", "upgrade", "promote", "dismiss", "disband", "report", "status", "keep", "start", "stop",
 	"continue", "resume", "finish"]
+
+
+## "put 2 on stone", "move them to wood", "switch three onto berries".
+static func _moves_people_to(p: String) -> bool:
+	for verb in ["put", "move", "switch", "shift", "swap", "send", "set"]:
+		if has_word(p, verb):
+			return p.contains(" on ") or p.contains(" onto ") or p.contains(" to ") or p.contains(" into ")
+	return false
 
 
 static func _starts_with_verb(p: String) -> bool:
@@ -458,7 +592,7 @@ static func _parse_part(p: String, out: Dictionary):
 		return st
 	# Gathering.
 	var res := find_in(p, GATHER_WORDS)
-	var verbish := has_word(p, "gather") or has_word(p, "collect") or has_word(p, "chop") or has_word(p, "cut") or has_word(p, "harvest") or has_word(p, "get") or has_word(p, "fetch") or has_word(p, "mine") or has_word(p, "quarry") or has_word(p, "pick") or has_word(p, "hunt") or has_word(p, "farm") or p.contains("work the") or has_word(p, "keep") or p.contains("go for") or has_word(p, "bring")
+	var verbish := has_word(p, "gather") or has_word(p, "collect") or has_word(p, "chop") or has_word(p, "cut") or has_word(p, "harvest") or has_word(p, "get") or has_word(p, "fetch") or has_word(p, "mine") or has_word(p, "quarry") or has_word(p, "pick") or has_word(p, "hunt") or has_word(p, "farm") or p.contains("work the") or has_word(p, "keep") or p.contains("go for") or has_word(p, "bring") or _moves_people_to(p)
 	if res != "" and verbish:
 		if has_word(p, "hunt"):
 			res = "hunt"

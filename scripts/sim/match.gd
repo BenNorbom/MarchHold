@@ -451,6 +451,31 @@ func orderable_unit(faction: int, id: int) -> Unit:
 	return null
 
 
+## The villagers an address means: a selection, one person, a crew, or a post's members.
+func people_in(faction: int, req: Dictionary) -> Array:
+	var out := []
+	var ids := []
+	if req.has("units"):
+		ids = req["units"]
+	elif req.has("post"):
+		var p: Post = posts.get(int(req["post"]))
+		if p and p.faction == faction:
+			ids = p.members
+	elif req.get("individual", false) and req.has("unit"):
+		ids = [req["unit"]]
+	elif req.has("crew") or req.has("unit"):
+		var c := _addressed_crew(faction, req)
+		if c:
+			ids = c.members
+		elif req.has("unit"):
+			ids = [req["unit"]]
+	for id in ids:
+		var u := orderable_unit(faction, int(id))
+		if u and not out.has(u):
+			out.append(u)
+	return out
+
+
 func _addressed_crew(faction: int, req: Dictionary) -> Crew:
 	var c: Crew = crews.get(int(req["crew"])) if req.has("crew") else null
 	if not req.has("crew") and req.has("unit"):
@@ -776,6 +801,11 @@ func settle(faction: int, req: Dictionary, steps: Array) -> Dictionary:
 		if p == null:
 			return {"ok": false, "error": "Say which captain: look at them, or start with their name."}
 		match s["action"]:
+			"assign":
+				var added := assign_to_post(p, subj, int(s["count"]))
+				if added == 0:
+					return {"ok": false, "error": "%s: there's nobody %s to take on." % [post_label(p), "free" if subj == "" else "on " + str(Defs.GATHER[subj]["name"])]}
+				post(faction, "%d joined %s. They'll take up whatever work is short." % [added, post_label(p)], "info")
 			"forbid":
 				p.forbid[subj] = true
 			"allow":
@@ -811,6 +841,23 @@ func command(faction: int, req: Dictionary) -> Dictionary:
 		var e2 := step_problem(faction, s)
 		if e2 != "":
 			return {"ok": false, "error": e2}
+	if steps[0]["action"] == "free":
+		# "Take 2 off wood" happens at once; what follows (put them on stone) goes to exactly those people.
+		var source: String = steps[0]["subject"]
+		var rest := steps.slice(1)
+		if not rest.is_empty():
+			var why := first_step_problem(faction, rest[0])
+			if why != "":
+				return {"ok": false, "error": why}
+		var freed := free_workers(faction, source, int(steps[0]["count"]))
+		var from_what := "their work" if source == "" else "gathering " + str(Defs.GATHER[source]["name"])
+		if freed.is_empty():
+			return {"ok": false, "error": "Nobody is %s." % ("working" if source == "" else from_what)}
+		post(faction, "%d taken off %s." % [freed.size(), from_what.trim_prefix("gathering ")], "info")
+		if rest.is_empty():
+			return {"ok": true, "crews": []}
+		steps = rest
+		req = {"units": freed.map(func(u): return u.id)}
 	if steps[0]["action"] in Defs.SETTINGS:
 		return settle(faction, req, steps)
 	var laid: Array = []
@@ -1486,6 +1533,11 @@ func brief(faction: int, addressed: String, crew_id: int, individual: bool = fal
 			sighted.append("%s %d m %s of home" % [Defs.building_name(e["type"]).to_lower(), int((e["pos"] - home_pos(faction)).length()), Terrain.compass_name(e["pos"] - home_pos(faction))])
 	if not sighted.is_empty():
 		known["enemy_buildings_seen"] = sighted.slice(0, 6)
+	var workers := {"idle": idle_adults(faction, home_pos(faction)).size()}
+	for u: Unit in gatherers_of(faction, ""):
+		var task: Dictionary = crew_of(u).steps[crew_of(u).idx]
+		workers[task["subject"]] = int(workers.get(task["subject"], 0)) + 1
+	known["workers"] = workers
 	var reports := []
 	for r in f.reports.slice(0, 3):
 		reports.append("%s (%d s ago)" % [r["text"], int(t - float(r["t"]))])
