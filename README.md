@@ -29,7 +29,7 @@ Start with **The Founding** (tutorial) from the main menu. Terra, your steward, 
 | Left mouse | Select the villager you're looking at (Shift+click adds or drops more); otherwise strike, or with a bow hold to draw and release to shoot |
 | Right mouse | Hold to raise your shield. While placing: finish a wall or cancel |
 | Q | Switch between bow and weapon (rotates a building while placing) |
-| E / G | Talk to the person you look at; take gear at the armory |
+| E / G | E talks or uses a stone tower door. E or G takes gear at the armory. |
 | F | Take or leave a horse at your stable |
 | R | Mark the spot you're looking at (orders can say "there" or "the mark") |
 | Tab | Cycle between the whole crew and individual members in chat. Open the ledger outside chat. |
@@ -72,6 +72,8 @@ promote · dismiss · status · cancel
 ```
 
 Walls are placed post to post: choose a palisade or stone wall, click each post, press Enter to finish.
+
+Mark a finished stone tower with **R** and tell your archers to `guard the mark`. Up to three will walk to the door and take rooftop posts. They shoot farther from the roof, and the stone parapet shelters them. Press **E** at the door to join them, then **E** on the roof to return to the door.
 
 ### Terra (optional)
 

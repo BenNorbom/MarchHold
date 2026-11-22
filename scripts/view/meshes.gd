@@ -352,16 +352,38 @@ func _stone_gate(g: Geo, length: float) -> float:
 
 func _tower(g: Geo) -> float:
 	g.slot("stone", m("stone"))
-	g.cylinder(Vector3(0, -0.3, 0), Vector3(0, 9.0, 0), 2.45, 2.2, 14, false, 1.0, 0.0)
-	g.cylinder(Vector3(0, 9.0, 0), Vector3(0, 9.6, 0), 2.55, 2.55, 14, true, 1.0)
-	for i in 8:
-		var a := TAU * i / 8.0
-		g.obox(Vector3(cos(a) * 2.3, 10.05, sin(a) * 2.3), Vector3(0.7, 0.9, 0.5), Basis(Vector3.UP, -a + PI * 0.5), 1.0)
-	_door(g, 0, 2.2, 1.0, 2.0)
+	var deck := Defs.TOWER_DECK_HEIGHT
+	var radius := Defs.TOWER_DECK_RADIUS
+	g.cylinder(Vector3(0, -0.3, 0), Vector3(0, deck - 0.6, 0), 2.45, 2.2, 16, false, 1.0)
+	g.cylinder(Vector3(0, deck - 0.6, 0), Vector3(0, deck, 0), radius, radius, 16, true, 1.0)
+	for piece in tower_parapet():
+		var xf: Transform3D = piece[0]
+		g.obox(xf.origin, piece[1], xf.basis, 1.0)
+	for x in [-0.76, 0.76]:
+		g.box(Vector3(x, 1.04, 2.49), Vector3(0.28, 2.25, 0.34), 1.0)
+	g.box(Vector3(0, 2.17, 2.49), Vector3(1.8, 0.32, 0.38), 1.0)
+	g.box(Vector3(0, 0.02, 2.58), Vector3(1.55, 0.22, 0.70), 1.0)
+	_door(g, 0, 2.43, 1.25, 2.1)
 	g.slot("darkwood", m("darkwood"))
+	g.box(Vector3(0, deck + 0.025, 0), Vector3(0.92, 0.05, 1.15), 1.0)
 	for y in [4.0, 6.5]:
 		g.box(Vector3(0, y, 2.25), Vector3(0.25, 0.7, 0.12), 1.0)
-	return 10.5
+	return deck + Defs.TOWER_PARAPET_HEIGHT + Defs.TOWER_MERLON_HEIGHT
+
+
+## The parapet mesh and its collision shapes use the same stone blocks.
+func tower_parapet() -> Array:
+	var pieces := []
+	for i in Defs.TOWER_PARAPET_SIDES:
+		var a := TAU * i / Defs.TOWER_PARAPET_SIDES
+		var center := Vector3(cos(a), 0, sin(a)) * Defs.TOWER_PARAPET_RADIUS
+		var basis := Basis(Vector3.UP, PI * 0.5 - a)
+		center.y = Defs.TOWER_DECK_HEIGHT + Defs.TOWER_PARAPET_HEIGHT * 0.5
+		pieces.append([Transform3D(basis, center), Vector3(Defs.TOWER_PARAPET_WIDTH, Defs.TOWER_PARAPET_HEIGHT, Defs.TOWER_PARAPET_THICKNESS)])
+		if i % 2 == 0:
+			center.y = Defs.TOWER_DECK_HEIGHT + Defs.TOWER_PARAPET_HEIGHT + Defs.TOWER_MERLON_HEIGHT * 0.5
+			pieces.append([Transform3D(basis, center), Vector3(Defs.TOWER_PARAPET_WIDTH, Defs.TOWER_MERLON_HEIGHT, Defs.TOWER_PARAPET_THICKNESS)])
+	return pieces
 
 
 func _house(g: Geo, size: Vector2) -> float:
@@ -525,7 +547,7 @@ func banner_spot(type: String, size: Vector2 = Vector2.ZERO) -> Array:
 		"stone_gate":
 			return [Vector3(0.35 - hx, 5.0, 0), 2.4, 1.0]
 		"tower":
-			return [Vector3(0, 9.4, 0), 3.6, 1.4]
+			return [Vector3(0, Defs.TOWER_DECK_HEIGHT, -1.85), 3.6, 1.4]
 		"house":
 			return [Vector3(0.4 - hx, 6.8, 0), 2.0, 0.9]
 		"granary":

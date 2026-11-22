@@ -110,6 +110,7 @@ class Building:
 	var alarm_t := -99.0
 	var waiting_msg_t := -99.0
 	var line := -1
+	var archer_posts: Array[int] = []
 
 
 class Crew:
@@ -355,6 +356,9 @@ func add_building(faction: int, type: String, p: Vector2, rot: float, complete: 
 		b.size = Vector2(d["length"], d["thick"])
 	else:
 		b.size = d["size"]
+	if type == "tower":
+		b.archer_posts.resize(d["archers"])
+		b.archer_posts.fill(-1)
 	b.max_hp = float(d["hp"])
 	b.hp = b.max_hp * (1.0 if complete else 0.05)
 	if complete:
@@ -382,7 +386,74 @@ func remove_building(b: Building, reason: String = "") -> void:
 		if u.enemy_bld == b.id:
 			u.enemy_bld = -1
 		if u.in_tower == b.id:
-			u.in_tower = -1
+			leave_tower(u)
+
+
+func building_base_height(b: Building) -> float:
+	var mid := terrain.height_at(b.pos.x, b.pos.y)
+	var lo := mid
+	var ax := Vector2.from_angle(b.rot) * b.size.x * 0.5
+	var az := Vector2.from_angle(b.rot + PI * 0.5) * b.size.y * 0.5
+	for p in [b.pos + ax + az, b.pos + ax - az, b.pos - ax + az, b.pos - ax - az]:
+		lo = minf(lo, terrain.height_at(p.x, p.y))
+	return lerpf(lo, mid, 0.35)
+
+
+func unit_floor_y(u: Unit) -> float:
+	var tower := bld(u.in_tower)
+	if tower != null and not tower.dead:
+		return building_base_height(tower) + Defs.TOWER_DECK_HEIGHT
+	return terrain.height_at(u.pos.x, u.pos.y)
+
+
+func tower_door(b: Building) -> Vector2:
+	return b.pos + Vector2(0, b.size.y * 0.5 + 0.9).rotated(b.rot)
+
+
+func tower_archer_count(b: Building) -> int:
+	return b.archer_posts.size() - b.archer_posts.count(-1)
+
+
+func enter_tower(u: Unit, b: Building) -> bool:
+	if b == null or b.dead or not b.complete or b.type != "tower" or b.faction != u.faction:
+		return false
+	if u.dead or u.child or u.mounted or u.siege >= 0 or u.in_tower >= 0 or u.pos.distance_to(tower_door(b)) > Defs.TOWER_DOOR_REACH:
+		return false
+	var post_pos := b.pos
+	if u.kind != "commander":
+		var slot := b.archer_posts.find(-1)
+		if u.kind != "villager" or not u.bow or slot < 0:
+			return false
+		b.archer_posts[slot] = u.id
+		var outward := Vector2.from_angle(b.rot + TAU * float(slot) / b.archer_posts.size())
+		post_pos += outward * 1.25
+		u.facing = atan2(outward.x, outward.y)
+	u.in_tower = b.id
+	_relocate_at_tower(u, post_pos)
+	u.anim = Anim.IDLE
+	return true
+
+
+func _release_tower_post(u: Unit, b: Building) -> void:
+	var slot := b.archer_posts.find(u.id)
+	if slot >= 0:
+		b.archer_posts[slot] = -1
+
+
+func leave_tower(u: Unit) -> void:
+	var tower := bld(u.in_tower)
+	u.in_tower = -1
+	if tower == null:
+		return
+	_release_tower_post(u, tower)
+	_relocate_at_tower(u, tower_door(tower))
+
+
+func _relocate_at_tower(u: Unit, p: Vector2) -> void:
+	u.pos = p
+	u.prev = p
+	u.last_pos = p
+	u.path = PackedVector2Array()
 
 
 func buildings_of(faction: int, type: String = "", complete_only: bool = true) -> Array:

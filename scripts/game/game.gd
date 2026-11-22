@@ -167,6 +167,7 @@ func _process(delta: float) -> void:
 	var me = m.commander(0)
 	if me and not me.dead:
 		m.set_commander(0, Vector2(cmd.position.x, cmd.position.z), cmd.facing(), cmd.anim, cmd.shield_up())
+	var tower_before: int = me.in_tower if me else -1
 	if not m.over:
 		acc += delta
 		var n := 0
@@ -179,6 +180,8 @@ func _process(delta: float) -> void:
 			n += 1
 		if n >= 4:
 			acc = 0.0
+	if tower_before >= 0 and me.in_tower < 0:
+		_move_commander_to_tower_position(me)
 	var alpha := clampf(acc / Defs.TICK, 0.0, 1.0)
 	view.handle_events(m.events)
 	_sound_events(m.events)
@@ -265,11 +268,18 @@ func _update_look() -> void:
 		var u = m.unit(look_unit)
 		text = _describe_unit(u)
 	else:
-		var hit = view.ground_hit(cmd.eye(), cmd.look_dir(), 14.0)
 		var bid := _building_at_ray()
 		if bid >= 0:
 			look_bld = bid
 			text = _describe_building(m.bld(bid))
+	var me = m.commander(0)
+	if me and not me.dead:
+		if me.in_tower >= 0:
+			text = "E: descend" if text.is_empty() else text + " · E: descend"
+		else:
+			var tower = m.tower_at_door(0, me.pos)
+			if tower:
+				text = _describe_building(tower) + " · E: climb"
 	hud.set_prompt(text)
 
 
@@ -281,12 +291,16 @@ func _building_at_ray() -> int:
 	for b in m.buildings:
 		if b.dead or b.pos.distance_to(Vector2(from.x, from.z)) > 20.0:
 			continue
+		var tower_top := INF
+		if b.type == "tower":
+			tower_top = m.building_base_height(b) + Defs.TOWER_DECK_HEIGHT + Defs.TOWER_PARAPET_HEIGHT + Defs.TOWER_MERLON_HEIGHT
 		# Sample along the ray against the footprint.
 		var t := 0.5
 		while t < bd:
 			var p := from + dir * t
 			var local: Vector2 = (Vector2(p.x, p.z) - b.pos).rotated(-b.rot)
-			if absf(local.x) <= b.size.x * 0.5 + 0.2 and absf(local.y) <= b.size.y * 0.5 + 0.2 and p.y < m.terrain.height_at(p.x, p.z) + 8.0:
+			var top: float = tower_top if b.type == "tower" else m.terrain.height_at(p.x, p.z) + 8.0
+			if absf(local.x) <= b.size.x * 0.5 + 0.2 and absf(local.y) <= b.size.y * 0.5 + 0.2 and p.y < top:
 				bd = t
 				best = b.id
 				break
@@ -360,6 +374,8 @@ func _describe_building(b) -> String:
 				if not h.dead and h.kind == "horse" and h.stable == b.id:
 					n += 1
 			extra = " · %d horses · F: ride" % n
+		"tower":
+			extra = " · %d/%d archers" % [m.tower_archer_count(b), b.archer_posts.size()]
 		"mine":
 			extra = " · " + Defs.RESOURCE_NAMES.get(b.deposit, "")
 		"campfire":
@@ -507,6 +523,21 @@ func _on_pause_choice(name: String) -> void:
 
 
 func _interact() -> void:
+	var me = m.commander(0)
+	if me and not me.dead:
+		if me.in_tower >= 0:
+			m.leave_tower(me)
+			_move_commander_to_tower_position(me)
+			return
+		var p := Vector2(cmd.position.x, cmd.position.z)
+		var tower = m.tower_at_door(0, p)
+		if tower:
+			m.set_commander(0, p, cmd.facing(), cmd.anim, cmd.shield_up())
+			if m.enter_tower(me, tower):
+				_move_commander_to_tower_position(me)
+			elif me.mounted:
+				hud.show_toast("Dismount before climbing the tower.")
+			return
 	if look_unit >= 0:
 		var u = m.unit(look_unit)
 		if u and u.faction == 0 and u.kind == "villager":
@@ -520,7 +551,14 @@ func _interact() -> void:
 	if st and m.dist_to_building(Vector2(cmd.position.x, cmd.position.z), st) < 5.0:
 		hud.log_line(m.commander_mount(0), "system")
 		return
-	hud.show_toast("Look at a villager and press E or Enter to talk. Stand by the armory and press E for gear.")
+	hud.show_toast("E: talk to a villager, take gear at the armory, or climb at a stone tower door.")
+
+
+func _move_commander_to_tower_position(me) -> void:
+	cmd.position = Vector3(me.pos.x, m.unit_floor_y(me) + 0.08, me.pos.y)
+	cmd.velocity = Vector3.ZERO
+	cmd.drawing = false
+	cmd.draw = 0.0
 
 
 func _mark() -> void:
@@ -1385,6 +1423,7 @@ func _menu_help() -> void:
 [b]Selecting[/b]  Look at a villager and [b]click[/b] to select them; [b]Shift+click[/b] adds or drops more. Orders you type then go to exactly the selected people, as one crew. [b]Esc[/b] clears the selection.
 [b]Talking[/b]  Look at a villager and press [b]Enter[/b] (or T) to address their crew. In chat, [b]Tab[/b] cycles through individual members and back to the crew. [b]@Name[/b] addresses someone's crew by name, [b]@all[/b] addresses everyone. Idle villagers take orders with no addressee.
 [b]Marking[/b]  R marks the spot you look at; orders can then say 'there' or 'the mark'.
+[b]Stone towers[/b]  Mark a tower and tell archers to guard the mark. Three can post on the roof. Press E at the door to climb, then E on the roof to descend.
 
 [b]Slash commands[/b] (instant, no Terra needed)
    /b  build menu (or B) · /b hut builds a hut directly

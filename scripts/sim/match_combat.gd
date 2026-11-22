@@ -56,9 +56,10 @@ func combat_update(u: Unit, dt: float, radius: float) -> bool:
 	if u.kind == "villager" and u.hp < u.max_hp * 0.25 and t - u.hit_t < 4.0:
 		u.flee_t = 10.0
 		return true
+	var ranged := can_shoot_bow(u) and u.arrows > 0
 	var foe := unit(u.enemy)
-	if foe == null or foe.dead or foe.pos.distance_to(u.pos) > radius + 8.0 or foe.stable >= 0:
-		foe = nearest_enemy(u.pos, radius, u.faction)
+	if foe == null or foe.dead or foe.pos.distance_to(u.pos) > radius + 8.0 or foe.stable >= 0 or (foe.in_tower >= 0 and not ranged):
+		foe = nearest_enemy(u.pos, radius, u.faction, func(o): return ranged or o.in_tower < 0)
 		u.enemy = foe.id if foe else -1
 	if foe == null:
 		var b := bld(u.enemy_bld)
@@ -85,14 +86,8 @@ func _maybe_flee(u: Unit, dt: float, r: float) -> bool:
 
 func _fight(u: Unit, foe: Unit, dt: float) -> void:
 	var d := u.pos.distance_to(foe.pos)
-	var bow_range := Defs.TOWER_BOW_RANGE if u.in_tower >= 0 else Defs.BOW_RANGE
-	if can_shoot_bow(u) and u.arrows > 0 and (u.weapon == "" or d > 6.0) and d <= bow_range:
-		face(u, foe.pos)
-		u.anim = Anim.SHOOT
-		if u.cooldown <= 0.0:
-			u.cooldown = 2.0
-			u.arrows -= 1
-			fire_arrow(u, foe, armory_tier(u.faction))
+	if can_shoot_bow(u) and u.arrows > 0 and (u.weapon == "" or d > 6.0 or foe.in_tower >= 0) and d <= _bow_range(u, foe):
+		_shoot_at(u, foe)
 		return
 	if u.bow and u.arrows <= 0 and u.weapon == "":
 		# Out of arrows: go and refill at the armory.
@@ -113,6 +108,44 @@ func _fight(u: Unit, foe: Unit, dt: float) -> void:
 		u.cooldown = float(w["rate"])
 		deal_damage(foe, melee_damage(u, foe), u, "melee")
 		sound("clash" if foe.weapon != "" or foe.shield != "" else "hit", foe.pos)
+
+
+func _bow_range(shooter: Unit, target: Unit) -> float:
+	if shooter.in_tower < 0 and target.in_tower < 0:
+		return Defs.BOW_RANGE
+	# At equal height the existing range is v²/g. Lower ground extends the ballistic range.
+	var drop := unit_floor_y(shooter) - unit_floor_y(target)
+	return sqrt(maxf(0.0, Defs.BOW_RANGE * (Defs.BOW_RANGE + 2.0 * drop)))
+
+
+func _shoot_at(u: Unit, foe: Unit) -> void:
+	face(u, foe.pos)
+	u.anim = Anim.SHOOT
+	if u.cooldown <= 0.0:
+		u.cooldown = 2.0
+		u.arrows -= 1
+		fire_arrow(u, foe, armory_tier(u.faction))
+
+
+func _tower_resupply(u: Unit) -> Building:
+	if u.arrows <= 0 and int(fac(u.faction).gear.get("arrows", 0)) > 0:
+		return nearest_building(u.faction, u.pos, ["armory"])
+	return null
+
+
+func _update_tower_archer(u: Unit, dt: float) -> void:
+	u.cooldown = maxf(0.0, u.cooldown - dt)
+	u.anim = Anim.IDLE
+	if u.flee_t > 0.0 or (u.hp < u.max_hp * 0.25 and t - u.hit_t < 4.0):
+		u.flee_t = 10.0
+		leave_tower(u)
+	elif _tower_resupply(u):
+		leave_tower(u)
+	elif u.arrows > 0:
+		var search_range := Defs.BOW_RANGE + Defs.TOWER_DECK_HEIGHT * 2.0
+		var foe := nearest_enemy(u.pos, search_range, u.faction, func(o): return u.pos.distance_to(o.pos) <= _bow_range(u, o))
+		if foe:
+			_shoot_at(u, foe)
 
 
 func melee_damage(att: Unit, tgt: Unit) -> float:
@@ -254,15 +287,21 @@ func fire_arrow(shooter: Unit, target: Unit, tier: int) -> void:
 	s.kind = "arrow"
 	s.faction = shooter.faction
 	s.shooter = shooter.id
-	s.start = Vector3(shooter.pos.x, _height(shooter.pos) + (5.5 if shooter.in_tower >= 0 else 1.5), shooter.pos.y)
+	s.start = Vector3(shooter.pos.x, unit_floor_y(shooter) + 1.5, shooter.pos.y)
 	var chance := clampf(1.05 - d / 75.0, 0.3, 0.95)
 	if target.kind == "deer":
 		chance = 0.85
+	var elevated := target.in_tower >= 0
+	if elevated:
+		chance *= (1.85 - Defs.TOWER_PARAPET_HEIGHT) / 1.85
 	s.hits = rng.randf() < chance
 	var aim := target.pos + (target.pos - target.prev) * 6.0 * (d / 40.0)
 	if not s.hits:
 		aim += Vector2.from_angle(rng.randf() * TAU) * rng.randf_range(1.5, 4.0)
-	s.end = Vector3(aim.x, _height(aim) + (1.1 if s.hits else 0.0), aim.y)
+	var end_y := _height(aim) + (1.1 if s.hits else 0.0)
+	if elevated:
+		end_y = unit_floor_y(target) + (1.5 if s.hits else Defs.TOWER_PARAPET_HEIGHT)
+	s.end = Vector3(aim.x, end_y, aim.y)
 	s.dur = clampf(d / 38.0, 0.25, 2.0)
 	s.target = target.id
 	s.dmg = Defs.ARROW_DMG[clampi(tier, 0, 2)]
@@ -325,8 +364,6 @@ func update_shots(dt: float) -> void:
 						dmg *= 1.0 - _shield_block(tgt, Vector2(s.start.x, s.start.z), "arrow")
 					if tgt.armor != "":
 						dmg *= 1.0 - float(Defs.ITEMS[tgt.armor]["armor"])
-					if tgt.in_tower >= 0:
-						dmg *= 0.5
 					deal_damage(tgt, dmg, unit(s.shooter), "arrow")
 				emit({"type": "fx", "name": "arrow_land", "pos": Vector2(s.end.x, s.end.z), "hit": s.hits})
 			else:
@@ -339,14 +376,17 @@ func _free_shot(s: Shot, dt: float) -> void:
 	s.vel.y -= 9.8 * dt
 	s.pos += s.vel * dt
 	var p2 := Vector2(s.pos.x, s.pos.z)
+	var p1 := Vector2(old.x, old.z)
 	var shooter := unit(s.shooter)
-	for u: Unit in units_near(p2, 3.0, -2):
+	for u: Unit in units_near(p1.lerp(p2, 0.5), maxf(3.0, p1.distance_to(p2) * 0.5 + 0.9), -2):
 		if u.faction == s.faction or u.id == s.shooter or u.dead or u.stable >= 0:
 			continue
-		var top := _height(u.pos) + (2.6 if u.mounted else 1.85)
-		var seg_closest := Geometry3D.get_closest_point_to_segment(Vector3(u.pos.x, s.pos.y, u.pos.y), old, s.pos)
+		var floor_y := unit_floor_y(u)
+		var exposed_y := floor_y + (Defs.TOWER_PARAPET_HEIGHT if u.in_tower >= 0 else 0.0)
+		var top := floor_y + (2.6 if u.mounted else 1.85)
+		var seg_closest := Geometry3D.get_closest_point_to_segment(Vector3(u.pos.x, clampf(s.pos.y, exposed_y, top), u.pos.y), old, s.pos)
 		var hd := Vector2(seg_closest.x, seg_closest.z).distance_to(u.pos)
-		if hd < (0.9 if u.mounted else 0.55) and seg_closest.y > _height(u.pos) and seg_closest.y < top:
+		if hd < (0.9 if u.mounted else 0.55) and seg_closest.y > exposed_y and seg_closest.y < top:
 			var dmg := s.dmg
 			if u.shield != "":
 				dmg *= 1.0 - _shield_block(u, Vector2(s.start.x, s.start.z), "arrow", 0.7)
@@ -556,17 +596,24 @@ func _do_military(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
 			var home := home_pos(u.faction)
 			var dir := (target - home) if target.distance_to(home) > 5.0 else Vector2(0, -1)
 			var spot := slot_point(u, target, dir)
-			if u.bow:
-				var tw := nearest_building(u.faction, spot, ["tower"])
-				if tw and tw.pos.distance_to(spot) < 12.0:
-					spot = tw.pos + _ring(u, 1.2)
+			if u.bow and not u.mounted:
+				var tower := nearest_building(u.faction, target, ["tower"])
+				if tower and tower.pos.distance_to(target) < 12.0:
+					if tower.archer_posts.has(-1):
+						var arm := _tower_resupply(u)
+						if arm:
+							if go_to_building(u, arm, dt, 1.4, true):
+								refill_quiver(u, f)
+						elif move_to(u, tower_door(tower), dt, 1.0):
+							enter_tower(u, tower)
+						return
+					# Extra archers guard outside the tower until a post opens.
+					spot = approach_point(u, tower, 1.4)
 			if u.pos.distance_to(spot) > 1.2:
 				move_to(u, spot, dt, 0.8)
 			else:
 				u.anim = Anim.IDLE
 				face(u, spot + dir * 10.0)
-			var tw2 := nearest_building(u.faction, u.pos, ["tower"])
-			u.in_tower = tw2.id if (tw2 and u.bow and tw2.pos.distance_to(u.pos) < 3.5) else -1
 		"attack":
 			var center := crew_center(c)
 			var dir := target - center

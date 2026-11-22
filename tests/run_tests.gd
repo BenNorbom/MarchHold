@@ -22,7 +22,7 @@ func _initialize() -> void:
 
 func _run_tests() -> void:
 	var only := OS.get_environment("MH_TEST")
-	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "crews", "selection", "walls", "combat", "research", "shield", "parser", "schema", "chatgpt", "terra_orders", "duel"]
+	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "crews", "selection", "walls", "combat", "towers", "research", "shield", "parser", "schema", "chatgpt", "terra_orders", "duel"]
 	var t0 := Time.get_ticks_msec()
 	for name in tests:
 		if only != "" and only != name:
@@ -381,6 +381,68 @@ func test_research() -> void:
 	var pr: Dictionary = Parser.parse("research mounted archery")
 	check(pr.get("ok", false) and pr["steps"][0]["action"] == "research" and pr["steps"][0]["subject"] == "mounted_archery", "parser reads 'research mounted archery'")
 	check("mounted_archery" in Defs.subjects_for("research"), "schema offers mounted_archery")
+
+
+func test_towers() -> void:
+	var m = new_match(1462)
+	var tower = m.add_building(0, "tower", m.home_pos(0) + Vector2(19, 0), PI * 0.5, true)
+	var door: Vector2 = m.tower_door(tower)
+	check(door.x < tower.pos.x and is_equal_approx(door.y, tower.pos.y), "door follows the tower's rotation")
+	var archer_crew := []
+	for i in 4:
+		var archer = m.spawn_unit(0, "villager", tower.pos + Vector2(5, i - 1.5))
+		archer.bow = true
+		archer.arrows = 12
+		archer_crew.append(archer)
+	check(not m.enter_tower(archer_crew[0], tower), "an archer must reach the door before going up")
+	m.set_mark(0, tower.pos)
+	var crew = m.make_crew(0, archer_crew)
+	m.start_plan(crew, [step("guard", "", 0, "marked")])
+	run(m, 18.0)
+	check(m.tower_archer_count(tower) == 3, "three guarding archers walk around to the door and reach the roof")
+	var posted := archer_crew.filter(func(u): return u.in_tower == tower.id)
+	check(posted.size() == 3, "the fourth archer guards outside")
+	if posted.size() != 3:
+		return
+	check(posted[0].pos != posted[1].pos and posted[1].pos != posted[2].pos and posted[0].pos != posted[2].pos, "archers use distinct posts")
+	var deck_y: float = m.unit_floor_y(posted[0])
+	check(is_equal_approx(deck_y, m.building_base_height(tower) + Defs.TOWER_DECK_HEIGHT), "archers stand on the roof")
+
+	var commander = m.commander(0)
+	commander.pos = door
+	commander.mounted = true
+	check(not m.enter_tower(commander, tower), "the commander must dismount before entering")
+	commander.mounted = false
+	check(m.tower_at_door(0, door) == tower and m.tower_at_door(1, door) == null, "the doorway belongs to the tower's faction")
+	check(m.enter_tower(commander, tower), "the commander can enter a full archer tower")
+	check(is_equal_approx(m.unit_floor_y(commander), deck_y) and m.tower_archer_count(tower) == 3, "the commander shares the roof without taking a post")
+	m.leave_tower(commander)
+	check(commander.pos.is_equal_approx(door) and commander.in_tower < 0, "descend returns the commander to the doorway")
+
+	var defender = posted[0]
+	var foe = m.spawn_unit(1, "villager", defender.pos + Vector2(0, Defs.BOW_RANGE + 1.0))
+	check(m._bow_range(defender, foe) > Defs.BOW_RANGE, "shooting downhill extends bow range")
+	m.rebuild_unit_hash()
+	m._update_tower_archer(defender, Defs.TICK)
+	check(not m.shots.is_empty() and m.shots.back().target == foe.id and m.shots.back().start.y > deck_y, "posted archers fire from the roof at enemies out of ground bow range")
+	var radial: Vector2 = (defender.pos - tower.pos).normalized()
+	var origin: Vector2 = defender.pos + radial * 2.0
+	var velocity := Vector3(-radial.x * 30.0, 1.0, -radial.y * 30.0)
+	var hp: float = defender.hp
+	m.fire_free_arrow(foe, Vector3(origin.x, deck_y + 0.65, origin.y), velocity, 0)
+	m._free_shot(m.shots.back(), Defs.TICK)
+	check(defender.hp == hp, "arrows below the stone parapet miss the defender")
+	m.fire_free_arrow(foe, Vector3(origin.x, deck_y + 1.65, origin.y), velocity, 0)
+	m._free_shot(m.shots.back(), Defs.TICK)
+	check(defender.hp < hp, "an arrow above the parapet can hit the exposed defender")
+
+	m.kill_unit(defender)
+	check(m.tower_archer_count(tower) == 2, "a fallen archer frees their post")
+	m.start_plan(crew, [step("recall")])
+	check(m.tower_archer_count(tower) == 0 and posted[1].pos.is_equal_approx(door), "new orders send the archers back through the doorway")
+	check(m.enter_tower(commander, tower), "the commander can return upstairs")
+	m.remove_building(tower)
+	check(commander.in_tower < 0 and commander.pos.is_equal_approx(door), "destroying an occupied tower returns the commander to the ground")
 
 
 func test_shield() -> void:
