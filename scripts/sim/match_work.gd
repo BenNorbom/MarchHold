@@ -908,6 +908,10 @@ func _do_idle(u: Unit, dt: float) -> void:
 	var home := resting_place(u)
 	if u.siege >= 0:
 		return
+	var held := post_of(u)
+	if held and held.captain == u.id and held.surveying:
+		_walk_rounds(u, held, dt)
+		return
 	if u.pos.distance_to(home) > 26.0:
 		move_to(u, home + _ring(u, 10.0 + float(u.id % 5) * 2.0), dt, 2.0)
 		return
@@ -920,6 +924,18 @@ func _do_idle(u: Unit, dt: float) -> void:
 	if u.phase == "stroll":
 		if move_to(u, u.goal, dt, 0.8):
 			u.phase = ""
+
+
+## A captain still looking for an outcrop or deposit walks the bounds: an outer lap, then an inner one.
+func _walk_rounds(u: Unit, p: Post, dt: float) -> void:
+	const STOPS := 16
+	var out: float = [0.82, 0.5][(p.rounds / STOPS) % 2]
+	var goal := (p.center + Vector2.from_angle(p.rounds * TAU / STOPS) * p.radius * out).clamp(Vector2(20, 20), Vector2(map_size - 20, map_size - 20))
+	u.work_t += dt
+	# A stop on a cliff or in a lake of trees is skipped after a while.
+	if move_to(u, goal, dt, 8.0) or u.work_t > 40.0:
+		u.work_t = 0.0
+		p.rounds += 1
 
 
 func _do_gather(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:

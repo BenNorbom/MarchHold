@@ -60,15 +60,43 @@ const MANDATE_RES := [
 
 
 static func mandate_in(s: String) -> Dictionary:
-	for no in [" don't ", " do not ", " never ", " stop ", " then "]:
-		if s.contains(no):
-			return {}
+	if s.contains(" then "):
+		return {}
 	for pair in MANDATE_RES:
-		if RegEx.create_from_string(pair[1]).search(s) == null:
+		var found := RegEx.create_from_string(pair[1]).search(s)
+		if found == null:
+			continue
+		# "Don't" only counts in front of the mandate: "run the village and don't build walls" is fine.
+		if RegEx.create_from_string(" (don't|do not|never|stop) ").search(s.left(found.get_start() + 1)):
 			continue
 		var where := "" if pair[0] == "village" else where_in(s)
-		return _step("mandate", pair[0], 0, where, clampi(number_in(s), 0, 100))
+		return _step("mandate", pair[0], 0, where, clampi(count_in(s), 0, 100))
 	return {}
+
+
+static func limits_in(s: String) -> Array:
+	var out := []
+	var kept := RegEx.create_from_string(" (?:keep|hold|leave|reserve) ([0-9]+|[a-z]+) (wood|stone|food|bronze ore|coal|iron ore|bronze|iron)( back| in reserve| aside| spare)? ")
+	for found in kept.search_all(s):
+		if found.get_string(3) == "" and not found.get_string().begins_with(" reserve "):
+			continue
+		var n: int = NUMBERS.get(found.get_string(1), 0)
+		if found.get_string(1).is_valid_int():
+			n = int(found.get_string(1))
+		if n > 0:
+			out.append(_step("reserve", found.get_string(2).replace(" ", "_"), mini(n, 10000)))
+	var no := RegEx.create_from_string(" (?:don't|do not|never) (?:build|make|put up) (?:any |a |an |more |any more |the )?([a-z' ]+)").search(s)
+	var yes := RegEx.create_from_string(" (?:you can build|you may build|allow) (?:a |an |more |the )?([a-z' ]+)").search(s)
+	for pair in [[no, "forbid"], [yes, "allow"]]:
+		if pair[0]:
+			var what := find_in(" %s " % pair[0].get_string(1).get_slice(" and ", 0).strip_edges(), BUILD_WORDS)
+			if what != "":
+				out.append(_step(pair[1], what))
+	if s.contains(" hold at all costs ") or s.contains(" stand your ground ") or s.contains(" to the last man "):
+		out.append(_step("posture", "hold"))
+	elif s.contains(" fall back if ") or s.contains(" retreat if "):
+		out.append(_step("posture", "fall_back"))
+	return out
 
 
 static func _promotes(p: String) -> bool:
@@ -212,11 +240,14 @@ static func _parse(text: String) -> Dictionary:
 		return out
 	if s.contains(" everyone ") or s.contains(" everybody ") or s.contains(" all of you ") or s.contains(" all hands "):
 		out["all"] = true
+	var settings := limits_in(s)
 	var charge := mandate_in(s)
 	if not charge.is_empty():
-		out["steps"] = [charge]
+		settings.push_front(charge)
+	if not settings.is_empty():
+		out["steps"] = settings
 		out["all"] = false
-		out["ok"] = Defs.validate_steps(_clean(out["steps"])) == ""
+		out["ok"] = Defs.validate_steps(_clean(settings)) == ""
 		return out
 	# Split into sequential parts.
 	var parts: Array[String] = []

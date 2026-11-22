@@ -5,6 +5,7 @@ extends RefCounted
 
 const Defs = preload("res://scripts/data/defs.gd")
 const Planner = preload("res://scripts/ai/planner.gd")
+const Works = preload("res://scripts/sim/captain_works.gd")
 
 const STEWARD_KEEPS := 6       # the village never lends itself below this
 const BUSH_REACH := 160.0
@@ -26,9 +27,14 @@ static func think(m, p) -> void:
 				break
 			if u.post < 0:
 				m.join_post(p, u)
+	Works.update(m, p)
+	var on_project := {}
+	for role in p.jobs:
+		if Works.is_project(role):
+			on_project[p.jobs[role]] = true
 	var workers := []
 	for u in m.post_members(p):
-		if u.id != p.captain and not u.child and u.siege < 0 and not m.under_direct_order(u):
+		if u.id != p.captain and not u.child and u.siege < 0 and not m.under_direct_order(u) and not on_project.has(u.crew):
 			workers.append(u)
 	_assign(m, p, _wanted(m, p, workers))
 
@@ -66,7 +72,8 @@ static func _wanted(m, p, workers: Array) -> Array:
 	match p.mandate:
 		"village":
 			var f = m.fac(p.faction)
-			var food := Planner.food_workers(f.pop, f.food_state)
+			# Short of well fed means short of births, so staff food as if hungry.
+			var food := Planner.food_workers(f.pop, 3 if f.food_state == 3 else 1)
 			for other in m.posts.values():
 				if other.faction == p.faction and other.mandate == "farming":
 					food -= other.members.size() - 1
@@ -80,19 +87,33 @@ static func _wanted(m, p, workers: Array) -> Array:
 			left -= _food_jobs(m, p, jobs, left)
 			_add(jobs, "wood", "gather", "wood", left)
 		"industry":
-			for dep in Defs.DEPOSITS:
-				var n := mini(_places(m, p, "mine", dep), mini(3, left))
-				_add(jobs, dep, "gather", dep, n)
-				left -= n
+			var stock: Dictionary = m.fac(p.faction).stock
 			var smelter = m.nearest_building(p.faction, p.center, ["smelter"])
 			if smelter and smelter.pos.distance_to(p.center) <= p.radius:
-				var stock: Dictionary = m.fac(p.faction).stock
 				var metal := "bronze"
 				if smelter.tier >= 1 and float(stock.get("iron_ore", 0)) > 3.0 and float(stock.get("bronze", 0)) > 30.0:
 					metal = "iron"
-				var n := mini(2, left)
-				_add(jobs, "smelt", "smelt", metal, n)
-				left -= n
+				# The smelter comes before the mines, once it has something to smelt.
+				var fed := true
+				for r in Defs.SMELT[metal]["inputs"]:
+					if float(stock.get(r, 0)) < 2.0:
+						fed = false
+				if fed:
+					var n := mini(2, left)
+					_add(jobs, "smelt", "smelt", metal, n)
+					left -= n
+			# Miners go round the mines in turn, up to three each, so one ore can't take everyone.
+			var miners := {}
+			var room := {}
+			for dep in Defs.DEPOSITS:
+				room[dep] = mini(3, _places(m, p, "mine", dep))
+			for turn in 3:
+				for dep in Defs.DEPOSITS:
+					if left > 0 and turn < room[dep]:
+						miners[dep] = turn + 1
+						left -= 1
+			for dep in miners:
+				_add(jobs, dep, "gather", dep, miners[dep])
 			var diggers := mini(_places(m, p, "quarry"), left)
 			_add(jobs, "stone", "gather", "stone", diggers)
 			left -= diggers
@@ -168,7 +189,7 @@ static func _assign(m, p, jobs: Array) -> void:
 		if c == null or c.post != p.id:
 			p.jobs.erase(role)      # finished, or under a direct order now
 			continue
-		if role == "arm":
+		if role == "arm" or Works.is_project(role):
 			continue
 		var keep := 0
 		if wanted.has(role) and c.idx < c.steps.size() and c.steps[c.idx]["subject"] == wanted[role]["step"]["subject"]:

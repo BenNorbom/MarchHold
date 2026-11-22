@@ -142,6 +142,17 @@ class Post:
 	var jobs := {}              # role -> crew id
 	var pickers := 0            # people the bushes nearby have room for
 	var pickers_t := -999.0
+	var forbid := {}            # structure ids the player said not to build
+	var posture := "fall_back"  # hold, or fall back when outnumbered
+	var saving := {}            # {rank, cost} of the project waiting on materials
+	var blocked := {}           # project -> why it hasn't started
+	var walled := false
+	var rng := RandomNumberGenerator.new()
+	var seen := {}              # resource node ids this post has laid eyes on
+	var survey_nodes: Array = []
+	var surveying := false
+	var rounds := 0
+	var works_t := -999.0       # when the captain last looked at what to build
 
 
 class Faction:
@@ -171,6 +182,7 @@ class Faction:
 	var mark_t := -999.0
 	var has_mark := false
 	var places := {}            # lower-case name -> {name, pos}
+	var reserve := {}           # resource -> what captains must leave. Stores are shared, so it's per side.
 	var pop := 0
 	var adults := 0
 	var children := 0

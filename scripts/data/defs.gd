@@ -193,21 +193,31 @@ const DEPOSITS := ["bronze_ore", "coal", "iron_ore"]
 
 # --- Orders ----------------------------------------------------------------------
 const ACTIONS := ["gather", "build", "upgrade", "craft", "arm", "mount", "man", "smelt", "research", "tame",
-	"scout", "guard", "attack", "follow", "hold", "recall", "promote", "mandate", "dismiss", "status"]
+	"scout", "guard", "attack", "follow", "hold", "recall", "promote", "mandate", "reserve", "forbid", "allow", "posture", "dismiss", "status"]
+# Settings for a captain. They take effect at once and can only be combined with each other.
+const SETTINGS := ["mandate", "reserve", "forbid", "allow", "posture"]
 const WHERE := ["", "here", "marked", "home", "enemy", "north", "northeast", "east", "southeast",
 	"south", "southwest", "west", "northwest"]
 const PLACE := "place:"       # a where may also be PLACE + a place the player named
 const ONGOING := ["guard", "attack", "follow", "hold"]
-const AMOUNT_ACTIONS := ["gather", "craft", "smelt", "tame"]
+const AMOUNT_ACTIONS := ["gather", "craft", "smelt", "tame", "reserve"]
 const MAX_STEPS := 8
 
 # What a captain can be put in charge of. size: people when the order gives no number (0 = everyone free).
+# builds: what they may site by themselves. The village reaches the camp's outcrop (95-140 m out),
+# and works run from home (within HOME_GROUND) reach the camp's deposits (90-200 m out).
+const HOME_GROUND := 60.0
 const MANDATES := {
-	"village": {"name": "village", "does": "run the village", "radius": 90.0, "size": 0},
-	"farming": {"name": "farms", "does": "run the farms", "radius": 70.0, "size": 8},
-	"industry": {"name": "works", "does": "run the mines and works", "radius": 90.0, "size": 10},
-	"garrison": {"name": "garrison", "does": "hold a garrison", "radius": 45.0, "size": 8},
-	"army": {"name": "army", "does": "raise an army", "radius": 35.0, "size": 10},
+	"village": {"name": "village", "does": "run the village", "radius": 152.0, "size": 0,
+		"builds": ["hut", "house", "farm", "lodge", "stockpile", "granary", "quarry", "armory", "stable",
+			"palisade", "palisade_gate", "stone_wall", "stone_gate", "watch_post", "tower"]},
+	"farming": {"name": "farms", "does": "run the farms", "radius": 70.0, "size": 8,
+		"builds": ["farm", "lodge", "granary", "stockpile", "hut", "watch_post"]},
+	"industry": {"name": "works", "does": "run the mines and works", "radius": 90.0, "home_radius": 210.0, "size": 10,
+		"builds": ["mine", "quarry", "smelter", "armory", "university", "stockpile", "watch_post"]},
+	"garrison": {"name": "garrison", "does": "hold a garrison", "radius": 45.0, "size": 8,
+		"builds": ["armory", "palisade", "palisade_gate", "stone_wall", "stone_gate", "tower", "watch_post"]},
+	"army": {"name": "army", "does": "raise an army", "radius": 35.0, "size": 10, "builds": []},
 }
 
 const NAMES := ["Hal", "Wren", "Ana", "Bram", "Cora", "Dunstan", "Edda", "Finn", "Gil", "Hilda", "Ivo", "Jory",
@@ -294,6 +304,13 @@ static func subjects_for(action: String) -> Array[String]:
 		"mandate":
 			for k in MANDATES:
 				out.append(k)
+		"reserve":
+			for r in RESOURCES:
+				out.append(r)
+		"forbid", "allow":
+			out = buildable_ids()
+		"posture":
+			out = ["hold", "fall_back"]
 		_:
 			out = [""]
 	return out
@@ -347,8 +364,10 @@ static func validate_steps(steps) -> String:
 		var w: String = str(s.get("where", ""))
 		if not w in WHERE and not (w.begins_with(PLACE) and w.length() > PLACE.length()):
 			return "Step %d has an unknown place '%s'." % [i + 1, w]
-		if a == "mandate" and steps.size() > 1:
-			return "A mandate is an order by itself."
+		if a == "mandate" and i > 0:
+			return "A mandate comes first."
+		if i > 0 and (a in SETTINGS) != (str(steps[0].get("action", "")) in SETTINGS):
+			return "A captain's mandate and limits are an order by themselves."
 		if i < steps.size() - 1 and step_is_ongoing(s):
 			return "Step %d (%s) never finishes, so it has to be the last step." % [i + 1, describe_step(s)]
 	return ""
@@ -401,6 +420,14 @@ static func describe_step(s: Dictionary) -> String:
 			txt = "become a captain"
 		"mandate":
 			txt = "take charge: " + MANDATES.get(subj, {}).get("does", subj)
+		"reserve":
+			txt = ("keep %d %s back" % [amount, RESOURCE_NAMES.get(subj, subj)]) if amount > 0 else "spend %s freely" % RESOURCE_NAMES.get(subj, subj)
+		"forbid":
+			txt = "build no " + building_name(subj).to_lower()
+		"allow":
+			txt = "build a %s when needed" % building_name(subj).to_lower()
+		"posture":
+			txt = "hold at all costs" if subj == "hold" else "fall back if outnumbered"
 		"dismiss":
 			txt = "disband the crew"
 		"status":

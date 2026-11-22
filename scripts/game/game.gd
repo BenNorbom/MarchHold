@@ -972,7 +972,8 @@ func _execute(req: Dictionary, steps: Array, who: String) -> void:
 				s["count"] = 0
 	var needs := []
 	for i in steps.size():
-		if steps[i]["action"] == "build":
+		# A captain with a post picks their own sites.
+		if steps[i]["action"] == "build" and not req.has("post"):
 			needs.append(i)
 	if needs.is_empty():
 		_issue(req, steps, who)
@@ -1471,6 +1472,7 @@ func _menu_help() -> void:
    promote (makes a captain) · dismiss · status · then chains steps
    Name, run the village · take twenty and run a mine here · set up a garrison at the mark · raise an army
    call this East Hill names the spot you just marked (R), or where you stand. Then: hold East Hill
+   Captains build what their post needs. Limits: keep 100 wood back · don't build farms · stand your ground
    A captain with a post staffs and runs it. Talk to the captain and their people carry out the order.
    join @Name moves the addressed villager or crew to that person's crew.
    Terra starts orders when you send them. For construction, you choose each site.

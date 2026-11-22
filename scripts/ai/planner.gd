@@ -37,19 +37,33 @@ static func food_source(m, faction: int, center: Vector2, farms: int) -> String:
 
 # --- Sites --------------------------------------------------------------------
 
+const LANE := 5.0               # added to a footprint, so people can walk between buildings
+
+
+## Mapped, or in someone's sight right now.
 static func known(m, faction: int, p: Vector2) -> bool:
-	return m.fac(faction).knowledge[m.kcell(p)] >= 0.0
+	var f = m.fac(faction)
+	var k: int = m.kcell(p)
+	return f.knowledge[k] >= 0.0 or f.visible[k] == 1
+
+
+static func _leaves_lane(m, faction: int, type: String, p: Vector2, rot: float) -> bool:
+	var size: Vector2 = Defs.BUILDINGS[type]["size"]
+	for b in m.buildings_of(faction, "", false):
+		if b.pos.distance_to(p) < 40.0 and m._obb_overlap(p, rot, size, b.pos, b.rot, b.size, LANE):
+			return false
+	return true
 
 
 ## The nearest deposit without a mine. known_only leaves out ground this side hasn't seen.
-static func find_deposit(m, faction: int, dep: String, center: Vector2, reach: float, known_only: bool):
+static func find_deposit(m, faction: int, dep: String, center: Vector2, reach: float, known_only: bool, seen: Dictionary = {}):
 	var best = null
 	var bd := reach
 	for n in m.terrain.nodes:
 		if n.kind != "deposit" or n.sub != dep:
 			continue
 		var d: float = n.pos.distance_to(center)
-		if d >= bd or (known_only and not known(m, faction, n.pos)):
+		if d >= bd or (known_only and not seen.has(n.id) and not known(m, faction, n.pos)):
 			continue
 		var taken := false
 		for b in m.buildings:
@@ -62,14 +76,14 @@ static func find_deposit(m, faction: int, dep: String, center: Vector2, reach: f
 	return best
 
 
-static func find_outcrop(m, faction: int, center: Vector2, reach: float, known_only: bool):
+static func find_outcrop(m, faction: int, center: Vector2, reach: float, known_only: bool, seen: Dictionary = {}):
 	var best = null
 	var bd := reach
 	for n in m.terrain.nodes:
 		if n.kind != "rock" or n.sub != "outcrop":
 			continue
 		var d: float = n.pos.distance_to(center)
-		if d < bd and (not known_only or known(m, faction, n.pos)):
+		if d < bd and (not known_only or seen.has(n.id) or known(m, faction, n.pos)):
 			bd = d
 			best = n
 	return best
@@ -77,22 +91,23 @@ static func find_outcrop(m, faction: int, center: Vector2, reach: float, known_o
 
 ## Where a structure can go around center, as [position, rotation], or null.
 ## front is the side watch posts and towers face. radius keeps it inside a captain's area.
+## known_only is how captains look: known ground, plus resources in seen, with lanes left between buildings.
 static func find_site(m, faction: int, type: String, center: Vector2, front: Vector2, rng: RandomNumberGenerator,
-		known_only: bool, deposit: String = "", radius: float = INF):
+		known_only: bool, deposit: String = "", radius: float = INF, seen: Dictionary = {}):
 	var facing := atan2(front.y, front.x)
 	if type in ["mine", "quarry"]:
 		var node
 		var off := 7.0
 		if type == "mine":
-			node = find_deposit(m, faction, deposit, center, minf(330.0, radius), known_only)
+			node = find_deposit(m, faction, deposit, center, minf(330.0, radius), known_only, seen)
 		else:
 			off = 10.0
-			node = find_outcrop(m, faction, center, minf(400.0, radius), known_only)
+			node = find_outcrop(m, faction, center, minf(400.0, radius), known_only, seen)
 		if node == null:
 			return null
 		for k in 16:
 			var p: Vector2 = node.pos + Vector2.from_angle(k * TAU / 16.0) * off
-			if p.distance_to(center) > radius or (known_only and not known(m, faction, p)):
+			if p.distance_to(center) > radius or (known_only and not _leaves_lane(m, faction, type, p, facing)):
 				continue
 			if m.site_problem(faction, type, p, facing) == "":
 				return [p, facing]
@@ -118,11 +133,15 @@ static func find_site(m, faction: int, type: String, center: Vector2, front: Vec
 		var ang := rng.randf() * TAU
 		if type in ["watch_post", "tower"]:
 			ang = facing + rng.randf_range(-0.7, 0.7)
-		var p := center + Vector2.from_angle(ang) * rng.randf_range(r0, r1)
+		var out := r1
+		if known_only and attempt >= 20:
+			# The middle is full, so look further out, as far as the area goes.
+			out = minf(radius, r1 * (1.5 if attempt < 40 else 2.2))
+		var p := center + Vector2.from_angle(ang) * rng.randf_range(r0, out)
 		if known_only and not known(m, faction, p):
 			continue
 		var rot := ang + PI * 0.5
-		if m.site_problem(faction, type, p, rot) == "":
+		if m.site_problem(faction, type, p, rot) == "" and (not known_only or _leaves_lane(m, faction, type, p, rot)):
 			return [p, rot]
 	return null
 

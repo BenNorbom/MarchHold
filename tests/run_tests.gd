@@ -2,6 +2,7 @@ extends SceneTree
 ## Headless test runner:
 ##   godot --headless --path . -s res://tests/run_tests.gd
 ## Set MH_TEST=<name> to run a single test, MH_DUEL_MIN=<minutes> to change the duel length.
+## MH_TEST=absence (not in the default run) leaves captains alone for 15 minutes. MH_SEED picks the map.
 
 const Defs = preload("res://scripts/data/defs.gd")
 const Terrain = preload("res://scripts/world/terrain.gd")
@@ -9,6 +10,7 @@ const Match = preload("res://scripts/sim/match.gd")
 const Rival = preload("res://scripts/ai/rival.gd")
 const Parser = preload("res://scripts/orders/parser.gd")
 const Schema = preload("res://scripts/orders/schema.gd")
+const Planner = preload("res://scripts/ai/planner.gd")
 const ChatGPTCallback = preload("res://scripts/orders/chatgpt_callback.gd")
 const ChatGPTVault = preload("res://scripts/orders/chatgpt_vault.gd")
 
@@ -29,7 +31,9 @@ func _initialize() -> void:
 
 func _run_tests() -> void:
 	var only := OS.get_environment("MH_TEST")
-	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "crews", "selection", "delegation", "posts", "post_orders", "places", "walls", "combat", "parser", "schema", "chatgpt", "terra_orders", "duel"]
+	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "crews", "selection", "delegation", "posts", "post_orders", "places", "mandate_building", "walls", "combat", "parser", "schema", "chatgpt", "terra_orders", "duel"]
+	if only == "absence":
+		tests.append(only)
 	var t0 := Time.get_ticks_msec()
 	for name in tests:
 		if only != "" and only != name:
@@ -568,6 +572,231 @@ func test_places() -> void:
 	check("place:east hill" in wheres and "marked" in wheres, "Terra may answer with a named place")
 	check(Defs.describe_step(step("guard", "", 0, "place:east hill")) == "guard East Hill", "places read as names")
 	game.free()
+
+
+func sites_of(m, type: String) -> Array:
+	return m.buildings_of(0, type, false)
+
+
+func test_mandate_building() -> void:
+	if not "reserve" in Defs.ACTIONS:
+		check(false, "captains build within their mandate")
+		return
+	# A village captain builds what the village needs, unasked.
+	var m = new_match(414)
+	var f = m.fac(0)
+	var home: Vector2 = m.home_pos(0)
+	var adults: Array = grown_village(m, 30)
+	f.stock["wood"] = 300.0
+	m.command(0, {"unit": adults[0].id, "individual": true, "steps": [step("mandate", "village")]})
+	var village = m.village_post(0)
+	run(m, 280.0)
+	check(not sites_of(m, "farm").is_empty(), "the village captain builds farms")
+	check(not sites_of(m, "hut").is_empty() or not sites_of(m, "house").is_empty(), "and housing")
+	check(not sites_of(m, "quarry").is_empty(), "and finds the outcrop for a quarry")
+	var strays: Array = m.buildings_of(0, "", false).filter(func(b):
+		return b.type != "campfire" and (not b.type in Defs.MANDATES["village"]["builds"] or b.pos.distance_to(village.center) > village.radius + 0.1))
+	check(strays.is_empty(), "never outside the mandate or the area (%d)" % strays.size())
+	var cramped := 0
+	var built: Array = m.buildings_of(0, "", false).filter(func(b): return not Defs.BUILDINGS[b.type].get("wall", false))
+	for i in built.size():
+		for j in range(i + 1, built.size()):
+			if m._obb_overlap(built[i].pos, built[i].rot, built[i].size, built[j].pos, built[j].rot, built[j].size, 2.0):
+				cramped += 1
+	check(cramped == 0, "there is room to walk between what captains build (%d cramped)" % cramped)
+
+	# Reserve and "don't build".
+	var kept = new_match(414)
+	var hands: Array = grown_village(kept, 30)
+	kept.fac(0).stock["wood"] = 100.0
+	var r: Dictionary = kept.command(0, {"unit": hands[0].id, "individual": true, "steps": [step("mandate", "village"), step("reserve", "wood", 100), step("forbid", "farm")]})
+	check(r["ok"], "a mandate can come with limits: %s" % r.get("error", ""))
+	var lowest := INF
+	for i in 120:
+		run(kept, 1.0)
+		lowest = minf(lowest, float(kept.fac(0).stock["wood"]))
+	check(lowest >= 100.0, "captains never spend into the reserve (%.0f wood left)" % lowest)
+	check(sites_of(kept, "farm").is_empty(), "captains don't build what you forbade")
+
+	# Only ground this side knows.
+	var blind = new_match(414)
+	var dep = Planner.find_deposit(blind, 0, "bronze_ore", blind.home_pos(0), 330.0, false)
+	check(dep != null and Planner.find_deposit(blind, 0, "bronze_ore", blind.home_pos(0), 330.0, true) == null, "unseen deposits don't exist for captains")
+	var rng := RandomNumberGenerator.new()
+	check(Planner.find_site(blind, 0, "hut", dep.pos, Vector2.RIGHT, rng, true, "", 60.0) == null, "nor does unseen ground")
+
+	# Industry mines what it has seen.
+	var works = new_match(414)
+	var miners: Array = grown_village(works, 12)
+	var wf = works.fac(0)
+	wf.age = 1
+	wf.stock["wood"] = 200.0
+	wf.stock["stone"] = 100.0
+	var ore = Planner.find_deposit(works, 0, "bronze_ore", works.home_pos(0), 330.0, false)
+	for i in miners.size():
+		miners[i].pos = ore.pos + Vector2.from_angle(i * 0.9) * 14.0
+	works.set_mark(0, ore.pos + Vector2(12, 0))
+	works.command(0, {"unit": miners[0].id, "individual": true, "steps": [step("mandate", "industry", 0, "marked", 10)]})
+	run(works, 20.0)
+	check(not sites_of(works, "mine").is_empty(), "an industry captain sites the mine")
+
+	# With every mine manned, the smelter still gets its share.
+	var forge = new_match(414)
+	var smiths: Array = grown_village(forge, 8)
+	var ff = forge.fac(0)
+	ff.age = 1
+	ff.stock["bronze_ore"] = 40.0
+	ff.stock["coal"] = 40.0
+	var camp_at: Vector2 = forge.home_pos(0)
+	for res in Defs.DEPOSITS:
+		var node = Planner.find_deposit(forge, 0, res, camp_at, 330.0, false)
+		var pit = forge.add_building(0, "mine", node.pos + Vector2(7, 0), 0.0, true)
+		pit.node = node.id
+		pit.deposit = res
+	forge.add_building(0, "smelter", camp_at + Vector2(25, 0), 0.0, true)
+	forge.command(0, {"unit": smiths[0].id, "individual": true, "steps": [step("mandate", "industry", 0, "home", 7)]})
+	run(forge, 4.0)
+	check(smiths.any(func(u): return u.task == "smelt"), "the smelter gets workers while the mines are manned")
+	check(forge.posts_of(0)[0].name == "works", "works at home are just 'works' (%s)" % forge.posts_of(0)[0].name)
+
+	# A crowded village builds further out.
+	var full = new_match(414)
+	var mid: Vector2 = full.home_pos(0)
+	for ring in [20.0, 34.0, 48.0, 62.0, 74.0]:
+		var count := int(TAU * ring / 15.0)
+		for k in count:
+			full.add_building(0, "stockpile", mid + Vector2.from_angle(k * TAU / count) * ring, 0.0, true)
+	full.fac(0).knowledge.fill(0.0)
+	var pick := RandomNumberGenerator.new()
+	pick.seed = 5
+	check(Planner.find_site(full, 0, "farm", mid, Vector2.RIGHT, pick, true, "", 152.0) != null, "captains build further out once the middle is full")
+
+	# A garrison walls itself in and leaves a way home.
+	var fort = new_match(414)
+	var guards: Array = grown_village(fort, 14)
+	fort.fac(0).stock["wood"] = 500.0
+	var base: Vector2 = fort.home_pos(0) + (Vector2(fort.map_size, fort.map_size) * 0.5 - fort.home_pos(0)).normalized() * 80.0
+	for i in guards.size():
+		guards[i].pos = base + Vector2.from_angle(i * 0.5) * 10.0
+	fort.set_mark(0, base)
+	fort.command(0, {"unit": guards[0].id, "individual": true, "steps": [step("mandate", "garrison", 0, "marked", 12)]})
+	run(fort, 90.0)
+	check(not sites_of(fort, "palisade").is_empty() and not sites_of(fort, "palisade_gate").is_empty(), "a garrison raises a palisade with a gate")
+	var from: Vector2i = fort.nearest_free_cell(0, fort.cell_of(base))
+	var to: Vector2i = fort.nearest_free_cell(0, fort.cell_of(fort.home_pos(0)))
+	check(not fort.grids[0].get_id_path(from, to).is_empty(), "and its people can still walk home")
+
+	# Told to build, a captain picks the site.
+	var told = new_match(77)
+	var crowd: Array = grown_village(told, 16)
+	told.command(0, {"unit": crowd[0].id, "individual": true, "steps": [step("mandate", "village")]})
+	run(told, 2.0)
+	told.fac(0).stock["wood"] = 80.0
+	var game = chat_game(told)
+	game._on_chat("Captain %s, build a watch post" % crowd[0].name)
+	var posted: Array = sites_of(told, "watch_post")
+	check(not game.placing and posted.size() == 1, "a build order to a captain skips placement")
+	if posted.size() == 1:
+		check(crowd.any(func(u): return u.task == "build"), "and their people start on it")
+	var refused: Dictionary = told.command(0, {"post": told.village_post(0).id, "steps": [step("build", "university")]})
+	check(not refused["ok"], "a captain won't build outside the mandate")
+	for pair in [["keep 100 wood back", "reserve"], ["don't build any farms", "forbid"], ["you can build farms again", "allow"], ["stand your ground", "posture"], ["fall back if outnumbered", "posture"]]:
+		var p: Dictionary = Parser.parse(pair[0])
+		check(p["ok"] and p["steps"][0]["action"] == pair[1], "'%s' sets a limit" % pair[0])
+	var both: Dictionary = Parser.parse("run the village. keep us well fed and keep 100 wood back")
+	check(both["ok"] and both["steps"].size() == 2 and both["steps"][0]["count"] == 0 and both["steps"][1]["amount"] == 100, "the plan's example order parses")
+	game.free()
+
+
+## An established village of 30, three mandates, then no orders for 15 minutes with the commander 400 m away.
+func test_absence() -> void:
+	var seed_in := int(OS.get_environment("MH_SEED")) if OS.get_environment("MH_SEED") != "" else 4242
+	var minutes := float(OS.get_environment("MH_MINUTES")) if OS.get_environment("MH_MINUTES") != "" else 15.0
+	var m = new_match(seed_in)
+	var f = m.fac(0)
+	var home: Vector2 = m.home_pos(0)
+	var adults: Array = grown_village(m, 30)
+	# What a village of 30 already has: roofs and some timber.
+	var huts := 0
+	for k in 300:
+		if huts >= 6:
+			break
+		var p: Vector2 = home + Vector2.from_angle(k * 2.4) * (14.0 + k * 0.12)
+		if Planner._leaves_lane(m, 0, "hut", p, 0.0) and m.site_problem(0, "hut", p, 0.0) == "":
+			m.add_building(0, "hut", p, 0.0, true)
+			huts += 1
+	f.stock["wood"] = 150.0
+	m._refresh_counts(f)
+	m.command(0, {"unit": adults[0].id, "individual": true, "steps": [step("mandate", "village")]})
+	m.command(0, {"unit": adults[1].id, "individual": true, "steps": [step("mandate", "industry", 0, "home", 7)]})
+	var toward: Vector2 = (Vector2(m.map_size, m.map_size) * 0.5 - home).normalized()
+	var front := home + toward * 120.0
+	m.set_mark(0, front)
+	m.command(0, {"unit": adults[2].id, "individual": true, "steps": [step("mandate", "garrison", 0, "marked", 6)]})
+	var garrison = m.post_of(adults[2])
+	var away := Vector2.ZERO
+	for k in 16:
+		var p: Vector2 = home + Vector2.from_angle(toward.angle() + PI * 0.5 + k * TAU / 16.0) * 400.0
+		if m.terrain.in_bounds(p, 30.0) and p.distance_to(m.home_pos(1)) > 120.0:
+			away = p
+			break
+	check(away != Vector2.ZERO, "there's somewhere 400 m away to stand")
+
+	var idle_since := {}
+	var where := {}
+	var idle_share := 0.0
+	var samples := 0
+	var starved := 0
+	var stranded := 0
+	var peak: int = f.pop
+	var next_report := 60.0
+	while m.t < minutes * 60.0 and not m.over:
+		m.set_commander(0, away, 0.0, 0)
+		run(m, 2.0)
+		m.messages.clear()
+		peak = maxi(peak, f.pop)
+		if f.food_state == 0:
+			starved += 1
+		var standing := 0
+		var grown := 0
+		var causes := {}
+		for u in m.units:
+			if u.dead or u.faction != 0 or u.kind != "villager" or u.child or m.leads_post(u):
+				continue
+			grown += 1
+			# Idle also means on a job but standing still with nothing to do.
+			var c = m.crew_of(u)
+			var waiting: bool = c == null or (u.task in ["gather", "build", "craft", "smelt", "upgrade"] and u.anim == 0 and u.pos.distance_to(where.get(u.id, Vector2.ZERO)) < 0.1)
+			where[u.id] = u.pos
+			if not waiting:
+				idle_since.erase(u.id)
+				continue
+			if not idle_since.has(u.id):
+				idle_since[u.id] = m.t
+			if m.t - float(idle_since[u.id]) > 30.0:
+				standing += 1
+				var why: String = u.task if c == null or c.idx >= c.steps.size() else "%s %s" % [c.steps[c.idx]["action"], c.steps[c.idx]["subject"]]
+				causes[why] = int(causes.get(why, 0)) + 1
+		if m.t > 30.0:
+			idle_share += float(standing) / maxi(1, grown)
+			samples += 1
+		if m.t >= next_report:
+			next_report += 60.0
+			var built := {}
+			for b in m.buildings_of(0):
+				built[b.type] = int(built.get(b.type, 0)) + 1
+			print("  %4.1f min | pop %d/%d age %d | food %d/%d (%s) wood %d stone %d | idle %d %s | %s" % [m.t / 60.0, f.pop, f.housing, f.age,
+				int(f.stock["food"]), f.food_cap, Defs.FOOD_STATES[f.food_state], int(f.stock["wood"]), int(f.stock["stone"]), standing, str(causes), str(built)])
+			for p in m.posts_of(0):
+				print("      %s %s" % [m.post_status(p), str(p.blocked)])
+	var idle_avg := idle_share / maxi(1, samples)
+	print("  seed %d: peak %d, idle over 30 s %.1f%%, starving samples %d, deaths %d" % [seed_in, peak, idle_avg * 100.0, starved, f.deaths])
+	check(peak >= 100, "population reaches 100 (%d)" % peak)
+	check(idle_avg < 0.10, "under 10%% idle for over 30 s (%.1f%%)" % (idle_avg * 100.0))
+	check(starved == 0, "nobody starves")
+	var kept: Array = m.post_members(garrison).filter(func(u): return not m.under_direct_order(u) and u.task in ["guard", "idle"] and not u.child)
+	stranded = kept.filter(func(u): return u.pos.distance_to(garrison.center) > garrison.radius).size()
+	check(m.posts.has(garrison.id) and garrison.members.size() >= garrison.target and stranded <= 1, "the remote post is still staffed at its post (%d, %d away)" % [garrison.members.size(), stranded])
 
 
 func test_walls() -> void:

@@ -3,6 +3,7 @@ extends "res://scripts/sim/match_combat.gd"
 ## commander's actions and read-only queries for menus and Terra.
 
 const Captains = preload("res://scripts/sim/captains.gd")
+const Works = preload("res://scripts/sim/captain_works.gd")
 const START_FOOD := 40.0
 const FRESH_MARK := 120.0       # seconds a mark counts as "this"
 
@@ -601,6 +602,7 @@ func give_mandate(faction: int, req: Dictionary, s: Dictionary) -> Dictionary:
 		p = Post.new()
 		p.id = new_id()
 		p.faction = faction
+		p.rng.seed = p.id * 7919 + int(options.get("seed", 1))
 		posts[p.id] = p
 	elif p.captain != lead.id and leads_post(lead):
 		leave_post(lead)
@@ -611,15 +613,25 @@ func give_mandate(faction: int, req: Dictionary, s: Dictionary) -> Dictionary:
 		join_post(p, u)
 	p.captain = lead.id
 	lead.captain = true
+	if p.mandate != kind or not p.center.is_equal_approx(at):
+		p.seen = {}
+		p.survey_nodes = []
+		p.rounds = 0
+		p.walled = false
+		p.saving = {}
 	p.mandate = kind
 	p.center = at
 	p.radius = float(d["radius"])
+	if d.has("home_radius") and p.center.distance_to(home_pos(faction)) <= Defs.HOME_GROUND:
+		p.radius = float(d["home_radius"])
 	var count := int(s.get("count", 0))
 	p.target = count if count > 0 else maxi(int(d["size"]), people.size() if kind != "village" else 0)
 	var title: String = "village"
 	if kind != "village":
 		if where.begins_with(Defs.PLACE) and fac(faction).places.has(where.substr(Defs.PLACE.length())):
 			title = fac(faction).places[where.substr(Defs.PLACE.length())]["name"]
+		elif p.center.distance_to(home_pos(faction)) <= Defs.HOME_GROUND:
+			title = d["name"]
 		else:
 			title = "%s %s" % [Terrain.compass_name(p.center - home_pos(faction)), d["name"]]
 		var base := title
@@ -629,6 +641,51 @@ func give_mandate(faction: int, req: Dictionary, s: Dictionary) -> Dictionary:
 			title = "%s %d" % [base, nth]
 	p.name = title
 	return {"ok": true, "crews": [], "post": p.id}
+
+
+## A mandate and its limits, or limits for a post that already stands.
+func settle(faction: int, req: Dictionary, steps: Array) -> Dictionary:
+	var result := {"ok": true, "crews": []}
+	var p: Post = null
+	if steps[0]["action"] == "mandate":
+		result = give_mandate(faction, req, steps[0])
+		if not result["ok"]:
+			return result
+		p = posts[result["post"]]
+	elif req.has("post"):
+		p = posts.get(int(req["post"]))
+	elif req.has("unit") or req.has("crew"):
+		var u: Unit = unit(int(req["unit"])) if req.has("unit") else null
+		var c := _addressed_crew(faction, req) if req.has("crew") else null
+		if c:
+			u = unit(c.leader)
+		if u and u.faction == faction:
+			p = post_of(u)
+	elif req.is_empty():
+		p = village_post(faction)
+	if p and p.faction != faction:
+		p = null
+	for s in steps:
+		var subj: String = s["subject"]
+		if s["action"] == "mandate":
+			continue
+		if s["action"] == "reserve":
+			var f := fac(faction)
+			if int(s["amount"]) > 0:
+				f.reserve[subj] = int(s["amount"])
+			else:
+				f.reserve.erase(subj)
+			continue
+		if p == null:
+			return {"ok": false, "error": "Say which captain: look at them, or start with their name."}
+		match s["action"]:
+			"forbid":
+				p.forbid[subj] = true
+			"allow":
+				p.forbid.erase(subj)
+			"posture":
+				p.posture = subj
+	return result
 
 
 ## Orders accept {"unit": id} (their crew), {"unit": id, "individual": true},
@@ -643,11 +700,27 @@ func command(faction: int, req: Dictionary) -> Dictionary:
 		var e2 := step_problem(faction, s)
 		if e2 != "":
 			return {"ok": false, "error": e2}
+	if steps[0]["action"] in Defs.SETTINGS:
+		return settle(faction, req, steps)
+	var laid: Array = []
+	if req.has("post"):
+		# Told to build, a captain picks the sites.
+		var builder: Post = posts.get(int(req["post"]))
+		for s in steps:
+			if s["action"] != "build" or not s["sites"].is_empty() or builder == null or builder.faction != faction:
+				continue
+			var placed: Dictionary = Works.lay_out(self, builder, s["subject"])
+			if not placed.get("ok", false):
+				for id in laid:
+					remove_site(id)
+				return {"ok": false, "error": "%s: %s" % [post_label(builder), placed.get("error", "there's no room.")]}
+			s["sites"] = placed["ids"]
+			laid.append_array(placed["ids"])
 	var e3 := first_step_problem(faction, steps[0])
 	if e3 != "":
+		for id in laid:
+			remove_site(id)
 		return {"ok": false, "error": e3}
-	if steps[0]["action"] == "mandate":
-		return give_mandate(faction, req, steps[0])
 	var targets := []
 	var first: Dictionary = steps[0]
 	if req.get("all", false):
@@ -670,6 +743,8 @@ func command(faction: int, req: Dictionary) -> Dictionary:
 			return {"ok": true, "crews": []}
 		var detail := _post_detail(p, first)
 		if detail.is_empty():
+			for id in laid:
+				remove_site(id)
 			return {"ok": false, "error": "%s has nobody to send." % post_label(p)}
 		for s in steps:
 			s["count"] = 0      # their own people, not whoever is nearest
