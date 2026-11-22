@@ -13,6 +13,108 @@ var breed_acc := {}       # stable id -> progress
 var upkeep_t := 0.0
 
 
+# --- Posts ---------------------------------------------------------------------
+
+func post_of(u: Unit) -> Post:
+	return posts.get(u.post) if u.post >= 0 else null
+
+
+func post_members(p: Post) -> Array:
+	var out := []
+	for id in p.members:
+		var u := unit(id)
+		if u and not u.dead and u.post == p.id:
+			out.append(u)
+	return out
+
+
+## Everywhere an order can name: places the player named, and posts (the village is just home).
+func places_of(faction: int) -> Dictionary:
+	var out: Dictionary = fac(faction).places.duplicate()
+	for p: Post in posts.values():
+		var key := p.name.to_lower()
+		# One plain word ("farms", "garrison") has to keep its usual meaning in orders.
+		if p.faction == faction and key.contains(" ") and not out.has(key):
+			out[key] = {"name": p.name, "pos": p.center}
+	return out
+
+
+func village_post(faction: int) -> Post:
+	for p: Post in posts.values():
+		if p.faction == faction and p.mandate == "village":
+			return p
+	return null
+
+
+func leads_post(u: Unit) -> bool:
+	var p := post_of(u)
+	return p != null and p.captain == u.id
+
+
+## Working on something the player (not their captain) told them to do.
+func under_direct_order(u: Unit) -> bool:
+	var c := crew_of(u)
+	return c != null and c.post < 0
+
+
+## Where someone idles, falls back to, flees to and heals.
+func resting_place(u: Unit) -> Vector2:
+	var p := post_of(u)
+	if p == null:
+		return home_pos(u.faction)
+	return p.refuge if p.alert == "falling_back" else p.center
+
+
+func join_post(p: Post, u: Unit) -> void:
+	if u.post == p.id:
+		return
+	leave_post(u)
+	var c := crew_of(u)
+	if c and c.post >= 0:
+		release_member(u)
+	u.post = p.id
+	p.members.append(u.id)
+
+
+func leave_post(u: Unit) -> void:
+	var p := post_of(u)
+	u.post = -1
+	if p == null:
+		return
+	p.members.erase(u.id)
+	if u.dead:
+		p.lost += 1
+	if p.captain != u.id:
+		return
+	var heir: Unit = null
+	for m in post_members(p):
+		if not m.child:
+			heir = m
+			break
+	if heir == null:
+		posts.erase(p.id)
+		if p.faction == 0:
+			post(0, "Nobody is left to run the %s." % p.name, "alarm")
+		return
+	var c := crew_of(heir)
+	if c and c.post >= 0:
+		release_member(heir)
+	p.captain = heir.id
+	heir.captain = true
+	if p.faction == 0:
+		post(0, "Captain %s has %s the %s. %s takes over as captain." % [u.name, "fallen at" if u.dead else "left", p.name, heir.name], "alarm")
+
+
+## More hands for a job already under way.
+func add_to_crew(c: Crew, people: Array) -> void:
+	var task: String = c.steps[c.idx]["action"] if c.idx < c.steps.size() else "idle"
+	for u: Unit in people:
+		_join(c, u)
+		_set_task(u, task)
+		c.start_size += 1
+	_assign_slots(c)
+
+
 # --- Crews ---------------------------------------------------------------------
 
 func crew_of(u: Unit) -> Crew:
@@ -42,7 +144,8 @@ func _join(c: Crew, u: Unit) -> void:
 func _set_leader(c: Crew, id: int) -> void:
 	c.leader = id
 	var lead := unit(id)
-	c.captain = lead != null and lead.captain
+	# Inside a post only the post has a captain. A crew there ends when its work does.
+	c.captain = lead != null and lead.captain and lead.post < 0
 
 
 func leave_crew(u: Unit) -> void:
@@ -63,6 +166,24 @@ func leave_crew(u: Unit) -> void:
 		dissolve(c)
 	else:
 		_assign_slots(c)
+
+
+## Takes someone who died out of their crew. A dead captain is succeeded by the longest-serving member.
+func drop_dead(c: Crew, id: int) -> void:
+	c.members.erase(id)
+	c.lost += 1
+	if c.leader != id:
+		return
+	var had_captain := c.captain
+	_set_leader(c, c.members[0] if not c.members.is_empty() else -1)
+	var heir := unit(c.leader)
+	if not had_captain or heir == null:
+		return
+	heir.captain = true
+	c.captain = true
+	if c.faction == 0:
+		var fallen := unit(id)
+		post(0, "Captain %s has fallen. %s takes over as captain." % [fallen.name if fallen else "", heir.name], "alarm")
 
 
 func release_member(u: Unit) -> void:
@@ -102,7 +223,7 @@ func crew_label(c: Crew) -> String:
 
 
 func is_free_adult(u: Unit) -> bool:
-	return not u.dead and u.kind == "villager" and not u.child and u.crew < 0 and u.siege < 0 and u.stable < 0
+	return not u.dead and u.kind == "villager" and not u.child and u.crew < 0 and u.siege < 0 and u.stable < 0 and not leads_post(u)
 
 
 ## Idle adults of a faction, nearest to p first.
@@ -372,6 +493,9 @@ func resolve_where(c: Crew, where: String, default_dist: float = 140.0):
 			return f.mark if f.has_mark else null
 		"enemy":
 			return known_enemy_camp(c.faction)
+	if where.begins_with(Defs.PLACE):
+		var place: Dictionary = places_of(c.faction).get(where.substr(Defs.PLACE.length()), {})
+		return place.get("pos")
 	var v := Terrain.direction_vector(where)
 	var p := home_pos(c.faction) + v * default_dist
 	return p.clamp(Vector2(20, 20), Vector2(map_size - 20, map_size - 20))
@@ -579,7 +703,12 @@ func _prepare_step(c: Crew, s: Dictionary) -> String:
 			c.state["target"] = home_pos(c.faction)
 		"promote":
 			var lead := unit(c.leader)
-			if lead:
+			if lead and not leads_post(lead):
+				# Their own crew now, outside any post.
+				for id in c.members:
+					var mate := unit(id)
+					if mate and not leads_post(mate):
+						leave_post(mate)
 				lead.captain = true
 				c.captain = true
 				c.loop = false
@@ -754,10 +883,7 @@ func update_crews(dt: float) -> void:
 		for id in c.members.duplicate():
 			var u := unit(id)
 			if u == null or u.dead:
-				c.members.erase(id)
-				c.lost += 1
-				if c.leader == id:
-					_set_leader(c, c.members[0] if not c.members.is_empty() else -1)
+				drop_dead(c, id)
 		if c.members.is_empty():
 			crews.erase(c.id)
 			continue
@@ -960,7 +1086,7 @@ func update_worker(u: Unit, dt: float) -> void:
 		"scout":
 			_do_scout(u, c, dt)
 		"recall":
-			if move_to(u, c.state["target"] + _ring(u, 6.0), dt, 2.0):
+			if move_to(u, resting_place(u) + _ring(u, 6.0), dt, 2.0):
 				u.phase = "done"
 				u.anim = Anim.IDLE
 		"guard", "hold", "attack", "follow":
@@ -977,8 +1103,12 @@ func _do_idle(u: Unit, dt: float) -> void:
 	if u.carry > 0.0:
 		_unload(u, dt)
 		return
-	var home := home_pos(u.faction)
+	var home := resting_place(u)
 	if u.siege >= 0:
+		return
+	var held := post_of(u)
+	if held and held.captain == u.id and held.surveying and held.alert == "":
+		_walk_rounds(u, held, dt)
 		return
 	if u.pos.distance_to(home) > 26.0:
 		move_to(u, home + _ring(u, 10.0 + float(u.id % 5) * 2.0), dt, 2.0)
@@ -1002,6 +1132,18 @@ func _unload(u: Unit, dt: float) -> bool:
 	add_stock(u.faction, u.carry_res, u.carry)
 	u.carry = 0.0
 	return true
+
+
+## A captain still looking for an outcrop or deposit walks the bounds: an outer lap, then an inner one.
+func _walk_rounds(u: Unit, p: Post, dt: float) -> void:
+	const STOPS := 16
+	var out: float = [0.82, 0.5][(p.rounds / STOPS) % 2]
+	var goal := (p.center + Vector2.from_angle(p.rounds * TAU / STOPS) * p.radius * out).clamp(Vector2(20, 20), Vector2(map_size - 20, map_size - 20))
+	u.work_t += dt
+	# A stop on a cliff or in a lake of trees is skipped after a while.
+	if move_to(u, goal, dt, 8.0) or u.work_t > 40.0:
+		u.work_t = 0.0
+		p.rounds += 1
 
 
 func _do_gather(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
@@ -1788,7 +1930,7 @@ func _refresh_counts(f: Faction) -> void:
 			kids += 1
 		else:
 			adults += 1
-			if u.crew < 0 and u.siege < 0:
+			if u.crew < 0 and u.siege < 0 and not leads_post(u):
 				idle += 1
 		if u.weapon != "" or u.bow:
 			soldiers += 1
@@ -1851,7 +1993,6 @@ func upkeep(dt: float) -> void:
 		else:
 			birth_acc[f.id] = minf(birth_acc[f.id], 0.5)
 		# Growing up, healing at home.
-		var home := home_pos(f.id)
 		for u: Unit in units:
 			if u.dead or u.faction != f.id:
 				continue
@@ -1862,8 +2003,8 @@ func upkeep(dt: float) -> void:
 					u.max_hp = Defs.VILLAGER["hp"]
 					u.hp = u.max_hp * frac
 					if f.id == 0:
-						post(0, "%s has grown up and can work." % u.name, "info")
-			if is_person(u) and u.hp < u.max_hp and t - u.hit_t > 8.0 and u.pos.distance_to(home) < 30.0:
+						post(0, "%s has grown up and can work." % u.name, "grown")
+			if is_person(u) and u.hp < u.max_hp and t - u.hit_t > 8.0 and u.pos.distance_to(resting_place(u)) < 30.0:
 				u.hp = minf(u.max_hp, u.hp + 1.0 * dt)
 		_breed(f, dt)
 		if f.age == 0 and has_building(f.id, "quarry"):
@@ -1912,7 +2053,7 @@ func _breed(f: Faction, dt: float) -> void:
 				foal.faction = f.id
 				emit({"type": "unit", "id": foal.id})
 				if f.id == 0:
-					post(0, "A foal was born in the stable.", "birth")
+					post(0, "A foal was born in the stable.", "info")
 
 
 func _open_age(f: Faction, age: int) -> void:
@@ -1953,11 +2094,9 @@ func kill_unit(u: Unit, why: String = "") -> void:
 	if u.crew >= 0:
 		var c := crew_of(u)
 		if c:
-			c.members.erase(u.id)
-			c.lost += 1
-			if c.leader == u.id:
-				_set_leader(c, c.members[0] if not c.members.is_empty() else -1)
+			drop_dead(c, u.id)
 		u.crew = -1
+	leave_post(u)
 	emit({"type": "death", "id": u.id, "kind": u.kind, "pos": u.pos, "faction": u.faction})
 	if u.faction == 0 and u.kind == "villager":
 		var text := "%s %s." % [u.name, "starved" if why == "starved" else "was killed"]

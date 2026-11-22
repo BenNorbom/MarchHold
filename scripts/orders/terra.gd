@@ -63,7 +63,7 @@ func ask(facts: Dictionary, message: String, history: Array) -> void:
 		"max_output_tokens": 1200,
 		"instructions": Schema.instructions(),
 		"input": JSON.stringify(input),
-		"text": {"format": {"type": "json_schema", "name": "village", "strict": true, "schema": Schema.plan_schema()}},
+		"text": {"format": {"type": "json_schema", "name": "village", "strict": true, "schema": Schema.plan_schema(_places(input))}},
 	}
 	var reasoning = _reasoning_for(model)
 	if reasoning != null:
@@ -81,9 +81,13 @@ func _ask_chatgpt(input: Dictionary) -> void:
 		_fail(auth["error"])
 		return
 	_plan_token = auth["token"]
-	var instructions := Schema.instructions() + "\nReturn only a JSON object matching this schema: " + JSON.stringify(Schema.plan_schema())
+	var instructions := Schema.instructions() + "\nReturn only a JSON object matching this schema: " + JSON.stringify(Schema.plan_schema(_places(input)))
 	_send({"model": model, "store": false, "stream": true, "instructions": instructions,
 		"input": [{"role": "user", "content": JSON.stringify(input)}]}, _plan_token, "text/event-stream")
+
+
+func _places(input: Dictionary) -> Array:
+	return input["facts"].get("places", {}).keys()
 
 
 func _send(body: Dictionary, token: String, accept: String) -> void:

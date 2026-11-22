@@ -233,15 +233,35 @@ const HOTKEYS := {
 
 # --- Orders ----------------------------------------------------------------------
 const ACTIONS := ["gather", "build", "resume", "upgrade", "craft", "arm", "mount", "man", "smelt", "research", "tame",
-	"scout", "guard", "attack", "follow", "hold", "recall", "promote", "dismiss", "status", "resume_work"]
+	"scout", "guard", "attack", "follow", "hold", "recall", "promote", "mandate", "reserve", "forbid", "allow", "posture", "dismiss", "status", "resume_work"]
 ## Orders that pull people off their work. The sim remembers the work they leave so "back to work" can restore it.
 const MILITARY_ACTIONS := ["arm", "mount", "man", "scout", "guard", "attack", "follow", "hold", "recall"]
 const WORK_ACTIONS := ["gather", "build", "upgrade", "craft", "smelt", "research", "tame"]
+# Settings for a captain. They take effect at once and can only be combined with each other.
+const SETTINGS := ["mandate", "reserve", "forbid", "allow", "posture"]
 const WHERE := ["", "here", "marked", "home", "enemy", "north", "northeast", "east", "southeast",
 	"south", "southwest", "west", "northwest"]
+const PLACE := "place:"       # a where may also be PLACE + a place the player named
 const ONGOING := ["guard", "attack", "follow", "hold"]
-const AMOUNT_ACTIONS := ["gather", "craft", "smelt", "tame"]
+const AMOUNT_ACTIONS := ["gather", "craft", "smelt", "tame", "reserve"]
 const MAX_STEPS := 8
+
+# What a captain can be put in charge of. size: people when the order gives no number (0 = everyone free).
+# builds: what they may site by themselves. The village reaches the camp's outcrop (95-140 m out),
+# and works run from home (within HOME_GROUND) reach the camp's deposits (90-200 m out).
+const HOME_GROUND := 60.0
+const MANDATES := {
+	"village": {"name": "village", "does": "run the village", "radius": 152.0, "size": 0,
+		"builds": ["hut", "house", "farm", "lodge", "stockpile", "granary", "quarry", "armory", "stable",
+			"palisade", "palisade_gate", "stone_wall", "stone_gate", "watch_post", "tower"]},
+	"farming": {"name": "farms", "does": "run the farms", "radius": 70.0, "size": 8,
+		"builds": ["farm", "lodge", "granary", "stockpile", "hut", "watch_post"]},
+	"industry": {"name": "works", "does": "run the mines and works", "radius": 90.0, "home_radius": 210.0, "size": 10,
+		"builds": ["mine", "quarry", "smelter", "armory", "university", "stockpile", "watch_post"]},
+	"garrison": {"name": "garrison", "does": "hold a garrison", "radius": 45.0, "size": 8,
+		"builds": ["armory", "palisade", "palisade_gate", "stone_wall", "stone_gate", "tower", "watch_post"]},
+	"army": {"name": "army", "does": "raise an army", "radius": 35.0, "size": 10, "builds": []},
+}
 
 const NAMES := ["Hal", "Wren", "Ana", "Bram", "Cora", "Dunstan", "Edda", "Finn", "Gil", "Hilda", "Ivo", "Jory",
 	"Kit", "Lena", "Mabel", "Ned", "Osric", "Pell", "Quinn", "Rolf", "Sigrid", "Tam", "Una", "Vance", "Walt",
@@ -249,7 +269,12 @@ const NAMES := ["Hal", "Wren", "Ana", "Bram", "Cora", "Dunstan", "Edda", "Finn",
 	"Maud", "Nell", "Odo", "Piers", "Rowan", "Sabine", "Tilda", "Ulf", "Wynn", "Aldo", "Beth", "Col", "Dag",
 	"Esme", "Faye", "Garth", "Hob", "Isolde", "Jago", "Kara", "Lud", "Mags", "Nils", "Orla", "Pip", "Ralf",
 	"Saer", "Tove", "Viv", "Wat", "Agnes", "Brun", "Cuth", "Dwyn", "Elsa", "Fritha", "Gunn", "Herne", "Ilse",
-	"Jem", "Kell", "Lark", "Mott", "Nan", "Oswin", "Perrin", "Rook", "Sten", "Teg", "Ulric", "Vera", "Wulf"]
+	"Jem", "Kell", "Lark", "Mott", "Nan", "Oswin", "Perrin", "Roan", "Sten", "Teg", "Ulric", "Vera", "Wulf"]
+
+# Told apart by byname once the first names run out: "Hal Miller", never "Hal 2".
+const BYNAMES := ["Miller", "Reed", "Ash", "Fletcher", "Thatcher", "Cooper", "Wright", "Baker", "Tanner", "Shepherd",
+	"Carter", "Mason", "Fisher", "Brewer", "Weaver", "Potter", "Barley", "Thorn", "Hollis", "Birch", "Fenn", "Moss",
+	"Dyer", "Sawyer", "Hayward", "Crofter", "Alder", "Rush", "Flint", "Brook"]
 
 
 ## The map to play on: the one asked for, or the smallest bigger one that holds that many camps.
@@ -346,6 +371,16 @@ static func subjects_for(action: String) -> Array[String]:
 				out.append(k)
 		"tame":
 			out = ["horses", ""]
+		"mandate":
+			for k in MANDATES:
+				out.append(k)
+		"reserve":
+			for r in RESOURCES:
+				out.append(r)
+		"forbid", "allow":
+			out = buildable_ids()
+		"posture":
+			out = ["hold", "fall_back"]
 		_:
 			out = [""]
 	return out
@@ -399,8 +434,12 @@ static func validate_steps(steps) -> String:
 		if int(amount) > 0 and not a in AMOUNT_ACTIONS:
 			return "Step %d: amounts only apply to gathering, crafting, smelting and taming." % (i + 1)
 		var w: String = str(s.get("where", ""))
-		if not w in WHERE:
+		if not w in WHERE and not (w.begins_with(PLACE) and w.length() > PLACE.length()):
 			return "Step %d has an unknown place '%s'." % [i + 1, w]
+		if a == "mandate" and i > 0:
+			return "A mandate comes first."
+		if i > 0 and (a in SETTINGS) != (str(steps[0].get("action", "")) in SETTINGS):
+			return "A captain's mandate and limits are an order by themselves."
 		if i < steps.size() - 1 and step_is_ongoing(s):
 			return "Step %d (%s) never finishes, so it has to be the last step." % [i + 1, describe_step(s)]
 	return ""
@@ -412,6 +451,8 @@ static func describe_step(s: Dictionary) -> String:
 	var amount := int(s.get("amount", 0))
 	var count := int(s.get("count", 0))
 	var where: String = s.get("where", "")
+	if where.begins_with(PLACE):
+		where = where.substr(PLACE.length()).capitalize()
 	var txt := ""
 	match a:
 		"gather":
@@ -451,6 +492,16 @@ static func describe_step(s: Dictionary) -> String:
 			txt = "come home"
 		"promote":
 			txt = "become a captain"
+		"mandate":
+			txt = "take charge: " + MANDATES.get(subj, {}).get("does", subj)
+		"reserve":
+			txt = ("keep %d %s back" % [amount, RESOURCE_NAMES.get(subj, subj)]) if amount > 0 else "spend %s freely" % RESOURCE_NAMES.get(subj, subj)
+		"forbid":
+			txt = "build no " + building_name(subj).to_lower()
+		"allow":
+			txt = "build a %s when needed" % building_name(subj).to_lower()
+		"posture":
+			txt = "hold at all costs" if subj == "hold" else "fall back if outnumbered"
 		"dismiss":
 			txt = "disband the crew"
 		"status":

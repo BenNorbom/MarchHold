@@ -4,6 +4,10 @@ extends "res://scripts/sim/match_work.gd"
 const WOOD_TYPES := ["hut", "stockpile", "farm", "armory", "palisade", "palisade_gate", "watch_post", "stable"]
 const STONE_TYPES := ["stone_wall", "stone_gate", "tower"]
 
+const POST_WATCHED := 90.0      # a wide post only fights this far from its center
+const POST_LEASH := 8.0         # how far past the post's edge its people will follow an enemy
+const REFUGE_NEAR := 15.0       # this close to the refuge, people falling back turn and fight
+
 var vision_t := 0.0
 var armed_filter: Callable = armed      # one Callable, not a new lambda for every villager every tick
 
@@ -44,11 +48,20 @@ func can_shoot_bow(u: Unit) -> bool:
 ## Returns true when the unit spent this tick fighting or fleeing.
 func combat_update(u: Unit, dt: float, radius: float) -> bool:
 	u.cooldown = maxf(0.0, u.cooldown - dt)
+	var held := post_of(u)
+	if held and under_direct_order(u):
+		held = null
+	if held and held.alert == "falling_back" and u.siege < 0 and u.pos.distance_to(held.refuge) > REFUGE_NEAR:
+		# Falling back is a run. Stopping to trade blows is how a retreat gets caught.
+		u.enemy = -1
+		u.enemy_bld = -1
+		move_to(u, held.refuge + _ring(u, 6.0), dt, 2.0, true)
+		return true
 	if u.child or u.siege >= 0:
 		return _maybe_flee(u, dt, 10.0)
 	if u.flee_t > 0.0:
 		u.flee_t -= dt
-		var home := home_pos(u.faction)
+		var home := resting_place(u)
 		move_to(u, home + _ring(u, 6.0), dt, 3.0, true)
 		return true
 	if not armed(u):
@@ -57,9 +70,17 @@ func combat_update(u: Unit, dt: float, radius: float) -> bool:
 	if u.kind == "villager" and u.hp < u.max_hp * 0.25 and t - u.hit_t < 4.0:
 		u.flee_t = 10.0
 		return true
+	# A captain's people fight inside their post.
+	var leash := INF
+	if held and held.alert != "falling_back":
+		leash = minf(held.radius, POST_WATCHED) + POST_LEASH
+	var keep := radius + 8.0
 	var foe := unit(u.enemy)
-	if foe == null or foe.dead or foe.pos.distance_to(u.pos) > radius + 8.0 or foe.stable >= 0:
-		foe = nearest_enemy(u.pos, radius, u.faction)
+	if foe == null or foe.dead or foe.pos.distance_to(u.pos) > keep or foe.stable >= 0 or (held and foe.pos.distance_to(held.center) > leash):
+		var within := Callable()
+		if held and leash < INF:
+			within = func(o): return o.pos.distance_to(held.center) <= leash
+		foe = nearest_enemy(u.pos, radius, u.faction, within)
 		u.enemy = foe.id if foe else -1
 	if foe == null:
 		var b := bld(u.enemy_bld)
@@ -74,7 +95,7 @@ func combat_update(u: Unit, dt: float, radius: float) -> bool:
 func _maybe_flee(u: Unit, dt: float, r: float) -> bool:
 	if u.flee_t > 0.0:
 		u.flee_t -= dt
-		move_to(u, home_pos(u.faction) + _ring(u, 5.0), dt, 3.0, true)
+		move_to(u, resting_place(u) + _ring(u, 5.0), dt, 3.0, true)
 		return true
 	var foe := nearest_enemy(u.pos, r, u.faction, armed_filter)
 	if foe:

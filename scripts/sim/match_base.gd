@@ -32,6 +32,7 @@ class Unit:
 	var born := 0.0
 	var female := false
 	var crew := -1
+	var post := -1              # the captain's post they belong to
 	var captain := false
 	var task := "idle"
 	var phase := ""
@@ -133,6 +134,44 @@ class Crew:
 	var done := false
 	var loop := false
 	var origin := Vector2.ZERO
+	var post := -1              # the post whose captain set this job, -1 for a direct order
+
+
+## A captain's place and purpose. Plain data, so it can be saved.
+class Post:
+	var id := 0
+	var faction := 0
+	var name := ""
+	var mandate := ""
+	var center := Vector2.ZERO
+	var radius := 60.0
+	var captain := -1
+	var target := 0             # people including the captain, 0 for everyone free
+	var members: Array = []     # unit ids, longest-serving first
+	var jobs := {}              # role -> crew id
+	var pickers := 0            # people the bushes nearby have room for
+	var pickers_t := -999.0
+	var forbid := {}            # structure ids the player said not to build
+	var posture := "fall_back"  # hold, or fall back when outnumbered
+	var saving := {}            # {rank, cost} of the project waiting on materials
+	var blocked := {}           # project -> why it hasn't started
+	var walled := false
+	var rng := RandomNumberGenerator.new()
+	var seen := {}              # resource node ids this post has laid eyes on
+	var survey_nodes: Array = []
+	var surveying := false
+	var rounds := 0
+	var works_t := -999.0       # when the captain last looked at what to build
+	var alert := ""             # intruder, raid or falling_back
+	var alert_t := -999.0       # when the threat was last seen
+	var threat := 0             # the most seen at once during this alert
+	var threat_at := Vector2.ZERO
+	var refuge := Vector2.ZERO
+	var lost := 0
+	var lost_at_alert := 0
+	var blocked_since := {}     # project -> when it was first held up
+	var blocked_told := {}
+	var ready_told := false
 
 
 class Faction:
@@ -161,7 +200,10 @@ class Faction:
 	var attack_msg_t := -99.0
 	var is_ai := false
 	var mark := Vector2.ZERO
+	var mark_t := -999.0
 	var has_mark := false
+	var places := {}            # lower-case name -> {name, pos}
+	var reserve := {}           # resource -> what captains must leave. Stores are shared, so it's per side.
 	var pop := 0
 	var adults := 0
 	var children := 0
@@ -209,6 +251,7 @@ var bld_by_id := {}
 var crews := {}
 ## Work people were pulled off by a military order: unit id -> {group, steps, loop}. Empty steps = was idle.
 var work_memory := {}
+var posts := {}
 var factions: Array = []
 var shots: Array = []
 var messages: Array = []
@@ -331,8 +374,16 @@ func pick_name(f: Faction) -> String:
 			f.names_used[n] = 1
 			return n
 	var base: String = Defs.NAMES[rng.randi_range(0, Defs.NAMES.size() - 1)]
-	f.names_used[base] = int(f.names_used.get(base, 1)) + 1
-	return "%s %d" % [base, f.names_used[base]]
+	if not f.names_used.has(base):
+		f.names_used[base] = 1
+		return base
+	# The count survives deaths, so a name never comes back for someone else.
+	var nth := int(f.names_used[base]) - 1
+	f.names_used[base] = nth + 2
+	var full := "%s %s" % [base, Defs.BYNAMES[nth % Defs.BYNAMES.size()]]
+	for lap in nth / Defs.BYNAMES.size():
+		full += " the Younger"
+	return full
 
 
 # --- Entities ------------------------------------------------------------------------
