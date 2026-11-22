@@ -400,12 +400,16 @@ func resume_work(faction: int, only: Array = []) -> int:
 	var back := 0
 	for g in groups.values():
 		var us: Array = g["units"]
-		var steps: Array = g["entry"]["steps"]
+		var steps: Array = g["entry"]["steps"].duplicate(true)
 		back += us.size()
-		if steps.is_empty():
+		# Nobody works with a weapon in hand: whoever carries gear returns it to the armory first.
+		var carrying := us.any(func(u): return _has_gear(u))
+		if steps.is_empty() and not carrying:
 			for u in us:
 				release_member(u)
 			continue
+		if carrying:
+			steps.push_front({"action": "disarm", "subject": "", "count": 0, "amount": 0, "where": "", "sites": []})
 		var crew := crew_of(us[0])
 		var same := crew != null and crew.members.size() == us.size()
 		if same:
@@ -417,7 +421,7 @@ func resume_work(faction: int, only: Array = []) -> int:
 				release_member(u)
 			crew = make_crew(faction, us)
 		crew.loop = bool(g["entry"]["loop"])
-		start_plan(crew, steps.duplicate(true))
+		start_plan(crew, steps)
 	return back
 
 
@@ -635,6 +639,9 @@ func _prepare_step(c: Crew, s: Dictionary) -> String:
 			c.state["bld"] = arm.id
 			if subj != "" and int(f.gear.get(subj, 0)) <= 0:
 				return "there are no %s in the armory. Make some with /c." % Defs.item_name(subj, 2)
+		"disarm":
+			var arm := nearest_building(c.faction, crew_center(c), ["armory"])
+			c.state["bld"] = arm.id if arm != null else -1
 		"mount":
 			var st := _stable_with_horse(c.faction, crew_center(c))
 			if st == null:
@@ -835,7 +842,8 @@ func _advance(c: Crew) -> void:
 func _finish_plan(c: Crew) -> void:
 	c.done = true
 	if c.loop and not c.steps.is_empty():
-		c.idx = 0
+		# Returning gear is a one-off at the start of the plan, not part of the loop.
+		c.idx = 1 if c.steps.size() > 1 and c.steps[0]["action"] == "disarm" else 0
 		c.done = false
 		_begin_step(c)
 		return
@@ -1000,7 +1008,7 @@ func _step_done(c: Crew, s: Dictionary) -> bool:
 		"tame":
 			var amt := int(s.get("amount", 0))
 			return amt > 0 and c.state["delivered"] >= amt
-		"arm", "mount", "man", "scout", "recall":
+		"arm", "disarm", "mount", "man", "scout", "recall":
 			for id in c.members:
 				var u := unit(id)
 				if u and not u.dead and u.phase != "done":
@@ -1233,6 +1241,8 @@ func update_worker(u: Unit, dt: float) -> void:
 			_do_craft(u, c, s, dt)
 		"arm":
 			_do_arm(u, c, s, dt)
+		"disarm":
+			_do_disarm(u, c, dt)
 		"mount":
 			_do_mount(u, c, dt)
 		"man":
@@ -1786,6 +1796,38 @@ func _do_arm(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
 	if u.faction == 0 and u.weapon == "" and not u.bow and not c.state.get("warned", false):
 		c.state["warned"] = true
 		post(0, "%s: the armory ran out of gear for everyone." % crew_label(c), "warn")
+
+
+## Walk to the armory and hand back everything carried. With no armory left, put it down here.
+func _do_disarm(u: Unit, c: Crew, dt: float) -> void:
+	if u.phase == "done":
+		u.anim = Anim.IDLE
+		return
+	var b := bld(c.state.get("bld", -1))
+	if _has_gear(u) and b != null and not b.dead and not go_to_building(u, b, dt):
+		return
+	_stow_gear(u, fac(u.faction))
+	u.phase = "done"
+
+
+func _has_gear(u: Unit) -> bool:
+	return u.weapon != "" or u.shield != "" or u.armor != "" or u.bow or u.arrows > 0
+
+
+## Everything a person carries goes back into the faction's stock.
+func _stow_gear(u: Unit, f: Faction) -> void:
+	for item in [u.weapon, u.shield, u.armor]:
+		if item != "":
+			f.gear[item] = int(f.gear.get(item, 0)) + 1
+	if u.bow:
+		f.gear["bow"] = int(f.gear.get("bow", 0)) + 1
+	f.gear["arrows"] = int(f.gear.get("arrows", 0)) + u.arrows
+	u.weapon = ""
+	u.shield = ""
+	u.armor = ""
+	u.bow = false
+	u.arrows = 0
+	emit({"type": "unit", "id": u.id})
 
 
 func _equip(u: Unit, f: Faction, item: String) -> bool:

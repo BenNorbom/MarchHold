@@ -493,6 +493,8 @@ static func describe_step(s: Dictionary) -> String:
 			txt = ("make %d %s" % [amount, item_name(subj, amount)]) if amount > 0 else ("make a batch of " + item_name(subj, 2))
 		"arm":
 			txt = "arm with " + item_name(subj, 2) if subj != "" else "arm with the best gear in the armory"
+		"disarm":
+			txt = "return their gear to the armory"
 		"mount":
 			txt = "take horses from the stable"
 		"man":
