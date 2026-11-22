@@ -68,6 +68,7 @@ func tick(dt: float = Defs.TICK) -> void:
 	t += dt
 	ticks += 1
 	paths_this_tick = 0
+	searches_this_tick = 0
 	if fair_paths:
 		share_paths()
 	rebuild_unit_hash()
@@ -463,6 +464,16 @@ func command(faction: int, req: Dictionary) -> Dictionary:
 	var err := Defs.validate_steps(steps)
 	if err != "":
 		return {"ok": false, "error": err}
+	var expanded := []
+	for s in steps:
+		if s["action"] != "resume":
+			expanded.append(s)
+			continue
+		var work := _resume_as_builds(faction, req, s)
+		if work.is_empty():
+			return {"ok": false, "error": nothing_to_resume(s["subject"])}
+		expanded.append_array(work)
+	steps = expanded
 	for s in steps:
 		var e2 := step_problem(faction, s)
 		if e2 != "":
@@ -588,6 +599,131 @@ func cancel(faction: int, req: Dictionary) -> int:
 			cancel_plan(c)
 			n = 1
 	return n
+
+
+# --- Unfinished construction ---------------------------------------------------
+
+## The sites a "continue" order means: the one pointed at, then what these people were
+## building, then those nobody is building. With `join`, also those that have builders.
+## kind is a structure id, "wall" or "gate" for either material, or "" for anything.
+func resume_sites(faction: int, req: Dictionary, kind: String = "", pointed: int = -1, join: bool = true) -> Array:
+	var open := buildings_of(faction, "", false).filter(func(b): return not b.complete and _is_kind(b.type, kind))
+	var at := bld(pointed)
+	if at in open:
+		return open.filter(func(b): return _job_id(b) == _job_id(at))
+	if req.get("all", false):
+		return open
+	var theirs := {}
+	for u: Unit in _addressees(faction, req):
+		for id in u.last_sites:
+			theirs[id] = true
+	var own := open.filter(func(b): return theirs.has(b.id))
+	if not own.is_empty():
+		return own
+	var taken := assigned_sites(faction)
+	var waiting := open.filter(func(b): return not taken.has(b.id))
+	return open if waiting.is_empty() and join else waiting
+
+
+func nothing_to_resume(kind: String) -> String:
+	var what := Defs.building_name(kind).to_lower() if kind != "" else "construction"
+	return "There's no unfinished %s to continue. Type /b to start a new one." % what
+
+
+## Every site in a crew's current or later steps.
+func assigned_sites(faction: int) -> Dictionary:
+	var out := {}
+	for c: Crew in crews.values():
+		if c.faction != faction or c.members.is_empty():
+			continue
+		for i in range(c.idx, c.steps.size()):
+			for id in c.steps[i].get("sites", []):
+				out[id] = true
+	return out
+
+
+## Clears a site nothing has been spent on, with the unstarted rest of its wall.
+func abandon_site(faction: int, id: int) -> bool:
+	var b := bld(id)
+	if b == null or b.dead or b.paid or b.faction != faction:
+		return false
+	var pieces := buildings_of(faction, "", false).filter(func(o): return not o.paid and _job_id(o) == _job_id(b))
+	for piece in pieces:
+		remove_site(piece.id)
+	return true
+
+
+func _is_kind(type: String, kind: String) -> bool:
+	if kind in ["wall", "gate"]:
+		var d: Dictionary = Defs.BUILDINGS[type]
+		return d.get("wall", false) and d.get("gate", false) == (kind == "gate")
+	return kind == "" or type == kind
+
+
+## The pieces of one wall line are one job.
+func _job_id(b: Building) -> int:
+	return b.line if b.line >= 0 else b.id
+
+
+func _addressees(faction: int, req: Dictionary) -> Array:
+	var ids := []
+	if req.has("units"):
+		ids = req["units"]
+	elif req.get("individual", false):
+		ids = [req.get("unit", -1)]
+	else:
+		var c := _addressed_crew(faction, req)
+		if c:
+			ids = c.members
+		elif req.has("unit"):
+			ids = [req["unit"]]
+	var out := []
+	for id in ids:
+		var u := orderable_unit(faction, int(id))
+		if u:
+			out.append(u)
+	return out
+
+
+## One build step per job: started ones first, then the nearest.
+func _resume_as_builds(faction: int, req: Dictionary, s: Dictionary) -> Array:
+	var sites := []
+	if s["sites"].is_empty():
+		sites = resume_sites(faction, req, s["subject"])
+	else:
+		for id in s["sites"]:
+			var b := bld(id)
+			if b and not b.dead and not b.complete and b.faction == faction:
+				sites.append(b)
+	var people := _addressees(faction, req)
+	var from: Vector2 = people[0].pos if not people.is_empty() else home_pos(faction)
+	sites.sort_custom(func(a, b):
+		if a.paid != b.paid:
+			return a.paid
+		return a.pos.distance_squared_to(from) < b.pos.distance_squared_to(from))
+	var jobs := {}
+	var out := []
+	for b: Building in sites:
+		var job := _job_id(b)
+		if not jobs.has(job):
+			jobs[job] = []
+			out.append({"action": "build", "subject": b.type, "count": s["count"] if out.is_empty() else 0,
+				"amount": 0, "where": "", "sites": jobs[job]})
+		jobs[job].append(b.id)
+	return out
+
+
+func _unfinished_brief(faction: int) -> Array:
+	var taken := assigned_sites(faction)
+	var jobs := {}
+	for b: Building in buildings_of(faction, "", false):
+		if b.complete:
+			continue
+		var job: Dictionary = jobs.get_or_add(_job_id(b), {"id": b.type, "pieces": 0, "started": false, "has_builders": false})
+		job["pieces"] += 1
+		job["started"] = job["started"] or b.paid
+		job["has_builders"] = job["has_builders"] or taken.has(b.id)
+	return jobs.values()
 
 
 func place_site(faction: int, type: String, p: Vector2, rot: float) -> Dictionary:
@@ -816,7 +952,7 @@ func resolve_steps(faction: int, steps: Array) -> Array:
 					farm_room = true
 				if farm_room:
 					st["subject"] = "farm"
-				elif nearest_node("berry", home_pos(faction), 200.0) != null:
+				elif dropoffs(faction, "food").any(func(b): return nearest_node("berry", b.pos, 200.0) != null):
 					st["subject"] = "berries"
 				else:
 					st["subject"] = "hunt"
@@ -956,6 +1092,7 @@ func brief(faction: int, addressed: String, crew_id: int, individual: bool = fal
 			"well_fed_needs": int(ceil(f.pop * Defs.WELL_FED_STOCK))},
 		"addressed": addressed_info,
 		"crews": crew_rows,
+		"unfinished": _unfinished_brief(faction),
 		"can_build": can_build,
 		"can_craft": can_craft,
 		"locked": locked,

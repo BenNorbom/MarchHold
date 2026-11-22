@@ -23,7 +23,7 @@ func _initialize() -> void:
 
 func _run_tests() -> void:
 	var only := OS.get_environment("MH_TEST")
-	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "crews", "selection", "walls", "combat", "research", "shield", "parser", "schema", "chatgpt", "terra_orders", "hotkeys", "removed_buildings", "rings", "settlements", "path_queue", "rivals", "menu", "duel"]
+	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "crews", "selection", "walls", "combat", "research", "shield", "parser", "schema", "chatgpt", "terra_orders", "hotkeys", "removed_buildings", "rings", "settlements", "path_queue", "rivals", "menu", "gathering", "construction", "duel"]
 	var t0 := Time.get_ticks_msec()
 	for name in tests:
 		if only != "" and only != name:
@@ -456,11 +456,36 @@ func test_parser() -> void:
 	check(r.get("ok", false) and r["steps"][0]["subject"] == "stone_wall", "stone wall")
 	r = P.parse("smelt bronze")
 	check(r.get("ok", false) and r["steps"][0]["action"] == "smelt", "smelt bronze")
+	var resumes := {"continue construction": "", "continue": "", "resume building": "", "keep building": "", "finish it": "",
+		"finish the job": "", "please continue": "", "continue, please": "", "go back to building": "", "get back to work": "",
+		"continue building the hut": "hut", "finish the farm": "farm", "keep building the farm": "farm",
+		"keep building the stone wall": "stone_wall", "get back to building the stone wall": "stone_wall",
+		"continue the construction of the armory": "armory", "continue work on the house": "house", "build it": "",
+		"finish the stockpile by the berries": "stockpile", "help with the construction": "", "finish that hunter's lodge": "lodge",
+		"send 2 builders to finish the hut": "hut", "everyone continue construction": "", "finish off the watch post": "watch_post",
+		"continue where you left off": "", "resume construction on the granary": "granary", "go finish the quarry": "quarry"}
+	for text in resumes:
+		r = P.parse(text)
+		check(r["ok"] and r["steps"][0]["action"] == "resume" and r["steps"][0]["subject"] == resumes[text], "resume: " + text)
+	r = P.parse("finish the wall")
+	check(r["ok"] and r["steps"][0].get("match") == "wall", "a plain wall can be either material")
+	for text in ["continue gathering wood", "finish gathering berries", "keep gathering wood", "gather wood to finish the hut",
+			"work the farms", "continue working on the farm", "go home", "go back to camp", "return to base", "build a hut", "build another hut"]:
+		r = P.parse(text)
+		check(not r["steps"].any(func(s): return s["action"] == "resume" or s.has("match")), "not a resume: " + text)
+	r = P.parse("gather 30 wood and finish the hut")
+	check(r["ok"] and r["steps"].size() == 2 and r["steps"][1]["action"] == "resume", "gather then resume")
+	var places := {"gather wood": "", "gather wood for the camp": "", "bring me wood": "", "get them some wood": "",
+		"chop trees here": "here", "pick berries over there": "marked", "gather wood to the north": "north"}
+	for text in places:
+		r = P.parse(text)
+		check(r["ok"] and r["steps"][0]["where"] == places[text], "gather place: " + text)
 	r = P.parse("attack their camp")
 	check(r.get("ok", false) and r["steps"][0]["action"] == "attack" and r["steps"][0]["where"] == "enemy", "attack their camp")
 
 
 func test_schema() -> void:
+	check("resume" in Schema.plan_schema()["properties"]["steps"]["items"]["properties"]["action"]["enum"], "Terra can resume construction")
 	var sc: Dictionary = Schema.plan_schema()
 	check(sc["type"] == "object" and sc["additionalProperties"] == false, "strict object")
 	var items: Dictionary = sc["properties"]["steps"]["items"]
@@ -522,8 +547,7 @@ func test_hotkeys() -> void:
 		wanted["build:" + id] = true
 	for id in Defs.UPGRADES:
 		wanted["upgrade:" + Defs.UPGRADES[id]["building"]] = true
-	for id in Defs.RESEARCH:
-		wanted["research:" + id] = true
+	wanted["research:gunpowder"] = true
 	for id in Defs.ITEMS:
 		wanted["craft:" + id] = true
 	var keyed := {}
@@ -623,6 +647,172 @@ func test_removed_buildings() -> void:
 	full._refresh_counts(f)
 	check(f.housing == Defs.POP_HARD_CAP, "the rival has room for huts to house 200 (%d)" % f.housing)
 	check(f.food_cap >= Defs.POP_HARD_CAP * Defs.WELL_FED_STOCK, "the rival has room to store food for 200 (%d)" % f.food_cap)
+
+
+func open_site(m, type: String, near: Vector2, from: float = 6.0) -> Vector2:
+	for r in 40:
+		for k in 24:
+			var p: Vector2 = near + Vector2.from_angle(k * TAU / 24.0) * (from + r)
+			if m.site_problem(0, type, p, 0.0) == "":
+				return p
+	check(false, "found room for a %s" % type)
+	return near
+
+
+func test_gathering() -> void:
+	for kind in ["berry", "tree"]:
+		var subject := "berries" if kind == "berry" else "wood"
+		var m = new_match(977)
+		var home: Vector2 = m.home_pos(0)
+		var far = null
+		for n in m.terrain.nodes:
+			var d: float = n.pos.distance_to(home)
+			if n.kind == kind and d < 100.0 and (far == null or d > far.pos.distance_to(home)):
+				far = n
+		var workers: Array = m.idle_adults(0, home).slice(0, 4)
+		var req := {"units": workers.map(func(u): return u.id), "steps": [step("gather", subject)]}
+		m.command(0, req)
+		run(m, 2.0)
+		var store := open_site(m, "stockpile", far.pos)
+		var pile = m.add_building(0, "stockpile", store, 0.0, true)
+		# Those already at work move over once they next choose where to go.
+		run(m, 90.0)
+		for u in workers:
+			check(u.tgt_node < 0 or m.terrain.nodes[u.tgt_node].pos.distance_to(store) < m.terrain.nodes[u.tgt_node].pos.distance_to(home),
+				"%s gatherers move to the ones by a new stockpile" % kind)
+		req["steps"] = [step("gather", subject, 0, "home")]
+		m.command(0, req)
+		run(m, 0.2)
+		var w = workers[0]
+		check(w.tgt_node >= 0 and m.terrain.nodes[w.tgt_node].pos.distance_to(home) < m.terrain.nodes[w.tgt_node].pos.distance_to(store), "a named place overrides the shortest %s haul" % kind)
+		m.remove_building(pile)
+		req["steps"] = [step("gather", subject)]
+		m.command(0, req)
+		run(m, 0.2)
+		check(w.tgt_node >= 0 and m.terrain.nodes[w.tgt_node].pos.distance_to(home) < far.pos.distance_to(home), "losing the stockpile sends %s gatherers back toward camp" % kind)
+	# The rival repeats orders every second or so. A full load must still reach the store.
+	var rm = new_match(977)
+	var hauler = rm.idle_adults(0, rm.home_pos(0))[0]
+	var again := {"units": [hauler.id], "steps": [step("gather", "wood")]}
+	for second in 90:
+		rm.command(0, again)
+		run(rm, 1.0)
+	check(float(rm.fac(0).stock["wood"]) >= 5.0, "repeated orders don't stop a full load being delivered")
+	# A bush touching a stockpile sits in blocked ground and must still be pickable.
+	for offset in [Vector2(3.2, 0), Vector2(0, -3.2), Vector2(3.2, 3.2), Vector2(-3.2, 0.5)]:
+		var m = new_match(31)
+		var home: Vector2 = m.home_pos(0)
+		var p := open_site(m, "stockpile", home, 16.0)
+		m.add_building(0, "stockpile", p, 0.0, true)
+		var bush = Terrain.RNode.new()
+		bush.id = m.terrain.nodes.size()
+		bush.kind = "berry"
+		bush.pos = p + offset
+		bush.amount = 80.0
+		m.terrain.nodes.append(bush)
+		m._bucket_node(bush)
+		m.command(0, {"units": [m.idle_adults(0, home)[0].id], "steps": [step("gather", "berries")]})
+		run(m, 30.0)
+		check(bush.amount < 70.0, "a bush against a stockpile at %s gets picked (%.0f left)" % [offset, bush.amount])
+
+
+func new_game(m):
+	var game = load("res://scripts/game/game.gd").new()
+	game.m = m
+	game.hud = game.Hud.new()
+	game.add_child(game.hud)
+	game.cmd = game.Commander.new()
+	game.terra = game.Terra.new()
+	game.add_child(game.terra)
+	game.view = game.WorldView.new()
+	game.view.ghost = MeshInstance3D.new()
+	game.view.add_child(game.view.ghost)
+	game.add_child(game.view)
+	root.add_child(game)
+	return game
+
+
+func test_construction() -> void:
+	var m = new_match(8)
+	var game = new_game(m)
+	var home: Vector2 = m.home_pos(0)
+	var people: Array = m.idle_adults(0, home)
+	var a = people[0]
+	var b = people[1]
+	var c = people[2]
+	var say := func(u, text: String):
+		game.addressee = {"unit": u.id, "individual": true} if u else {}
+		game.address_label = u.name if u else "your people"
+		game._on_chat(text)
+	var start := func(u, type: String, ids: Array):
+		var s := step("build", type)
+		s["sites"] = ids
+		check(m.command(0, {"units": [u.id], "steps": [s]})["ok"], "%s started" % type)
+
+	var hut = m.bld(m.place_site(0, "hut", open_site(m, "hut", home, 16.0), 0.0)["id"])
+	start.call(a, "hut", [hut.id])
+	run(m, 1.0)
+	for away in ["follow me", "cancel"]:
+		say.call(a, away)
+		check(not hut.dead and a.task != "build", "'%s' takes builders off without losing the unpaid site" % away)
+		for text in ["continue construction", "continue", "finish the hut", "build the hut"]:
+			say.call(a, away)
+			say.call(a, text)
+			check(a.task == "build" and not game.placing and hut.id in m.crew_of(a).state["sites"], "'%s' after '%s' returns to the same site" % [text, away])
+
+	var posts := [home + Vector2(-12, 22), home + Vector2(12, 22)]
+	var wall: Array = m.place_wall(0, "palisade", posts)["ids"]
+	start.call(b, "palisade", wall)
+	m.fac(0).stock["wood"] = 4.0
+	run(m, 14.0)
+	say.call(b, "follow me")
+	check(wall.all(func(id): return m.bld(id) != null and not m.bld(id).dead), "the whole wall line survives its builder leaving")
+	say.call(b, "finish the wall")
+	var sites: Array = m.crew_of(b).state["sites"]
+	check(not game.placing and not sites.is_empty() and sites.all(func(id): return id in wall), "'finish the wall' resumes that line")
+	say.call(b, "continue construction")
+	check(m.crew_of(b).state["sites"].all(func(id): return id in wall), "people resume their own job before someone else's")
+
+	say.call(c, "help build the hut")
+	check(c.task == "build" and hut.id in m.crew_of(c).state["sites"], "another villager can join a site")
+	say.call(c, "build a hut")
+	check(game.placing, "'build a hut' still starts a new one")
+	game._cancel_place()
+	check(not hut.dead, "cancelling placement leaves the old site alone")
+
+	game.terra_ctx = {"req": {"unit": a.id, "individual": true}, "who": a.name, "text": "could you carry on with that hut you began", "site": -1}
+	game._on_terra({"ok": true, "data": {"kind": "plan", "reply": "", "steps": [step("build", "hut")]}})
+	check(not game.placing and a.task == "build", "Terra answering build to a continue order doesn't ask for a site")
+	var facts: Array = m.brief(0, "", -1)["unfinished"]
+	check(facts.size() == 2, "Terra is told about both unfinished jobs (%d)" % facts.size())
+
+	m.fac(0).stock["wood"] = 500.0
+	run(m, 100.0)
+	check(hut.complete and wall.all(func(id): return m.bld(id).complete), "resumed construction finishes")
+	say.call(a, "continue construction")
+	check(not game.placing, "with nothing unfinished, continue doesn't open placement")
+
+	# Sent off to fetch wood and then told to continue: the wood in hand pays for the site.
+	var short = m.bld(m.place_site(0, "hut", open_site(m, "hut", home, 16.0), 0.0)["id"])
+	m.fac(0).stock["wood"] = float(Defs.BUILDINGS["hut"]["cost"]["wood"]) - 5.0
+	c.carry = 5.0
+	c.carry_res = "wood"
+	say.call(c, "continue construction")
+	run(m, 100.0)
+	check(short.complete, "builders unload the wood their site is waiting for")
+	var spare = m.bld(m.place_site(0, "stockpile", open_site(m, "stockpile", home, 16.0), 0.0)["id"])
+	game.chat_site = spare.id
+	say.call(null, "cancel")
+	check(spare.dead, "an unstarted site in view can still be cleared")
+	var rival_site = m.add_building(1, "hut", m.home_pos(1) + Vector2(20, 0), 0.0)
+	var theirs = m.idle_adults(1, m.home_pos(1))[0]
+	var st := step("build", "hut")
+	st["sites"] = [rival_site.id]
+	m.command(1, {"units": [theirs.id], "steps": [st]})
+	m.cancel(1, {"units": [theirs.id]})
+	check(rival_site.dead, "the rival still drops its unstarted sites")
+	game.cmd.free()
+	game.free()
 
 
 func test_map_sizes() -> void:

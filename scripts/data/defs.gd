@@ -232,7 +232,7 @@ const HOTKEYS := {
 }
 
 # --- Orders ----------------------------------------------------------------------
-const ACTIONS := ["gather", "build", "upgrade", "craft", "arm", "mount", "man", "smelt", "research", "tame",
+const ACTIONS := ["gather", "build", "resume", "upgrade", "craft", "arm", "mount", "man", "smelt", "research", "tame",
 	"scout", "guard", "attack", "follow", "hold", "recall", "promote", "dismiss", "status"]
 const WHERE := ["", "here", "marked", "home", "enemy", "north", "northeast", "east", "southeast",
 	"south", "southwest", "west", "northwest"]
@@ -320,6 +320,9 @@ static func subjects_for(action: String) -> Array[String]:
 				out.append(k)
 		"build":
 			out = buildable_ids()
+		"resume":
+			out.append("")
+			out.append_array(buildable_ids())
 		"upgrade":
 			out = ["armory", "smelter"]
 		"craft":
@@ -411,6 +414,8 @@ static func describe_step(s: Dictionary) -> String:
 			txt = ("gather %d %s" % [amount, g]) if amount > 0 else ("keep gathering %s" % g if subj != "hunt" and subj != "farm" else "keep " + g)
 		"build":
 			txt = "build a " + building_name(subj).to_lower()
+		"resume":
+			txt = ("continue building the " + building_name(subj).to_lower()) if subj != "" else "continue construction"
 		"upgrade":
 			txt = "upgrade the " + subj
 		"craft":

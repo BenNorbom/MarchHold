@@ -37,6 +37,7 @@ class Unit:
 	var phase := ""
 	var tgt_node := -1
 	var tgt_bld := -1
+	var last_sites: Array = [] # building sites this person was last sent to
 	var tgt_unit := -1
 	var goal := Vector2.ZERO
 	var path := PackedVector2Array()
@@ -505,6 +506,10 @@ func nearest_building(faction: int, p: Vector2, types: Array, complete_only: boo
 ## Nearest place to drop a resource: campfire or stockpile.
 func nearest_dropoff(faction: int, p: Vector2, _res: String) -> Building:
 	return nearest_building(faction, p, ["campfire", "stockpile"])
+
+
+func dropoffs(faction: int, _res: String) -> Array:
+	return buildings_of(faction).filter(func(b): return b.type in ["campfire", "stockpile"])
 
 
 # --- Grid and pathing ----------------------------------------------------------------

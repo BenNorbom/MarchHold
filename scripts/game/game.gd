@@ -56,6 +56,7 @@ var addressee := {}
 var address_label := ""
 var chat_crew := -1
 var chat_first_member := -1
+var chat_site := -1               # unfinished site in view when chat opened
 var terra_ctx := {}
 var dialogue: Array = []
 var placing := false
@@ -358,9 +359,14 @@ func _describe_building(b) -> String:
 	if b.faction > 0:
 		return "%s's %s" % [m.fac(b.faction).short_name, name.to_lower()]
 	if not b.complete:
+		var manned: bool = m.assigned_sites(0).has(b.id)
 		if not b.paid:
-			return "%s — site, waiting for builders (%s)" % [name, Defs.cost_text(Defs.BUILDINGS[b.type]["cost"])]
-		return "%s — %d%% built" % [name, int(b.progress * 100)]
+			var cost: String = Defs.cost_text(Defs.BUILDINGS[b.type]["cost"])
+			if manned:
+				return "%s — site, waiting for builders (%s)" % [name, cost]
+			return "%s — site, no builders (%s) · Enter, then 'continue' or 'cancel'" % [name, cost]
+		var resume_hint := "" if manned else ", no builders · Enter, then 'continue'"
+		return "%s — %d%% built%s" % [name, int(b.progress * 100), resume_hint]
 	var extra := ""
 	match b.type:
 		"armory":
@@ -627,6 +633,11 @@ func open_chat(prefill: String = "", quick: bool = false) -> void:
 	chat_first_member = -1
 	addressee = {}
 	address_label = "your people"
+	chat_site = -1
+	if look_unit < 0:
+		var b = m.bld(look_bld)
+		if b and not b.dead and not b.complete and b.faction == 0:
+			chat_site = b.id
 	_prune_selection()
 	if selected.size() == 1:
 		addressee = {"unit": selected[0], "individual": true}
@@ -837,7 +848,7 @@ func _on_chat(text: String) -> void:
 	if parsed.get("cancel", false):
 		if _discard_terra_request(req):
 			hud.log_line("Order dropped.", "terra", "Terra")
-		else:
+		elif not _abandon_site(req):
 			_stop_orders(req)
 		return
 	if parsed.get("confirm", false):
@@ -847,13 +858,15 @@ func _on_chat(text: String) -> void:
 		if parsed.get("all", false) and req.is_empty():
 			req = {"all": true}
 			who = "everyone"
-		_execute(req, parsed["steps"], who)
-		return
+		# "Get back to work" with nothing half built means something else, so Terra decides.
+		if not terra.available() or not _nothing_left_to_resume(req, parsed["steps"]):
+			_execute(req, parsed["steps"], who, chat_site)
+			return
 	if terra.available():
 		if terra.busy:
 			hud.log_line("Terra is still thinking about your last order.", "warn")
 			return
-		terra_ctx = {"req": req, "who": who, "text": text}
+		terra_ctx = {"req": req, "who": who, "text": text, "site": chat_site}
 		hud.set_thinking("Terra is thinking…")
 		var crew_id := int(req.get("crew", -1))
 		if req.has("unit") and not req.get("individual", false):
@@ -885,15 +898,20 @@ func _on_terra(result: Dictionary) -> void:
 		"plan":
 			var steps: Array = Match.clean_steps(d.get("steps", []))
 			var err := Defs.validate_steps(steps)
+			var site: int = ctx.get("site", -1)
 			if err == "":
+				var carrying_on: bool = Parser.mentions_resume(ctx["text"])
 				for s in steps:
+					# Terra may answer "build" to "finish it". Don't ask for a second site.
+					if carrying_on and s["action"] == "build" and not m.resume_sites(0, ctx["req"], s["subject"], site).is_empty():
+						s["action"] = "resume"
 					err = m.step_problem(0, s)
 					if err != "":
 						break
 			if err != "":
 				hud.log_line("That plan can't be done yet: " + err, "warn")
 				return
-			_execute(ctx["req"], steps, ctx["who"])
+			_execute(ctx["req"], steps, ctx["who"], site)
 		"cancel":
 			_stop_orders(ctx["req"])
 
@@ -911,8 +929,38 @@ func _stop_orders(req: Dictionary) -> void:
 	hud.log_line("Stopped." if n > 0 else "Nobody was doing anything.", "crew")
 
 
-func _execute(req: Dictionary, steps: Array, who: String) -> void:
+func _nothing_left_to_resume(req: Dictionary, steps: Array) -> bool:
+	for s in steps:
+		if s["action"] == "resume" and m.resume_sites(0, req, s.get("match", s["subject"]), chat_site).is_empty():
+			return true
+	return false
+
+
+func _abandon_site(req: Dictionary) -> bool:
+	if not req.is_empty() or not m.abandon_site(0, chat_site):
+		return false
+	chat_site = -1
+	hud.log_line("Site cleared.", "crew")
+	return true
+
+
+func _execute(req: Dictionary, steps: Array, who: String, site: int = -1) -> void:
 	steps = m.resolve_steps(0, steps)
+	for s in steps:
+		var kind: String = s.get("match", s["subject"])
+		if s["action"] == "build" and s.has("match") and not m.resume_sites(0, req, kind, site, false).is_empty():
+			s["action"] = "resume"
+		s.erase("match")
+		if s["action"] != "resume":
+			continue
+		var found: Array = m.resume_sites(0, req, kind, site)
+		if found.is_empty():
+			hud.log_line(m.nothing_to_resume(kind), "warn")
+			return
+		# Fix the sites now, before later steps place new ones.
+		s["sites"] = found.map(func(b): return b.id)
+		if kind != "":
+			s["subject"] = found[0].type
 	if req.get("individual", false) or req.has("units"):
 		for s in steps:
 			s["count"] = 0
@@ -1135,6 +1183,8 @@ func _slash(text: String) -> void:
 			_menu_help()
 		"cancel":
 			_discard_terra_request(addressee)
+			if _abandon_site(addressee):
+				return
 			var n: int = m.cancel(0, addressee if not addressee.is_empty() else {"all": true})
 			if addressee.get("individual", false):
 				hud.log_line("Released %s." % address_label.trim_suffix(" alone") if n > 0 else "They had no assignment.", "crew")
@@ -1204,6 +1254,7 @@ func _menu_select(i: int) -> void:
 		if i >= 1 and i <= menu_items.size():
 			var c = menu_items[i - 1]
 			_close_menu()
+			chat_site = -1
 			_open_crew_chat(c, c.leader)
 		return
 	if menu_kind != "research":
@@ -1372,12 +1423,14 @@ func _menu_help() -> void:
 
 [b]Orders you can type[/b]
    gather wood · gather 30 wood then build a hut · pick berries · work the farms · hunt
-   build a hut · build a palisade · make 32 arrows · arm 6 with spears · to arms! · fall back
+   build a hut · build a palisade · continue construction · finish the wall · make 32 arrows · arm 6 with spears · to arms! · fall back
    send two scouts east · scout their camp · attack their camp · guard the mark · follow me · hold
    tame 3 horses · mount up · smelt bronze · upgrade the armory · research gunpowder · man the cannon
    promote (makes a captain) · dismiss · status · then chains steps
    join @Name moves the addressed villager or crew to that person's crew.
-   Terra starts orders when you send them. For construction, you choose each site.
+   Terra starts orders when you send them. For new construction, you choose each site.
+   Look at an unfinished site and press Enter: 'continue' sends builders, 'cancel' clears a site not yet started.
+   Gatherers pick the shortest haul to a drop-off, unless you say 'here', 'there' or a direction.
 
 [b]Winning[/b]  Kill every rival commander (they wear crowns). If you fall, the match is lost.
 [b]Growing[/b]  People are born only when the village is [i]well fed[/i] and there is free housing."""
