@@ -1581,7 +1581,7 @@ func _menu_ledger() -> void:
 	var fs: String = Defs.FOOD_STATES[f.food_state]
 	var why := ""
 	if f.food_state < 3:
-		why = "  — well fed needs %d food stored (storage %d%s)" % [need, f.food_cap, ": build stockpiles" if need > f.food_cap else ""]
+		why = ("  — births are slow while only fed; " if f.food_state == 2 else "  — no births until fed; ") + "well fed needs %d food stored (storage %d%s)" % [need, f.food_cap, ": build stockpiles" if need > f.food_cap else ""]
 	elif f.pop >= f.housing:
 		why = "  — but housing is full: build huts"
 	lines.append("[b]Food[/b]  %d stored · [color=#%s]%s[/color]%s" % [int(f.stock["food"]), "a8d890" if f.food_state == 3 else ("f0c060" if f.food_state >= 1 else "ff6a50"), fs, why])
@@ -1705,7 +1705,7 @@ func _menu_help() -> void:
    Gatherers pick the shortest haul to a drop-off, unless you say 'here', 'there' or a direction.
 
 [b]Winning[/b]  Kill every rival commander (they wear crowns). If you fall, the match is lost.
-[b]Growing[/b]  People are born only when the village is [i]well fed[/i] and there is free housing."""
+[b]Growing[/b]  People are born when the village is [i]fed[/i] (slower) or [i]well fed[/i], and there is free housing. Births build up while housing is full, and arrive together when room opens."""
 	_open_menu("help", "Help", t, "Esc to close")
 
 

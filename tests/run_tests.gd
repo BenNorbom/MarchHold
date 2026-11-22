@@ -32,7 +32,7 @@ func _initialize() -> void:
 
 func _run_tests() -> void:
 	var only := OS.get_environment("MH_TEST")
-	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "crews", "selection", "walls", "combat", "research", "shield", "parser", "schema", "chatgpt", "terra_orders", "hotkeys", "removed_buildings", "rings", "settlements", "path_queue", "rivals", "menu", "gathering", "construction", "back_to_work", "delegation", "posts", "post_orders", "places", "mandate_building", "threats", "post_review", "towers", "duel"]
+	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "births", "crews", "selection", "walls", "combat", "research", "shield", "parser", "schema", "chatgpt", "terra_orders", "hotkeys", "removed_buildings", "rings", "settlements", "path_queue", "rivals", "menu", "gathering", "construction", "back_to_work", "delegation", "posts", "post_orders", "places", "mandate_building", "threats", "post_review", "towers", "duel"]
 	if only == "absence":
 		tests.append(only)
 	var t0 := Time.get_ticks_msec()
@@ -211,6 +211,64 @@ func test_economy() -> void:
 	r = m.command(0, {"steps": [step("gather", "berries", 0, "", 3)]})
 	run(m, 40.0)
 	check(float(f.stock["food"]) > food_before - 5.0, "berry pickers keep food up")
+
+
+## Runs the village for `seconds`, topping its food up to `food_per_person` each second.
+func run_fed(m, f, seconds: int, food_per_person: float) -> void:
+	for i in seconds:
+		f.stock["food"] = minf(float(f.food_cap), f.pop * food_per_person)
+		run(m, 1.0)
+
+
+func test_births() -> void:
+	var m = new_match(5)
+	var f = m.fac(0)
+	var home: Vector2 = m.home_pos(0)
+	# Fill the campfire's eight places so the village is housing capped.
+	for i in 2:
+		m.spawn_unit(0, "villager", home + Vector2(4 + i, 3))
+	m._refresh_counts(f)
+	check(f.pop == f.housing and f.pop == 8, "village is capped at 8 of 8 (%d of %d)" % [f.pop, f.housing])
+	var adults: int = f.adults
+	var bank_cap: float = maxf(1.0, adults * Defs.BIRTH_BANK_PER_ADULT)
+	var per_minute: float = adults * 60.0 / Defs.BIRTH_SECONDS_PER_ADULT
+
+	# Well fed: progress banks, nobody is born with no room.
+	m.birth_acc[0] = 0.0
+	var births0: int = f.births
+	run_fed(m, f, 60, 2.5 * 1.3)
+	check(f.food_state == 3, "held well fed (state %d)" % f.food_state)
+	check(f.births == births0 and f.pop == 8, "no births while capped (%d people)" % f.pop)
+	var well: float = m.birth_acc[0]
+	check(absf(well - per_minute) < 0.15, "well fed banks a minute of births (%.2f vs %.2f)" % [well, per_minute])
+
+	# Fed: the same minute banks 75% as much.
+	m.birth_acc[0] = 0.0
+	run_fed(m, f, 60, 2.0)
+	check(f.food_state == 2, "held fed (state %d)" % f.food_state)
+	var fed: float = m.birth_acc[0]
+	check(absf(fed / well - Defs.FED_BIRTH_RATE) < 0.06, "fed banks 75%% of well fed (%.2f of %.2f)" % [fed, well])
+
+	# The bank stops at half a birth per adult.
+	run_fed(m, f, 300, 2.5 * 1.3)
+	check(absf(m.birth_acc[0] - bank_cap) < 0.01, "bank is capped at %.1f (%.2f)" % [bank_cap, m.birth_acc[0]])
+
+	# Hungry: nothing is gained or lost.
+	var banked: float = m.birth_acc[0]
+	run_fed(m, f, 30, 0.5)
+	check(f.food_state == 1, "held hungry (state %d)" % f.food_state)
+	check(f.births == births0 and absf(m.birth_acc[0] - banked) < 0.001, "hungry village keeps its bank (%.2f)" % m.birth_acc[0])
+
+	# Two places open up: both are filled at once, never past housing.
+	var gone := 0
+	for u in m.units:
+		if gone < 2 and not u.dead and u.faction == 0 and u.kind == "villager":
+			m.kill_unit(u, "test")
+			gone += 1
+	run_fed(m, f, 2, 2.5 * 1.3)
+	m._refresh_counts(f)
+	check(f.births - births0 == 2, "two freed places gave two births within two seconds (%d)" % (f.births - births0))
+	check(f.pop <= f.housing, "births stay inside housing (%d of %d)" % [f.pop, f.housing])
 
 
 func test_crews() -> void:
@@ -642,7 +700,8 @@ func test_mandate_building() -> void:
 	f.stock["wood"] = 300.0
 	m.command(0, {"unit": adults[0].id, "individual": true, "steps": [step("mandate", "village")]})
 	var village = m.village_post(0)
-	run(m, 280.0)
+	# Fed villages grow too, so farms and huts take the wood first; the quarry comes later.
+	run(m, 560.0)
 	check(not sites_of(m, "farm").is_empty(), "the village captain builds farms")
 	check(not sites_of(m, "hut").is_empty(), "and housing")
 	check(not sites_of(m, "quarry").is_empty(), "and finds the outcrop for a quarry")
