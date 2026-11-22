@@ -40,13 +40,13 @@ flowchart TB
     ores{{"Bronze ore · coal · iron ore"}}:::res
     smelter1(["Smelter"]):::key
     armory2(["Armory · bronze"]):::bld
-    b_items["Bronze spear · sword · shield · armor<br/>pike · lance · bronze arrows · ram"]:::item
+    b_items["Bronze sword · shield · armor<br/>pike · lance · bronze arrows · ram"]:::item
   end
 
   subgraph IRON["Iron age · ~17–22 min"]
     smelter2(["Smelter · iron furnace"]):::key
     armory3(["Armory · iron"]):::bld
-    i_items["Iron spear · sword · shield · armor<br/>pike · lance · iron arrows"]:::item
+    i_items["Iron sword · shield · armor<br/>pike · lance · iron arrows"]:::item
   end
 
   subgraph GUN["Gunpowder age · ~25–30 min"]

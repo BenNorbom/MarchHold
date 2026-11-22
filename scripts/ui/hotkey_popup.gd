@@ -19,6 +19,10 @@ var title: Label
 var grid: GridContainer
 var detail: RichTextLabel
 var shown_detail := ""
+var repeat := Timer.new()
+var held_key := ""
+const REPEAT_FIRST := 0.35
+const REPEAT_NEXT := 0.11
 
 
 func _ready() -> void:
@@ -39,6 +43,9 @@ func _ready() -> void:
 	detail.custom_minimum_size.y = 42   # two lines, so the window doesn't jump as you hover
 	rows.add_child(detail)
 	minimum_size_changed.connect(reset_size)
+	repeat.one_shot = true
+	repeat.timeout.connect(_on_repeat)
+	add_child(repeat)
 
 
 func show_pages(command: String) -> void:
@@ -48,7 +55,7 @@ func show_pages(command: String) -> void:
 	for page: String in Defs.HOTKEYS[command]:
 		grid.add_child(_page_tile(command, page))
 	_set_width(PAGE_TILE.x)
-	var example := "[b]/b b h[/b] builds a hut" if command == "b" else "[b]/c 2 b a[/b] makes two batches of arrows"
+	var example := "[b]/b b h[/b] builds a hut" if command == "b" else "[b]/c 2 b a[/b] makes two batches of arrows. Hold Shift to keep buying"
 	_set_detail("[b]B[/b] basic, [b]V[/b] advanced, then one key: %s." % example)
 
 
@@ -65,7 +72,9 @@ func show_entries(command: String, pick: Dictionary, entries: Array, quick: bool
 		if picked:
 			chosen = e
 	_set_width(CELL.x)
-	if pick["error"] != "":
+	if pick.get("note", "") != "":
+		_set_detail(pick["note"])
+	elif pick["error"] != "":
 		_set_detail("[color=#f0c060]%s[/color]" % pick["error"])
 	elif not chosen.is_empty():
 		var verb: String = {"build": "place it", "craft": "make it", "upgrade": "upgrade", "research": "research"}[chosen["kind"]]
@@ -124,8 +133,26 @@ func _cell(e: Dictionary, picked: bool) -> Button:
 		about += "\n[color=#f0c060]%s[/color]" % e["locked"]
 	b.mouse_entered.connect(func(): detail.text = about)
 	b.mouse_exited.connect(func(): detail.text = shown_detail)
-	b.pressed.connect(func(): key_picked.emit(e["key"]), CONNECT_DEFERRED)
+	b.pressed.connect(func():
+		if not Input.is_key_pressed(KEY_SHIFT):
+			key_picked.emit(e["key"]), CONNECT_DEFERRED)
+	if e["kind"] == "craft":
+		# Shift buys on the press, then again and again while the button is held.
+		b.button_down.connect(func():
+			if Input.is_key_pressed(KEY_SHIFT) and not locked:
+				held_key = e["key"]
+				repeat.start(REPEAT_FIRST)
+				key_picked.emit.call_deferred(held_key))
 	return b
+
+
+func _on_repeat() -> void:
+	if held_key == "" or not visible or not Input.is_key_pressed(KEY_SHIFT) or not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+		held_key = ""
+		repeat.stop()
+		return
+	repeat.start(REPEAT_NEXT)
+	key_picked.emit(held_key)
 
 
 ## Red means you're short, as elsewhere.

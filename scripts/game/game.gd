@@ -80,6 +80,7 @@ var menu_items: Array = []
 var people_page := 0
 var people_pages := 1
 var chat_hint_command := ""
+var buying := {}              # what Shift-repeat buying has queued so far: {id, n}
 var picker_quick := false     # opened with B or C: keys may run together ("bh") and a wrong one is dropped
 var map_open := false
 var map_refresh_t := 0.0
@@ -104,7 +105,8 @@ func start(options: Dictionary) -> void:
 	m = Match.new()
 	var map_id: String = Defs.MAP_REFERENCE if is_tutorial else str(opts.get("map", Defs.MAP_REFERENCE))
 	var settlements := 2 if is_tutorial else 1 + int(opts.get("opponents", 1))
-	m.setup({"seed": seed_in, "map": map_id, "settlements": settlements})
+	var mode: String = "standard" if is_tutorial else str(opts.get("mode", "standard"))
+	m.setup({"seed": seed_in, "map": map_id, "settlements": settlements, "mode": mode})
 	rivals.clear()
 	for id in range(1, m.factions.size()):
 		var rival = Rival.new()
@@ -150,7 +152,7 @@ func start(options: Dictionary) -> void:
 	if is_tutorial:
 		tutorial = Tutorial.new()
 		tutorial.setup(self)
-	if not Settings.get_val("intro_seen", false) or opts.get("intro", false):
+	if mode == "standard" and (not Settings.get_val("intro_seen", false) or opts.get("intro", false)):
 		intro = Intro.new()
 		add_child(intro)
 		intro.setup(self)
@@ -163,6 +165,11 @@ func start(options: Dictionary) -> void:
 func _welcome() -> void:
 	if tutorial:
 		tutorial.begin()
+		return
+	if str(opts.get("mode", "standard")) == "grand_army":
+		hud.log_line("Grand army: %d villagers behind stone walls, every technology, full stables and full stores. %s the same." % [
+			Defs.GRAND_ARMY["villagers"], "Commander Rook has" if rivals.size() == 1 else "All %d rivals have" % rivals.size()], "system")
+		hud.log_line("Your armories share each order: /c 60 v p makes 60 iron pikes. Then 'arm 60 with pikes', or 'to arms' for everyone.", "system")
 		return
 	if rivals.size() == 1:
 		hud.log_line("You stand at your campfire with six villagers. Commander Rook has made camp somewhere across the valley.", "system")
@@ -1000,12 +1007,48 @@ func _on_picker_key(key: String) -> void:
 
 
 func _take_pick(pick: Dictionary) -> void:
+	if pick["entry"].get("kind", "") == "craft" and Input.is_key_pressed(KEY_SHIFT):
+		_buy_more(pick)
+		return
 	hud.close_chat()
 	_on_chat_closed()
 	_choose_order_entry(pick["entry"], pick["batches"])
 
 
+## With Shift held, each press of a craft key or click on its picture queues one more,
+## and the popup stays open for the next. One line in the log says what it all came to.
+func _buy_more(pick: Dictionary) -> void:
+	var id: String = pick["entry"]["id"]
+	var amount: int = int(Defs.ITEMS[id]["batch"]) * int(pick["batches"])
+	if buying.get("id", id) != id:
+		_bought()
+	var why: String = m.step_problem(0, {"action": "craft", "subject": id, "count": 0, "amount": amount, "where": ""})
+	if why == "":
+		why = m.queue_craft(0, id, amount, true)
+	var note := ""
+	if why == "":
+		buying = {"id": id, "n": int(buying.get("n", 0)) + amount}
+		Sfx.play("click", null, -12.0)
+	else:
+		note = "[color=#f0c060]%s[/color]\n" % (why.left(1).to_upper() + why.substr(1))
+	var n: int = int(buying.get("n", 0))
+	if n > 0:
+		note += "[color=#ffd870]%d %s queued[/color] · keep Shift held and press again, or hold the key" % [n, Defs.item_name(id, n)]
+	var page: String = pick["page"]
+	hud.set_draft(Hotkeys.draft("c", page) + ("" if Hotkeys.only_page("c") != "" else " "))
+	hud.show_picker_entries("c", {"page": page, "key": "", "batches": 1, "entry": {}, "error": "", "note": note},
+		Hotkeys.page_entries(m, "c", page), true)
+
+
+func _bought() -> void:
+	var n: int = int(buying.get("n", 0))
+	if n > 0:
+		hud.log_line("The armories will make %d %s." % [n, Defs.item_name(buying["id"], n)], "crew")
+	buying = {}
+
+
 func _on_chat_closed() -> void:
+	_bought()
 	if chat_hint_command != "":
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	chat_hint_command = ""

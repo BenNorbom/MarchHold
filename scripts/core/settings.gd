@@ -28,6 +28,7 @@ var data := {
 	"hints": true,
 	"resource_labels": true, # names over stone and ore, and on the map
 	"difficulty": 1,
+	"mode": "standard",
 	"map": "medium",
 	"opponents": 1,
 	"strategy": "random",

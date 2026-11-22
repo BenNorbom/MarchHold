@@ -4,6 +4,7 @@ extends "res://scripts/sim/match_combat.gd"
 
 const Captains = preload("res://scripts/sim/captains.gd")
 const Works = preload("res://scripts/sim/captain_works.gd")
+const GrandArmy = preload("res://scripts/sim/grand_army.gd")
 const START_FOOD := 40.0
 const FRESH_MARK := 120.0       # seconds a mark counts as "this"
 
@@ -48,6 +49,8 @@ func setup(opts: Dictionary) -> void:
 			u.name = pick_name(f)
 		_refresh_counts(f)
 		f.stock["food"] = START_FOOD
+		if str(opts.get("mode", "standard")) == "grand_army":
+			GrandArmy.apply(self, f)
 	for i in tr.herds.size():
 		var h: Dictionary = tr.herds[i]
 		herd_pos[i] = h["pos"]
@@ -158,15 +161,30 @@ func _update_commander(u: Unit, dt: float) -> void:
 			foes += 1
 			threat += o.pos
 	if foes >= 3 and foes > friends + 1:
-		var away := (u.pos - threat / foes).normalized()
 		cancel_swing(u)
-		u.goal = (u.pos + away * 45.0).clamp(Vector2(20, 20), Vector2(map_size - 20, map_size - 20))
+		u.phase = ""
+		u.goal = _commander_refuge(u, threat / foes)
 		u.flee_t = 5.0
 		return
 	if combat_update(u, dt, 20.0):
 		return
 	var f := fac(u.faction)
 	var home := home_pos(u.faction)
+	# A horse makes a commander as quick as the riders who come for him.
+	if u.phase == "" and not u.mounted and ticks % 200 == u.id % 200 and _stable_with_horse(u.faction, home) != null:
+		u.phase = "mount"
+	if u.phase == "mount":
+		var st := _stable_with_horse(u.faction, home)
+		if st == null or u.mounted or st.pos.distance_to(home) > 120.0:
+			u.phase = ""
+		elif go_to_building(u, st, dt):
+			if _take_horse(u.faction, st):
+				u.mounted = true
+				u.max_hp += Defs.MOUNTED["hp_bonus"]
+				u.hp += Defs.MOUNTED["hp_bonus"]
+				_equip_best(u, f)
+			u.phase = ""
+		return
 	var arm := nearest_building(u.faction, u.pos, ["armory"])
 	if arm and int(t) % 30 == 0 and arm.pos.distance_to(home) < 80.0:
 		if not go_to_building(u, arm, dt):
@@ -176,6 +194,21 @@ func _update_commander(u: Unit, dt: float) -> void:
 		move_to(u, home + _ring(u, 6.0), dt, 2.0)
 	else:
 		u.anim = Anim.IDLE
+
+
+## Where a rival commander runs from danger: to their own soldiers behind them, or else away.
+func _commander_refuge(u: Unit, from: Vector2) -> Vector2:
+	var sum := Vector2.ZERO
+	var n := 0
+	var mine := u.pos.distance_to(from)
+	for o: Unit in units_near(u.pos, 150.0, u.faction):
+		if o != u and o.kind == "villager" and armed(o) and o.pos.distance_to(from) > mine - 5.0:
+			sum += o.pos
+			n += 1
+	if n >= 3:
+		return sum / n
+	var away := (u.pos - from).normalized()
+	return (u.pos + away * 45.0).clamp(Vector2(20, 20), Vector2(map_size - 20, map_size - 20))
 
 
 ## After everyone has moved: how fast, and has anyone jammed or stopped?
@@ -606,7 +639,12 @@ func post_status(p: Post) -> String:
 	if p.target > 0:
 		size += " of %d" % p.target
 	var alarm: String = {"intruder": " Intruder seen.", "raid": " Under attack.", "falling_back": " Falling back."}.get(p.alert, "")
-	return "%s: %s people. %s.%s" % [post_label(p), size, ", ".join(doing) if not doing.is_empty() else "standing by", alarm]
+	var aim := ""
+	if p.goal > fac(p.faction).age:
+		aim += " Racing for the %s age." % Defs.AGES[p.goal]
+	if p.focus != "":
+		aim += " Focus: %s." % Defs.STRATEGIES[p.focus]["name"]
+	return "%s: %s people. %s.%s%s" % [post_label(p), size, ", ".join(doing) if not doing.is_empty() else "standing by", aim, alarm]
 
 
 ## Who carries out an order given to a captain: as many of their people as it needs.
@@ -763,6 +801,40 @@ func give_mandate(faction: int, req: Dictionary, s: Dictionary) -> Dictionary:
 	return {"ok": true, "crews": [], "post": p.id}
 
 
+## Points a captain at an age or a focus. Returns a problem, or "".
+func set_strategy(p: Post, id: String, amount: int) -> String:
+	var st: Dictionary = Defs.STRATEGIES[id]
+	var f := fac(p.faction)
+	if id == "balanced":
+		p.goal = 0
+		p.focus = ""
+		post(p.faction, "%s: back to a balanced plan." % post_label(p), "info")
+		return ""
+	if st.has("age") and not st.get("focus", false):
+		if f.age >= int(st["age"]):
+			return "%s: we're already in %s." % [post_label(p), st["name"]]
+		p.goal = int(st["age"])
+		post(p.faction, "%s: we'll get to %s as fast as we can. Mines, smelting and the works come first now." % [post_label(p), st["name"]], "info")
+		return ""
+	p.focus = id
+	p.focus_keep = amount if amount > 0 else int(st.get("keep", 0))
+	p.focus_told = false
+	var more := ""
+	if f.age < int(st.get("age", 0)):
+		more = " That needs %s first, so we'll get there too." % Defs.STRATEGIES[["", "stone_age", "bronze_age", "iron_age", "gunpowder"][int(st["age"])]]["name"]
+	var what: String = "%d %s in the armory" % [p.focus_keep, st["name"]] if st.has("items") else st["name"]
+	post(p.faction, "%s: we'll focus on %s.%s" % [post_label(p), what, more], "info")
+	return ""
+
+
+## The age a post is racing for, counting what its focus needs.
+func post_goal(p: Post) -> int:
+	var aim := p.goal
+	if p.focus != "":
+		aim = maxi(aim, int(Defs.STRATEGIES[p.focus].get("age", 0)))
+	return aim if aim > fac(p.faction).age else 0
+
+
 ## A mandate and its limits, or limits for a post that already stands.
 func settle(faction: int, req: Dictionary, steps: Array) -> Dictionary:
 	var result := {"ok": true, "crews": []}
@@ -785,6 +857,11 @@ func settle(faction: int, req: Dictionary, steps: Array) -> Dictionary:
 		p = village_post(faction)
 	if p and p.faction != faction:
 		p = null
+	if p == null and steps.any(func(s): return s["action"] == "strategy"):
+		# Anyone without a post: the village captain is the one who runs the place.
+		p = village_post(faction)
+		if p == null:
+			return {"ok": false, "error": "A strategy is for a captain with a post. Give someone one first: 'Hal, run the village'."}
 	if p == null and steps.size() == 1 and steps[0]["action"] == "posture" and steps[0]["subject"] == "hold" and not req.is_empty():
 		# To anyone without a post, "hold at all costs" is just "hold".
 		return command(faction, req.merged({"steps": [{"action": "hold", "subject": "", "count": 0, "amount": 0, "where": ""}]}, true))
@@ -807,6 +884,10 @@ func settle(faction: int, req: Dictionary, steps: Array) -> Dictionary:
 				if added == 0:
 					return {"ok": false, "error": "%s: there's nobody %s to take on." % [post_label(p), "free" if subj == "" else "on " + str(Defs.GATHER[subj]["name"])]}
 				post(faction, "%d joined %s. They'll take up whatever work is short." % [added, post_label(p)], "info")
+			"strategy":
+				var why := set_strategy(p, subj, int(s["amount"]))
+				if why != "":
+					return {"ok": false, "error": why}
 			"forbid":
 				p.forbid[subj] = true
 			"allow":
@@ -1395,7 +1476,7 @@ func resolve_steps(faction: int, steps: Array) -> Array:
 	var tier := maxi(0, armory_tier(faction))
 	var f := fac(faction)
 	var tiers := {
-		"spear": ["wood_spear", "bronze_spear", "iron_spear"], "sword": ["bronze_sword", "bronze_sword", "iron_sword"],
+		"spear": ["wood_spear", "wood_spear", "wood_spear"], "sword": ["bronze_sword", "bronze_sword", "iron_sword"],
 		"shield": ["wood_shield", "bronze_shield", "iron_shield"], "armor": ["bronze_armor", "bronze_armor", "iron_armor"],
 		"pike": ["bronze_pike", "bronze_pike", "iron_pike"], "lance": ["bronze_lance", "bronze_lance", "iron_lance"],
 	}

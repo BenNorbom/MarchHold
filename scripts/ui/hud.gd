@@ -362,7 +362,7 @@ func _on_chat_key(ev: InputEvent) -> void:
 
 
 func _input(ev: InputEvent) -> void:
-	if chat_open and picker.visible and ev is InputEventKey and ev.echo and ev.unicode > 32:
+	if chat_open and picker.visible and ev is InputEventKey and ev.echo and ev.unicode > 32 and not ev.shift_pressed:
 		# A held hotkey is one press, not a string of letters.
 		get_viewport().set_input_as_handled()
 		return

@@ -215,7 +215,7 @@ Seven raw resources and two refined ones:
 
 | Item | Tiers | Role |
 |---|---|---|
-| Spear | Wood → bronze → iron | General infantry, decent vs cavalry |
+| Spear | Wood | Cheap general infantry, decent vs cavalry; pikes take over the role later |
 | Bow + arrows | Wood (stone tips) → bronze → iron tips | Ranged; quiver-limited |
 | Shield | Wood → bronze → iron | Blocks arrows and blows, slows the bearer |
 | Sword | Bronze → iron | Strong in melee with a shield |
@@ -240,7 +240,7 @@ Material tier scales damage and durability.
 The most advanced weapon in the game, and deliberately a siege tool first.
 
 - **Against walls and buildings:** devastating. A few hits bring down a stone wall segment; palisades and huts go down in one or two.
-- **In the open field:** inaccurate. Shots scatter more with range, and reload is slow (~15 s), so a cannon can hit a packed formation hard but often misses a spread-out one.
+- **In the open field:** a ball kills the one thing it lands on, whatever it is, even another cannon. It misses more and more with range, and reload is slow (~15 s).
 - **Crew:** 3 villagers. Slow to move by hand; much faster with a horse team.
 - **Vulnerable:** cavalry that reaches the guns wins. Cannons need an escort.
 - **Ammunition:** shot (iron + coal) from the armory, carried with the gun, like arrows.

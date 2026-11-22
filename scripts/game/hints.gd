@@ -19,7 +19,8 @@ var on := true
 
 func setup(game) -> void:
 	g = game
-	on = bool(Settings.get_val("hints", true)) and int(Settings.get_val("matches_played", 0)) < 3 and not game.opts.get("tutorial", false)
+	on = bool(Settings.get_val("hints", true)) and int(Settings.get_val("matches_played", 0)) < 3 and not game.opts.get("tutorial", false) \
+		and str(game.opts.get("mode", "standard")) == "standard"
 
 
 func _hint(key: String, text: String) -> void:

@@ -99,9 +99,15 @@ static func _wanted(m, p, workers: Array) -> Array:
 			for other in m.posts.values():
 				if other.faction == p.faction and other.mandate == "farming":
 					food -= other.members.size() - 1
+			if p.focus == "growth":
+				food = maxi(food, Planner.food_workers(f.pop, 1) + 2)
 			left -= _food_jobs(m, p, jobs, mini(food, left))
+			if m.post_goal(p) >= 2 or p.focus in ["pikes", "swords", "cavalry", "cannons"]:
+				# Racing for an age, or making metal gear: a share goes to the mines and the smelter.
+				var share := mini(left, ceili(workers.size() * 0.35))
+				left -= share - _works_jobs(m, p, jobs, share)
 			if f.age >= 1 or m.has_building(p.faction, "quarry"):
-				var stone := mini(Planner.stone_workers(f.adults), left)
+				var stone := mini(Planner.stone_workers(f.adults, 0.2 if m.post_goal(p) >= 3 else 0.12), left)
 				_add(jobs, "stone", "gather", "stone", stone)
 				left -= stone
 			_add(jobs, "wood", "gather", "wood", left)
@@ -109,33 +115,7 @@ static func _wanted(m, p, workers: Array) -> Array:
 			left -= _food_jobs(m, p, jobs, left)
 			_add(jobs, "wood", "gather", "wood", left)
 		"industry":
-			var stock: Dictionary = m.fac(p.faction).stock
-			var smelter = m.nearest_building(p.faction, p.center, ["smelter"])
-			if smelter and smelter.pos.distance_to(p.center) <= p.radius:
-				var metal := "bronze"
-				if smelter.tier >= 1 and float(stock.get("iron_ore", 0)) > 3.0 and float(stock.get("bronze", 0)) > 30.0:
-					metal = "iron"
-				# The smelter comes before the mines, once it has something to smelt.
-				var fed := true
-				for r in Defs.SMELT[metal]["inputs"]:
-					if float(stock.get(r, 0)) < 2.0:
-						fed = false
-				if fed:
-					var n := mini(2, left)
-					_add(jobs, "smelt", "smelt", metal, n)
-					left -= n
-			# Miners go round the mines in turn, up to three each, so one ore can't take everyone.
-			var miners := {}
-			var room := {}
-			for dep in Defs.DEPOSITS:
-				room[dep] = mini(3, _places(m, p, "mine", dep))
-			for turn in 3:
-				for dep in Defs.DEPOSITS:
-					if left > 0 and turn < room[dep]:
-						miners[dep] = turn + 1
-						left -= 1
-			for dep in miners:
-				_add(jobs, dep, "gather", dep, miners[dep])
+			left = _works_jobs(m, p, jobs, left)
 			var diggers := mini(_places(m, p, "quarry"), left)
 			_add(jobs, "stone", "gather", "stone", diggers)
 			left -= diggers
@@ -151,6 +131,39 @@ static func _wanted(m, p, workers: Array) -> Array:
 				left -= n
 			_add(jobs, "guard", "guard", "", left)
 	return jobs
+
+
+## The smelter first, once it has something to smelt, then miners round the mines in turn.
+## Returns how many of `left` are still free.
+static func _works_jobs(m, p, jobs: Array, left: int) -> int:
+	var stock: Dictionary = m.fac(p.faction).stock
+	var smelter = m.nearest_building(p.faction, p.center, ["smelter"])
+	if smelter and smelter.pos.distance_to(p.center) <= Works.reach(m, p):
+		var metal := "bronze"
+		if smelter.tier >= 1 and float(stock.get("iron_ore", 0)) > 3.0 and float(stock.get("bronze", 0)) > 30.0:
+			metal = "iron"
+		# The smelter comes before the mines, once it has something to smelt.
+		var fed := true
+		for r in Defs.SMELT[metal]["inputs"]:
+			if float(stock.get(r, 0)) < 2.0:
+				fed = false
+		if fed:
+			var n := mini(2, left)
+			_add(jobs, "smelt", "smelt", metal, n)
+			left -= n
+	# Miners go round the mines in turn, up to three each, so one ore can't take everyone.
+	var miners := {}
+	var room := {}
+	for dep in Defs.DEPOSITS:
+		room[dep] = mini(3, _places(m, p, "mine", dep))
+	for turn in 3:
+		for dep in Defs.DEPOSITS:
+			if left > 0 and turn < room[dep]:
+				miners[dep] = turn + 1
+				left -= 1
+	for dep in miners:
+		_add(jobs, dep, "gather", dep, miners[dep])
+	return left
 
 
 static func _add(jobs: Array, role: String, action: String, subject: String, n: int) -> void:
@@ -189,8 +202,9 @@ static func _bush_places(m, p) -> int:
 ## Working places this post can fill at its own buildings of a type.
 static func _places(m, p, type: String, deposit: String = "") -> int:
 	var n := 0
+	var reach: float = Works.reach(m, p) if type in ["mine", "quarry"] else p.radius
 	for b in m.buildings_of(p.faction, type):
-		if b.pos.distance_to(p.center) <= p.radius and (deposit == "" or b.deposit == deposit):
+		if b.pos.distance_to(p.center) <= reach and (deposit == "" or b.deposit == deposit):
 			n += int(Defs.BUILDINGS[type]["workers"])
 	return n
 

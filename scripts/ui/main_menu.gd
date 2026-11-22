@@ -13,6 +13,7 @@ var match_panel: PanelContainer
 var credits_panel: PanelContainer
 var terra_status: Label
 var difficulty: OptionButton
+var mode_pick: OptionButton
 var map_pick: OptionButton
 var opponents: OptionButton
 var map_note: Label
@@ -111,7 +112,7 @@ func _build_match_panel() -> void:
 	match_panel.theme_type_variation = "MenuPanel"
 	match_panel.set_anchors_preset(Control.PRESET_CENTER)
 	match_panel.custom_minimum_size = Vector2(560, 420)
-	match_panel.position = Vector2(-280, -190)
+	match_panel.position = Vector2(-280, -215)
 	match_panel.visible = false
 	add_child(match_panel)
 	var v := VBoxContainer.new()
@@ -126,6 +127,17 @@ func _build_match_panel() -> void:
 	g.add_theme_constant_override("h_separation", 16)
 	g.add_theme_constant_override("v_separation", 10)
 	v.add_child(g)
+	var mode_label := Label.new()
+	mode_label.text = "Mode"
+	g.add_child(mode_label)
+	mode_pick = OptionButton.new()
+	for id: String in Defs.MODES:
+		mode_pick.add_item(Defs.MODES[id]["name"])
+		mode_pick.set_item_metadata(mode_pick.item_count - 1, id)
+		if id == str(Settings.get_val("mode", "standard")):
+			mode_pick.select(mode_pick.item_count - 1)
+	mode_pick.item_selected.connect(func(_i: int): _update_map_note())
+	g.add_child(mode_pick)
 	var l1 := Label.new()
 	l1.text = "Difficulty"
 	g.add_child(l1)
@@ -222,6 +234,11 @@ func _update_map_note() -> void:
 	else:
 		var apart: float = 2.0 * (float(info["size"]) * 0.5 - float(info["margin"])) * sin(PI / count)
 		map_note.text = "Free-for-all: neighbouring camps start about %d m apart. The last crowned commander standing wins." % snappedi(int(apart), 10)
+	var about: String = Defs.MODES[mode_pick.get_selected_metadata()]["desc"]
+	if about != "":
+		if count > 2:
+			about += " More than one opponent will run slowly at this size."
+		map_note.text = about + "\n" + map_note.text
 
 
 func _show_match() -> void:
@@ -230,6 +247,7 @@ func _show_match() -> void:
 
 
 func _start() -> void:
+	Settings.data["mode"] = mode_pick.get_selected_metadata()
 	Settings.data["difficulty"] = difficulty.selected
 	Settings.data["map"] = map_pick.get_selected_metadata()
 	Settings.data["opponents"] = opponents.selected + 1
@@ -237,7 +255,7 @@ func _start() -> void:
 	Settings.save_all()
 	var s := seed_edit.text.strip_edges()
 	var seed_val := int(s) if s.is_valid_int() else (hash(s) % 900000 + 1000 if s != "" else 0)
-	start_match.emit({"difficulty": difficulty.selected, "map": map_pick.get_selected_metadata(), "strategy": strategy.get_item_text(strategy.selected).to_lower(),
+	start_match.emit({"mode": mode_pick.get_selected_metadata(), "difficulty": difficulty.selected, "map": map_pick.get_selected_metadata(), "strategy": strategy.get_item_text(strategy.selected).to_lower(),
 		"seed": absi(seed_val), "opponents": opponents.selected + 1, "calm_start": calm.button_pressed})
 
 

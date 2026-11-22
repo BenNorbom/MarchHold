@@ -25,7 +25,7 @@ const BUILD_WORDS := [
 
 const ITEM_WORDS := [
 	["iron sword", "iron_sword"], ["bronze sword", "bronze_sword"], ["sword", "bronze_sword:generic"],
-	["iron spear", "iron_spear"], ["bronze spear", "bronze_spear"], ["wooden spear", "wood_spear"], ["spear", "wood_spear:generic"],
+	["wooden spear", "wood_spear"], ["spear", "wood_spear"],
 	["iron shield", "iron_shield"], ["bronze shield", "bronze_shield"], ["wooden shield", "wood_shield"], ["shield", "wood_shield:generic"],
 	["iron armor", "iron_armor"], ["bronze armor", "bronze_armor"], ["armor", "bronze_armor:generic"], ["armour", "bronze_armor:generic"],
 	["iron pike", "iron_pike"], ["pike", "bronze_pike:generic"], ["iron lance", "iron_lance"], ["lance", "bronze_lance:generic"],
@@ -127,6 +127,44 @@ static func mandate_in(s: String) -> Dictionary:
 		var where := "" if pair[0] == "village" else where_in(s)
 		return _step("mandate", pair[0], 0, where, clampi(count_in(s), 0, 100))
 	return {}
+
+
+const AGE_WORDS := {"stone": "stone_age", "bronze": "bronze_age", "iron": "iron_age", "gunpowder": "gunpowder", "cannon": "gunpowder"}
+const FOCUS_WORDS := [["pike production", "pikes"], ["pikemen", "pikes"], ["pikes", "pikes"], ["pike", "pikes"], ["swordsmen", "swords"],
+	["swords", "swords"], ["sword", "swords"], ["archers", "archers"], ["archery", "archers"], ["bows", "archers"], ["cavalry", "cavalry"],
+	["horsemen", "cavalry"], ["lancers", "cavalry"], ["horses", "cavalry"], ["cannons", "cannons"], ["artillery", "cannons"],
+	["spearmen", "spears"], ["spears", "spears"], ["growth", "growth"], ["economy", "growth"], ["growing", "growth"], ["population", "growth"],
+	["defence", "defence"], ["defense", "defence"], ["defences", "defence"], ["defenses", "defence"], ["walls", "defence"]]
+
+
+## "Get to the Iron age ASAP", "rush bronze", "focus on pike production", "go back to normal".
+static func strategy_in(s: String) -> Array:
+	var out := []
+	var age := RegEx.create_from_string(" (?:get|go|advance|rush|race|push|head|hurry|move|jump|reach|aim|beeline|tech)(?: up| on| ahead| straight)?(?: to| for| into| towards?)?(?: the)? (stone|bronze|iron|gunpowder|cannon)(?: age| tech)?(?:s)? ").search(s)
+	if age == null:
+		age = RegEx.create_from_string(" (stone|bronze|iron|gunpowder) age (?:asap|as soon as possible|as fast as (?:you )?can|quickly|fast|first|now|is the priority) ").search(s)
+	if age == null:
+		age = RegEx.create_from_string(" (?:research |get )?(gunpowder) (?:asap|as soon as possible|as fast as (?:you )?can|first) ").search(s)
+	if age:
+		out.append(_step("strategy", AGE_WORDS[age.get_string(1)]))
+	var lead := " (?:focus|concentrate|specialise|specialize|prioritise|prioritize|put everything|go all in|go all-in|double down|lean)(?: on| into| in)?(?: the| our| making| producing| building| more)?(?: production of)? "
+	var priority := " make (?:the )?([a-z ]+?) (?:your|our|the) (?:priority|focus|main job) "
+	var found := RegEx.create_from_string(lead + "(.+)$").search(s)
+	var text := found.get_string(1) if found else ""
+	if text == "":
+		var p := RegEx.create_from_string(priority).search(s)
+		if p:
+			text = p.get_string(1)
+	if text == "" and RegEx.create_from_string(" (?:mass produce|mass-produce|build up|stock up on|pump out) ").search(s):
+		text = s
+	if text != "":
+		for pair in FOCUS_WORDS:
+			if (" " + text + " ").contains(" " + pair[0] + " "):
+				out.append(_step("strategy", pair[1], clampi(number_in(s), 0, 10000)))
+				break
+	if out.is_empty() and RegEx.create_from_string(" (?:go back to|return to|back to|switch to|play) (?:a )?(?:normal|balanced|a balanced plan|balance)| (?:drop|forget|cancel|clear) (?:the |your )?(?:focus|strategy|priority)| stop focusing ").search(s):
+		out.append(_step("strategy", "balanced"))
+	return out
 
 
 static func limits_in(s: String) -> Array:
@@ -416,6 +454,7 @@ static func _parse(text: String) -> Dictionary:
 	if s.contains(" everyone ") or s.contains(" everybody ") or s.contains(" all of you ") or s.contains(" all hands "):
 		out["all"] = true
 	var settings := limits_in(s)
+	settings.append_array(strategy_in(s))
 	var charge := mandate_in(s)
 	if not charge.is_empty():
 		settings.push_front(charge)

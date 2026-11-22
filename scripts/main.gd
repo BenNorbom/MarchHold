@@ -20,6 +20,7 @@ var shot_menu := false
 var shot_ui := ""
 var smoke_tutorial := false
 var dev_rivals := 1
+var dev_mode := "standard"
 
 
 func _ready() -> void:
@@ -46,6 +47,8 @@ func _ready() -> void:
 			shot_ui = a.substr(10)
 		elif a.begins_with("--rivals="):
 			dev_rivals = int(a.substr(9))
+		elif a.begins_with("--mode="):
+			dev_mode = a.substr(7)
 		elif a == "--smoke-tutorial":
 			smoke_tutorial = true
 	if shot_menu:
@@ -79,12 +82,12 @@ func _ready() -> void:
 		return
 	if smoke:
 		Settings.data["intro_seen"] = true
-		_start({"seed": 777, "difficulty": 1, "opponents": dev_rivals})
+		_start({"seed": 777, "difficulty": 1, "opponents": dev_rivals, "mode": dev_mode})
 		_smoke()
 		return
 	if shot_path != "":
 		Settings.data["intro_seen"] = true
-		_start({"seed": 4242, "difficulty": 1, "opponents": dev_rivals})
+		_start({"seed": 4242, "difficulty": 1, "opponents": dev_rivals, "mode": dev_mode})
 		if shot_demo:
 			_demo_buildings()
 		if shot_battle > 0:
@@ -192,7 +195,7 @@ func _demo_buildings() -> void:
 	for k in 6:
 		var u = m.spawn_unit(0, "villager", home + Vector2(4 + k, 6))
 		u.name = "Demo"
-		u.weapon = ["wood_spear", "bronze_sword", "iron_pike", "", "wood_spear", "bronze_spear"][k]
+		u.weapon = ["wood_spear", "bronze_sword", "iron_pike", "", "wood_spear", "iron_sword"][k]
 		u.shield = "bronze_shield" if k == 1 else ""
 		u.armor = "bronze_armor" if k == 1 else ""
 		u.bow = k == 3
@@ -255,9 +258,12 @@ func _smoke() -> void:
 	g._place_click()
 	print("placing after click: ", g.placing)
 	say.call("build a palisade")
-	g.wall_points = [home + Vector2(-25, 30), home + Vector2(0, 36)]
-	g.place_pos = home + Vector2(20, 32)
-	g._finish_wall()
+	if g.placing and g.place_type == "palisade":    # not if the hut found no room, as in a full Grand army camp
+		g.wall_points = [home + Vector2(-25, 30), home + Vector2(0, 36)]
+		g.place_pos = home + Vector2(20, 32)
+		g._finish_wall()
+	elif g.placing:
+		g._cancel_place()
 	say.call("make spears")
 	print("log lines before scout: ", g.hud.log_lines.size(), " crews: ", m.crews_of(0).size())
 	say.call("send a scout east")

@@ -143,7 +143,7 @@ static func _limit(m, p, want: Dictionary) -> String:
 	if want["kind"] != "build":
 		return ""
 	var type: String = want["type"]
-	if not type in Defs.MANDATES[p.mandate]["builds"]:
+	if not may_build(m, p, type):
 		return "not in the mandate"
 	if p.forbid.has(type):
 		return "you said not to"
@@ -173,15 +173,28 @@ static func _planned(m, faction: int, key: String) -> int:
 	var n := 0
 	for b in m.buildings_of(faction, "", false):
 		n += int(Defs.BUILDINGS[b.type].get(key, 0))
-	return n
+	return maxi(n, m.fac(faction).granary) if key == "food_cap" else n
 
 
 static func _can_have(m, p, type: String) -> bool:
 	return not p.forbid.has(type) and m.unlock_problem(p.faction, type) == "" and m.can_afford(p.faction, Defs.BUILDINGS[type]["cost"])
 
 
+## The mandate's own list, and what its strategy calls for.
+static func may_build(m, p, type: String) -> bool:
+	if type in Defs.MANDATES[p.mandate]["builds"]:
+		return true
+	return type in Defs.STRATEGY_BUILDS and p.mandate in ["village", "industry"] and (m.post_goal(p) > 0 or p.focus != "")
+
+
+## How far a post looks for deposits: further while racing for an age.
+static func reach(m, p) -> float:
+	return maxf(p.radius, Defs.STRATEGY_REACH) if m.post_goal(p) > 0 and p.mandate in ["village", "industry"] else p.radius
+
+
 static func _wants(m, p) -> Array:
 	var out := []
+	_strategy(m, p, out)
 	match p.mandate:
 		"village":
 			_village(m, p, out)
@@ -192,6 +205,114 @@ static func _wants(m, p) -> Array:
 		"garrison":
 			_garrison(m, p, out)
 	return out
+
+
+## What an age or a focus asks for. It comes before the rest, after food and roofs.
+static func _strategy(m, p, out: Array) -> void:
+	var f = m.fac(p.faction)
+	var aim: int = m.post_goal(p)
+	if aim > 0:
+		if f.age < 1 and m.buildings_of(p.faction, "quarry", false).is_empty():
+			out.append(_building(Rank.DEFENCE, "quarry"))
+		if aim >= 2 and f.age >= 1:
+			for dep in (["bronze_ore", "coal"] if aim < 3 or f.age < 2 else Defs.DEPOSITS):
+				_want_mine(m, p, out, dep)
+			if m.buildings_of(p.faction, "smelter", false).is_empty():
+				out.append(_building(Rank.DEFENCE, "smelter"))
+		if aim >= 3 and f.age >= 2 and m.has_building(p.faction, "smelter"):
+			var b = m.nearest_building(p.faction, p.center, ["smelter"])
+			var id: String = m._upgrade_for(p.faction, "smelter")
+			if Defs.UPGRADES.has(id) and b and b.upgrading == "":
+				out.append(_want(Rank.DEFENCE, "upgrade", "smelter", Defs.UPGRADES[id]["cost"]))
+		if aim >= 4 and f.age >= 3:
+			if m.buildings_of(p.faction, "university", false).is_empty():
+				out.append(_building(Rank.DEFENCE, "university"))
+			if m.research_problem(p.faction, "gunpowder") == "":
+				out.append(_want(Rank.DEFENCE, "research", "gunpowder", Defs.RESEARCH["gunpowder"]["cost"]))
+	if p.focus == "":
+		return
+	var st: Dictionary = Defs.STRATEGIES[p.focus]
+	match p.focus:
+		"growth":
+			if _planned(m, p.faction, "housing") - f.pop <= maxi(10, f.pop / 3) and _planned(m, p.faction, "housing") < Defs.POP_HARD_CAP:
+				out.append(_building(Rank.HOUSING, "hut"))
+			if count_here(m, p, "farm") * Planner.FARMERS_PER_FARM < ceili(f.pop * 0.32):
+				out.append(_building(Rank.FOOD, "farm"))
+		"defence":
+			if count_here(m, p, "tower") < 2 and f.age >= 1:
+				out.append(_building(Rank.DEFENCE, "tower"))
+			if not p.walled and f.age >= 1 and f.pop >= 20:
+				out.append(_want(Rank.DEFENCE, "build", "stone_wall", _ring_cost(p, "stone_wall")))
+			_keep_spears(m, p, out, maxi(SPEARS_KEPT, f.adults / 3))
+	if not st.has("items"):
+		return
+	# The armories it needs, the research, and horses for cavalry.
+	if m.buildings_of(p.faction, "armory", false).is_empty():
+		out.append(_building(Rank.DEFENCE, "armory"))
+	elif m.buildings_of(p.faction, "armory").all(func(b): return b.queue.size() >= m.QUEUE_MAX / 2) and m.buildings_of(p.faction, "armory", false).size() < 1 + f.pop / 30:
+		out.append(_building(Rank.REST, "armory"))
+	for research in ["armory_bronze", "armory_iron"]:
+		if f.age >= int(Defs.RESEARCH[research]["age"]) and m.research_problem(p.faction, research) == "":
+			out.append(_want(Rank.DEFENCE, "research", research, Defs.RESEARCH[research]["cost"]))
+	if st.has("horses") and f.age >= 1:
+		if m.buildings_of(p.faction, "stable", false).is_empty():
+			out.append(_building(Rank.DEFENCE, "stable"))
+	var item := focus_item(m, p)
+	if item == "":
+		return
+	var have := stocked(m, p.faction, item)
+	var keep: int = p.focus_keep * (8 if item in ["arrows", "shot"] else 1)
+	if have < keep:
+		var want := _want(Rank.DEFENCE, "craft", item, Defs.item_cost(item, maxi(0, m.armory_tier(p.faction))))
+		want["count"] = keep - have
+		out.append(want)
+	elif not p.focus_told and p.faction == 0:
+		p.focus_told = true
+		m.post(0, "%s: the armory holds %d %s, as you asked. We'll keep it topped up." % [m.post_label(p), have, Defs.item_name(item, have)], "done")
+	# The second item of a pair (arrows for bows, shot for cannons) once the first is in stock.
+	var second: Array = st["items"]
+	if st["items"].size() == 2 and item == second[0] and have >= keep and m.craft_problem(p.faction, second[1]) == "":
+		var extra: int = p.focus_keep * 8
+		if stocked(m, p.faction, second[1]) < extra:
+			var more := _want(Rank.DEFENCE, "craft", second[1], Defs.item_cost(second[1], maxi(0, m.armory_tier(p.faction))))
+			more["count"] = extra - stocked(m, p.faction, second[1])
+			out.append(more)
+
+
+## The best thing the focus can make right now, or "" when it needs an age or research first.
+static func focus_item(m, p) -> String:
+	for item: String in Defs.STRATEGIES[p.focus].get("items", []):
+		if m.craft_problem(p.faction, item) == "" and m.step_problem(p.faction, _step("craft", item)) == "":
+			return item
+	return ""
+
+
+## In the armory, and waiting in an armory's queue.
+static func stocked(m, faction: int, item: String) -> int:
+	var n := int(m.fac(faction).gear.get(item, 0))
+	for b in m.buildings_of(faction, "armory"):
+		n += b.queue.count(item) * int(Defs.ITEMS[item]["batch"])
+	return n
+
+
+static func _want_mine(m, p, out: Array, dep: String) -> void:
+	for b in m.buildings_of(p.faction, "mine", false):
+		if b.deposit == dep or (not b.complete and b.node >= 0 and m.terrain.nodes[b.node].sub == dep):
+			return
+	var mine := _building(Rank.DEFENCE, "mine")
+	mine["deposit"] = dep
+	mine["what"] = "mine " + dep
+	out.append(mine)
+
+
+static func _ring_cost(p, type: String) -> Dictionary:
+	var gate := "stone_gate" if type == "stone_wall" else "palisade_gate"
+	var r := RING if p.mandate != "village" else RING * 2.5
+	var pieces := ceili(TAU * r / float(Defs.BUILDINGS[type]["length"]))
+	var cost := {}
+	for res in Defs.BUILDINGS[type]["cost"]:
+		cost[res] = int(Defs.BUILDINGS[type]["cost"][res]) * pieces + int(Defs.BUILDINGS[gate]["cost"].get(res, 0))
+	return cost
 
 
 static func _village(m, p, out: Array) -> void:
@@ -248,7 +369,7 @@ static func _industry(m, p, out: Array) -> void:
 		out.append(_building(Rank.REST, "quarry"))
 	if f.age >= 1:
 		for dep in Defs.DEPOSITS:
-			var node = Planner.find_deposit(m, p.faction, dep, p.center, p.radius, true, p.seen)
+			var node = Planner.find_deposit(m, p.faction, dep, p.center, reach(m, p), true, p.seen)
 			if node and not _mine_planned(m, p, node):
 				var mine := _building(Rank.REST, "mine")
 				mine["deposit"] = dep
@@ -294,21 +415,23 @@ static func _garrison(m, p, out: Array) -> void:
 
 static func _keep_spears(m, p, out: Array, wanted: int) -> void:
 	var tier: int = m.armory_tier(p.faction)
-	if tier < 0 or p.jobs.has("do:craft"):
+	if tier < 0:
 		return
 	var gear: Dictionary = m.fac(p.faction).gear
-	var spare := 0
+	var spare := stocked(m, p.faction, "wood_spear") - int(gear.get("wood_spear", 0))
 	for id in gear:
 		if Defs.ITEMS[id]["slot"] == "weapon":
 			spare += int(gear[id])
 	if spare < wanted:
-		var item: String = ["wood_spear", "bronze_spear", "iron_spear"][tier]
-		out.append(_want(Rank.REST, "craft", item, Defs.item_cost(item, tier)))
+		var item := "wood_spear"     # the one weapon every armory makes
+		var spears := _want(Rank.REST, "craft", item, Defs.item_cost(item, tier))
+		spears["count"] = wanted - spare
+		out.append(spears)
 
 
 static func _keep_arrows(m, p, out: Array) -> void:
 	var tier: int = m.armory_tier(p.faction)
-	if tier < 0 or p.jobs.has("do:craft") or int(m.fac(p.faction).gear.get("arrows", 0)) >= Defs.QUIVER * 2:
+	if tier < 0 or stocked(m, p.faction, "arrows") >= Defs.QUIVER * 2:
 		return
 	for u in m.units:
 		if not u.dead and u.faction == p.faction and u.bow:
@@ -381,7 +504,7 @@ static func _start(m, p, want: Dictionary) -> bool:
 		"upgrade":
 			return _begin(m, p, "do:upgrade %s" % type, _step("upgrade", type), _hands(m, p, BUILDERS))
 		"craft":
-			return _begin(m, p, "do:craft", _step("craft", type, int(Defs.ITEMS[type]["batch"])), _hands(m, p, 2))
+			return _queue(m, p, type, int(want.get("count", 1)))
 	var wall: bool = Defs.BUILDINGS[type].get("wall", false)
 	var people := _hands(m, p, WALL_BUILDERS if wall else BUILDERS)
 	if people.is_empty():
@@ -400,10 +523,30 @@ static func _start(m, p, want: Dictionary) -> bool:
 	return true
 
 
+## Nobody works at the armory: the order joins its queues, as many as the stores and the queues allow.
+static func _queue(m, p, item: String, wanted: int) -> bool:
+	var f = m.fac(p.faction)
+	var it: Dictionary = Defs.ITEMS[item]
+	var cost := Defs.item_cost(item, maxi(0, m.armory_tier(p.faction)))
+	var held := committed(m, p.faction)
+	var room := 0
+	for b in m.buildings_of(p.faction, "armory"):
+		if b.tier >= int(it["tier"]):
+			room += m.QUEUE_MAX - b.queue.size()
+	var n := mini(ceili(float(wanted) / int(it["batch"])), room)
+	# Each item is paid for when the armory starts it, so only queue what the stores can cover now.
+	for r in cost:
+		var spare: float = float(f.stock.get(r, 0.0)) - float(held.get(r, 0.0)) - float(f.reserve.get(r, 0.0))
+		n = mini(n, int(spare / maxf(1.0, float(cost[r]))))
+	if n <= 0:
+		return false
+	return m.queue_craft(p.faction, item, n * int(it["batch"]), true) == ""
+
+
 ## Picks and marks out a site in the post's area. Used for the captain's own plans and for "build a ..." orders.
 static func lay_out(m, p, type: String, deposit: String = "") -> Dictionary:
 	var d: Dictionary = Defs.BUILDINGS[type]
-	if not type in Defs.MANDATES[p.mandate]["builds"]:
+	if not may_build(m, p, type):
 		return {"ok": false, "error": "A %s isn't part of running the %s. Address villagers, or use /b, to place it yourself." % [d["name"].to_lower(), p.name]}
 	var why: String = m.unlock_problem(p.faction, type)
 	if why != "":
@@ -417,7 +560,7 @@ static func lay_out(m, p, type: String, deposit: String = "") -> Dictionary:
 	if type == "mine" and deposit == "":
 		deposits = Defs.DEPOSITS
 	for dep in deposits:
-		var spot = Planner.find_site(m, p.faction, type, p.center, front.normalized(), p.rng, true, dep, p.radius, p.seen)
+		var spot = Planner.find_site(m, p.faction, type, p.center, front.normalized(), p.rng, true, dep, reach(m, p) if type == "mine" else p.radius, p.seen)
 		if spot == null:
 			continue
 		var r: Dictionary = m.place_site(p.faction, type, spot[0], spot[1])
@@ -471,7 +614,9 @@ static func _ring(m, p, type: String) -> Dictionary:
 
 ## Paid-for work in the area that nobody is on gets its builders back.
 static func _resume(m, p) -> bool:
-	var builds: Array = Defs.MANDATES[p.mandate]["builds"]
+	var builds: Array = Defs.MANDATES[p.mandate]["builds"].duplicate()
+	if may_build(m, p, "mine"):
+		builds.append_array(Defs.STRATEGY_BUILDS)
 	var manned := {}
 	var upgrading := {}
 	for c in m.crews.values():
@@ -485,7 +630,7 @@ static func _resume(m, p) -> bool:
 				upgrading[s["subject"]] = true
 	var orphans := []
 	for b in m.buildings_of(p.faction, "", false):
-		if b.pos.distance_to(p.center) > p.radius or not b.type in builds:
+		if b.pos.distance_to(p.center) > reach(m, p) or not b.type in builds:
 			continue
 		if not b.complete:
 			if b.paid and not manned.has(b.id):
@@ -508,8 +653,11 @@ static func _resume(m, p) -> bool:
 static func _note_what_is_seen(m, p) -> void:
 	if not p.mandate in ["village", "industry"]:
 		return
-	if p.survey_nodes.is_empty():
-		for node in m._nodes_within(p.center, p.radius):
+	var looking: float = reach(m, p)
+	if p.survey_nodes.is_empty() or float(p.get_meta("surveyed", p.radius)) != looking:
+		p.set_meta("surveyed", looking)
+		p.survey_nodes = []
+		for node in m._nodes_within(p.center, looking):
 			if node.kind == "deposit" or (node.kind == "rock" and node.sub == "outcrop"):
 				p.survey_nodes.append(node.id)
 	var unseen := false
@@ -519,6 +667,6 @@ static func _note_what_is_seen(m, p) -> void:
 		var at: Vector2 = m.terrain.nodes[id].pos
 		if Planner.known(m, p.faction, at) or Planner.post_can_see(m, p, at):
 			p.seen[id] = true
-		elif p.mandate == "industry" or (m.terrain.nodes[id].kind == "rock" and m.buildings_of(p.faction, "quarry", false).is_empty()):
+		elif p.mandate == "industry" or m.post_goal(p) >= 2 or (m.terrain.nodes[id].kind == "rock" and m.buildings_of(p.faction, "quarry", false).is_empty()):
 			unseen = true
 	p.surveying = unseen

@@ -852,6 +852,8 @@ func craft_problem(faction: int, item: String) -> String:
 		top = maxi(top, b.tier)
 	if top < int(it["tier"]):
 		return "research the %s armory first (/r)." % ["wood", "bronze", "iron"][it["tier"]]
+	if it.has("until") and top >= int(it["until"]):
+		return "the %s armory makes better than %s now." % [["wood", "bronze", "iron"][top], Defs.item_name(item, 2)]
 	if it.has("research") and not f.researched.has(it["research"]):
 		return "that needs %s research at a university." % it["research"]
 	return ""
@@ -898,32 +900,39 @@ func _free_lab(faction: int, type: String) -> Building:
 	return null
 
 
+var armory_wait_t := -99.0      # one warning for the side, however many armories wait
+
+const ARMORIES_SHARED := 6      # people arming go to one of this many armories nearest them
+
 ## Most items an armory will hold in its queue. A full queue refuses the order.
 const QUEUE_MAX := 12
 
 
 ## Puts items into the queue of the least busy armory that can make them. Nobody works there.
 ## The armory pays for each item as it starts it, and makes them one at a time.
-func queue_craft(faction: int, item: String, amount: int) -> String:
+func queue_craft(faction: int, item: String, amount: int, quiet: bool = false) -> String:
 	var why := craft_problem(faction, item)
 	if why != "":
 		return why
 	var it: Dictionary = Defs.ITEMS[item]
 	var batch := int(it["batch"])
 	var entries := ceili(float(amount if amount > 0 else batch) / float(batch))
-	var arm: Building = null
-	for b: Building in buildings_of(faction, "armory"):
-		if not b.complete or b.tier < int(it["tier"]):
-			continue
-		if arm == null or b.queue.size() < arm.queue.size():
-			arm = b
-	if arm == null:
+	var able: Array = buildings_of(faction, "armory").filter(func(b): return b.tier >= int(it["tier"]))
+	if able.is_empty():
 		return "no armory is ready to make %s." % Defs.item_name(item, 2)
-	if arm.queue.size() + entries > QUEUE_MAX:
-		return "the armory queue is full (%d waiting)." % arm.queue.size()
+	var room := 0
+	for b: Building in able:
+		room += QUEUE_MAX - b.queue.size()
+	if entries > room:
+		return "the armory queue is full." if room <= 0 else "the armory queue has room for only %d more." % (room * batch)
+	# An order is shared out, so every extra armory makes it arrive sooner.
 	for i in entries:
-		arm.queue.append(item)
-	if faction == 0:
+		var least: Building = able[0]
+		for b: Building in able:
+			if b.queue.size() < least.queue.size():
+				least = b
+		least.queue.append(item)
+	if faction == 0 and not quiet:
 		var made := entries * batch
 		post(0, "The armory will make %d %s." % [made, Defs.item_name(item, made)], "info")
 	return ""
@@ -939,8 +948,8 @@ func _update_armories(dt: float) -> void:
 		if b.make_t <= 0.0:
 			var cost := Defs.item_cost(item, armory_tier(b.faction))
 			if not pay(b.faction, cost):
-				if b.faction == 0 and t - b.waiting_msg_t > 25.0:
-					b.waiting_msg_t = t
+				if b.faction == 0 and t - armory_wait_t > 25.0:
+					armory_wait_t = t
 					post(0, "The armory is waiting for %s to make %s." % [Defs.cost_text(missing_cost(0, cost)), Defs.item_name(item, 2)], "warn")
 				continue
 		b.make_t += dt
@@ -962,7 +971,7 @@ func _finish_make(b: Building, item: String) -> void:
 	else:
 		var f := fac(b.faction)
 		f.gear[item] = int(f.gear.get(item, 0)) + n
-	if b.faction == 0 and b.queue.is_empty():
+	if b.faction == 0 and buildings_of(0, "armory").all(func(a): return a.queue.is_empty()):
 		post(0, "The armory has finished its queue.", "done")
 
 
@@ -2023,10 +2032,23 @@ func _do_arm(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
 		u.anim = Anim.IDLE
 		return
 	var b := bld(c.state.get("bld", -1))
+	var f := fac(u.faction)
+	if u.phase != "ride":
+		# Gear is the side's, so a crowd spreads over the armories instead of queueing at one.
+		var mine := bld(u.tgt_bld)
+		if mine == null or mine.dead or mine.type != "armory":
+			var near: Array = buildings_of(u.faction, "armory")
+			if not near.is_empty():
+				near = near.duplicate()
+				var from := u.pos
+				near.sort_custom(func(x, y): return x.pos.distance_squared_to(from) < y.pos.distance_squared_to(from))
+				mine = near[u.id % mini(near.size(), ARMORIES_SHARED)]
+				u.tgt_bld = mine.id
+		if mine != null and not mine.dead:
+			b = mine
 	if b == null or b.dead:
 		u.phase = "done"
 		return
-	var f := fac(u.faction)
 	var subj: String = s["subject"]
 	if u.phase == "ride":
 		_ride_after_arming(u, c, dt)
@@ -2144,7 +2166,8 @@ func _equip(u: Unit, f: Faction, item: String) -> bool:
 				f.gear[u.shield] = int(f.gear.get(u.shield, 0)) + 1
 				u.shield = ""
 		"shield":
-			if u.weapon.ends_with("pike"):
+			# A pike takes both hands, and so does a bow. The commander, who switches between them, is the exception.
+			if u.weapon.ends_with("pike") or (u.bow and u.kind == "villager"):
 				return false
 			if u.shield != "":
 				f.gear[u.shield] = int(f.gear.get(u.shield, 0)) + 1
@@ -2157,6 +2180,9 @@ func _equip(u: Unit, f: Faction, item: String) -> bool:
 			if u.bow:
 				return false
 			u.bow = true
+			if u.shield != "" and u.kind == "villager":
+				f.gear[u.shield] = int(f.gear.get(u.shield, 0)) + 1
+				u.shield = ""
 			refill_quiver(u, f)
 		_:
 			return false
@@ -2174,7 +2200,7 @@ func refill_quiver(u: Unit, f: Faction) -> void:
 
 
 func _equip_best(u: Unit, f: Faction) -> void:
-	var weapons := ["iron_sword", "iron_spear", "bronze_sword", "bronze_spear", "wood_spear"]
+	var weapons := ["iron_sword", "iron_pike", "bronze_sword", "bronze_pike", "wood_spear"]
 	if u.mounted:
 		weapons = ["iron_lance", "bronze_lance"] + weapons
 	for w in weapons:
@@ -2185,7 +2211,7 @@ func _equip_best(u: Unit, f: Faction) -> void:
 			break
 	if u.weapon == "" and not u.bow and int(f.gear.get("bow", 0)) > 0:
 		_equip(u, f, "bow")
-	for sh in ["iron_shield", "bronze_shield", "wood_shield"]:
+	for sh in ([] if u.bow and u.kind == "villager" else ["iron_shield", "bronze_shield", "wood_shield"]):
 		if u.shield == sh:
 			break
 		if int(f.gear.get(sh, 0)) > 0 and _equip(u, f, sh):
@@ -2203,7 +2229,9 @@ func _do_mount(u: Unit, c: Crew, dt: float) -> void:
 	if u.phase == "done" or u.mounted:
 		u.phase = "done"
 		return
-	var st := bld(c.state.get("bld", -1))
+	var st := bld(u.tgt_bld)
+	if st == null or st.dead or st.type != "stable":
+		st = bld(c.state.get("bld", -1))
 	if st == null or st.dead:
 		st = _stable_with_horse(u.faction, u.pos)
 		if st == null:
@@ -2212,6 +2240,12 @@ func _do_mount(u: Unit, c: Crew, dt: float) -> void:
 	if not go_to_building(u, st, dt):
 		return
 	var horse := _take_horse(u.faction, st)
+	if horse == null:
+		# That stable is empty, but another may not be.
+		var next := _stable_with_horse(u.faction, u.pos)
+		if next != null and next != st:
+			u.tgt_bld = next.id
+			return
 	if horse:
 		u.mounted = true
 		u.max_hp += Defs.MOUNTED["hp_bonus"]
@@ -2443,7 +2477,7 @@ func _refresh_counts(f: Faction) -> void:
 	f.idle = idle
 	f.soldiers = soldiers
 	f.housing = mini(housing, Defs.POP_HARD_CAP)
-	f.food_cap = food_cap
+	f.food_cap = maxi(food_cap, f.granary)
 	f.horses = horses
 
 
