@@ -146,7 +146,6 @@ class Faction:
 	var commander := -1
 	var food_state := 2
 	var knowledge := PackedFloat32Array()
-	var visible := PackedByteArray()
 	var intel := {}
 	var reports: Array = []
 	var names_used := {}
@@ -219,6 +218,7 @@ var ulist: Array = []
 var uhead := PackedInt32Array()
 var unext := PackedInt32Array()
 var node_buckets: Array = []
+var kind_buckets := {}               # node kind -> bucket -> node ids, or null where there are none
 var uside := PackedInt32Array()      # unit bucket -> which sides have someone in it
 var bld_buckets := {}                # cell -> buildings centred there, oldest first
 var own_blds: Array = []             # faction -> its buildings, oldest first
@@ -246,6 +246,7 @@ func _init_world(tr: Terrain, faction_count: int) -> void:
 	node_buckets.resize(node_bucket_n * node_bucket_n)
 	for k in node_bucket_n * node_bucket_n:
 		node_buckets[k] = PackedInt32Array()
+	kind_buckets.clear()
 	for n in terrain.nodes:
 		_bucket_node(n)
 	uhead.resize(bucket_n * bucket_n)
@@ -266,6 +267,14 @@ func _bucket_node(n) -> void:
 	var arr: PackedInt32Array = node_buckets[bj * node_bucket_n + bi]
 	arr.append(n.id)
 	node_buckets[bj * node_bucket_n + bi] = arr
+	if not kind_buckets.has(n.kind):
+		var empty := []
+		empty.resize(node_bucket_n * node_bucket_n)
+		kind_buckets[n.kind] = empty
+	var of_kind: Array = kind_buckets[n.kind]
+	if of_kind[bj * node_bucket_n + bi] == null:
+		of_kind[bj * node_bucket_n + bi] = []
+	of_kind[bj * node_bucket_n + bi].append(n.id)
 
 
 func new_id() -> int:
@@ -506,14 +515,19 @@ func line_clear(faction: int, a: Vector2, b: Vector2) -> bool:
 	var len := d.length()
 	if len < 0.01:
 		return true
+	# solid_for and cell_of written out, as this runs for every metre of every route.
+	var grid: AStarGrid2D = blocking.grid
+	var gates: Dictionary = blocking.open_gates[maxi(faction, 0)]
+	var top := grid_n - 1
 	var steps := int(len / (CELL * 0.5)) + 1
 	var last := Vector2i(-1, -1)
 	for s in steps + 1:
-		var c := cell_of(a + d * (float(s) / steps))
+		var p := a + d * (float(s) / steps)
+		var c := Vector2i(clampi(int(p.x / CELL), 0, top), clampi(int(p.y / CELL), 0, top))
 		if c == last:
 			continue
 		last = c
-		if solid_for(faction, c):
+		if grid.is_point_solid(c) and not gates.has(c):
 			return false
 	return true
 
@@ -714,6 +728,9 @@ func nearest_enemy(p: Vector2, r: float, faction: int, filter: Callable = Callab
 
 func nearest_node(kind: String, p: Vector2, maxr: float, filter: Callable = Callable()):
 	var best = null
+	if not kind_buckets.has(kind):
+		return null
+	var of_kind: Array = kind_buckets[kind]
 	var bd := maxr * maxr
 	var ring := int(ceil(maxr / NODE_BUCKET))
 	var bc := Vector2i(clampi(int(p.x / NODE_BUCKET), 0, node_bucket_n - 1), clampi(int(p.y / NODE_BUCKET), 0, node_bucket_n - 1))
@@ -729,9 +746,12 @@ func nearest_node(kind: String, p: Vector2, maxr: float, filter: Callable = Call
 				var bj := bc.y + dy
 				if bi < 0 or bj < 0 or bi >= node_bucket_n or bj >= node_bucket_n:
 					continue
-				for nid in node_buckets[bj * node_bucket_n + bi]:
+				var ids = of_kind[bj * node_bucket_n + bi]
+				if ids == null:
+					continue
+				for nid in ids:
 					var n = terrain.nodes[nid]
-					if n.kind != kind or n.amount == 0.0:
+					if n.amount == 0.0:
 						continue
 					var d: float = n.pos.distance_squared_to(p)
 					if d >= bd:

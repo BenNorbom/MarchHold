@@ -705,24 +705,22 @@ func _animal_move(a: Unit, goal: Vector2, dt: float, run: bool) -> bool:
 # --- Vision, knowledge and intelligence -------------------------------------------
 
 func update_vision() -> void:
-	for f: Faction in factions:
-		f.visible.fill(0)
 	for u: Unit in units:
 		if u.dead or u.faction < 0 or u.stable >= 0:
 			continue
-		if not (is_person(u) or u.kind in ["cannon", "ram"]):
+		# Only commanders and scouts learn from what they see; buildings are below.
+		var scouting := u.task == "scout" and u.scout_leg < 3
+		var leader := u.kind == "commander"
+		if not (leader or (scouting and u.kind == "villager")):
 			continue
 		var f: Faction = factions[u.faction]
-		var r: float = Defs.VILLAGER["sight"]
-		var scouting := u.task == "scout" and u.scout_leg < 3
-		if u.kind == "commander":
+		var r: float = 0.0
+		if leader:
 			r = Defs.COMMANDER["sight"]
 		elif scouting:
 			r = Defs.SCOUT_SIGHT * (1.15 if u.mounted else 1.0)
 		var cells := kcells_in(u.pos, r)
-		for k in cells:
-			f.visible[k] = 1
-		if u.kind == "commander":
+		if leader:
 			for k in cells:
 				f.knowledge[k] = t
 			_sight(f, u.pos, r, null)
@@ -740,7 +738,6 @@ func update_vision() -> void:
 			b.sight_cells = kcells_in(b.pos, r)
 		var cells := b.sight_cells
 		for k in cells:
-			f.visible[k] = 1
 			f.knowledge[k] = t
 		var seen := _sight(f, b.pos, r, null)
 		if d.get("alarm", false) or b.type == "campfire":

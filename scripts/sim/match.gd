@@ -3,6 +3,7 @@ extends "res://scripts/sim/match_combat.gd"
 ## commander's actions and read-only queries for menus and Terra.
 
 const START_FOOD := 40.0
+const MOVING_ANIMS := [Anim.WALK, Anim.RUN, Anim.CARRY, Anim.RIDE]
 
 
 func setup(opts: Dictionary) -> void:
@@ -30,7 +31,6 @@ func setup(opts: Dictionary) -> void:
 			f.stock[r] = 0.0
 		f.knowledge.resize(kres * kres)
 		f.knowledge.fill(-1.0)
-		f.visible.resize(kres * kres)
 		factions.append(f)
 	for f: Faction in factions:
 		var other: Vector2 = factions[1 - f.id].start if count == 2 else Vector2(map_size, map_size) * 0.5
@@ -155,7 +155,7 @@ func _unstick(u: Unit, dt: float) -> void:
 	if u.kind == "commander" and u.task == "player":
 		return
 	var moved := u.pos.distance_to(u.last_pos)
-	if u.anim in [Anim.WALK, Anim.RUN, Anim.CARRY, Anim.RIDE] and moved < 0.02:
+	if u.anim in MOVING_ANIMS and moved < 0.02:
 		u.stuck += dt
 		if u.stuck > 2.5:
 			u.stuck = 0.0
