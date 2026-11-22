@@ -151,6 +151,16 @@ func _check_terrain(id: String) -> void:
 					kinds["outcrop"] = true
 			for k in ["berry", "tree", "bronze_ore", "coal", "iron_ore", "outcrop"]:
 				check(kinds.has(k), "%s seed %d: %s near camp" % [id, s, k])
+			var home_stone = null
+			for n in tr.nodes:
+				if n.sub == "outcrop" and n.pos.distance_to(p) < 34.0:
+					home_stone = n
+			check(home_stone != null, "%s seed %d: stone beside camp" % [id, s])
+			if home_stone:
+				var eye: Vector3 = tr.pos3(p, 1.7)
+				check(home_stone.landmark_name() == "Stone", "%s seed %d: home outcrop is named" % [id, s])
+				check(tr.clear_line(eye, tr.pos3(home_stone.pos, 4.0)), "%s seed %d: home outcrop in sight of camp" % [id, s])
+				check(not tr.clear_line(eye, tr.pos3(home_stone.pos, -3.0)), "%s seed %d: ground blocks a line of sight" % [id, s])
 		if s == 1:
 			print("  %s: trees %d, nodes %d" % [id, tr.count_nodes("tree"), tr.nodes.size()])
 

@@ -7,6 +7,9 @@ const Defs = preload("res://scripts/data/defs.gd")
 const STEP := 2.0                 # metres between height samples
 const FOREST_CELL := 8.0          # forest density grid
 const RIM_MIN := 80.0             # a narrower rim of hills would be too steep to walk
+# Each camp's own outcrop: on its level ground, in the commander's first view and inside a wall ring.
+const HOME_STONE_DISTS := [30.0, 28.0, 32.0, 26.0]
+const HOME_STONE_OFF_AXIS := 30.0 # degrees to either side of the way the commander first faces
 
 
 class RNode:
@@ -21,7 +24,7 @@ class RNode:
 	## The name shown in the world and on the map, or "" for unnamed nodes.
 	func landmark_name() -> String:
 		if kind == "rock" and sub == "outcrop":
-			return "Stone outcrop"
+			return "Stone"
 		if kind == "deposit":
 			var res: String = Defs.RESOURCE_NAMES[sub]
 			return res.left(1).to_upper() + res.substr(1)
@@ -186,6 +189,16 @@ func slope_deg(x: float, z: float) -> float:
 
 func in_bounds(p: Vector2, margin: float = 4.0) -> bool:
 	return p.x >= margin and p.y >= margin and p.x <= size - margin and p.y <= size - margin
+
+
+## Whether the line between two points clears the hills. Trees and buildings don't count.
+func clear_line(from: Vector3, to: Vector3) -> bool:
+	var count := int(from.distance_to(to) / (STEP * 2.0))
+	for i in range(1, count):
+		var p := from.lerp(to, float(i) / count)
+		if height_at(p.x, p.z) > p.y:
+			return false
+	return true
 
 
 func pos3(p: Vector2, lift: float = 0.0) -> Vector3:
@@ -375,6 +388,36 @@ func _place_nodes() -> void:
 			var h := height_at(p.x, p.y)
 			var pine := h > 34.0 or tree_noise.get_noise_2d(p.x, p.y) > 0.25
 			_add("tree", "pine" if pine else "oak", p, 40.0, rng.randf_range(0.75, 1.3))
+	# Last, so it can keep clear of everything else without moving any of it.
+	for s in starts:
+		_add("rock", "outcrop", _home_stone_spot(s), -1.0)
+
+
+## The least crowded spot near camp, favoring the edge of the commander's first view.
+func _home_stone_spot(home: Vector2) -> Vector2:
+	var middle := Vector2.ZERO
+	for s in starts:
+		middle += s / starts.size()
+	var ahead := (middle - home).angle()
+	var around: Array = []
+	for nd in nodes:
+		if nd.pos.distance_to(home) < 50.0:
+			around.append(nd)
+	var best := home
+	var best_score := -INF
+	for step in range(-36, 36):
+		var off := step * 5.0
+		for dist: float in HOME_STONE_DISTS:
+			var p := home + Vector2.from_angle(ahead + deg_to_rad(off)) * dist
+			var crowding := 0.0
+			for nd in around:
+				var clear := 7.0 if nd.kind == "tree" else 11.0
+				crowding += maxf(0.0, clear - p.distance_to(nd.pos))
+			var score := -crowding * 1000.0 - absf(absf(off) - HOME_STONE_OFF_AXIS) - absf(dist - 30.0)
+			if score > best_score:
+				best_score = score
+				best = p
+	return best
 
 
 func count_nodes(kind: String) -> int:
