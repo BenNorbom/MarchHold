@@ -59,6 +59,24 @@ func leave_crew(u: Unit) -> void:
 		_assign_slots(c)
 
 
+## Takes someone who died out of their crew. A dead captain is succeeded by the longest-serving member.
+func drop_dead(c: Crew, id: int) -> void:
+	c.members.erase(id)
+	c.lost += 1
+	if c.leader != id:
+		return
+	var had_captain := c.captain
+	_set_leader(c, c.members[0] if not c.members.is_empty() else -1)
+	var heir := unit(c.leader)
+	if not had_captain or heir == null:
+		return
+	heir.captain = true
+	c.captain = true
+	if c.faction == 0:
+		var fallen := unit(id)
+		post(0, "Captain %s has fallen. %s takes over as captain." % [fallen.name if fallen else "", heir.name], "alarm")
+
+
 func release_member(u: Unit) -> void:
 	leave_crew(u)
 	if u.task == "tame":
@@ -564,10 +582,7 @@ func update_crews(dt: float) -> void:
 		for id in c.members.duplicate():
 			var u := unit(id)
 			if u == null or u.dead:
-				c.members.erase(id)
-				c.lost += 1
-				if c.leader == id:
-					_set_leader(c, c.members[0] if not c.members.is_empty() else -1)
+				drop_dead(c, id)
 		if c.members.is_empty():
 			crews.erase(c.id)
 			continue
@@ -1604,7 +1619,7 @@ func upkeep(dt: float) -> void:
 					u.max_hp = Defs.VILLAGER["hp"]
 					u.hp = u.max_hp * frac
 					if f.id == 0:
-						post(0, "%s has grown up and can work." % u.name, "info")
+						post(0, "%s has grown up and can work." % u.name, "grown")
 			if is_person(u) and u.hp < u.max_hp and t - u.hit_t > 8.0 and u.pos.distance_to(home) < 30.0:
 				u.hp = minf(u.max_hp, u.hp + 1.0 * dt)
 		_breed(f, dt)
@@ -1654,7 +1669,7 @@ func _breed(f: Faction, dt: float) -> void:
 				foal.faction = f.id
 				emit({"type": "unit", "id": foal.id})
 				if f.id == 0:
-					post(0, "A foal was born in the stable.", "birth")
+					post(0, "A foal was born in the stable.", "info")
 
 
 func _open_age(f: Faction, age: int) -> void:
@@ -1695,10 +1710,7 @@ func kill_unit(u: Unit, why: String = "") -> void:
 	if u.crew >= 0:
 		var c := crew_of(u)
 		if c:
-			c.members.erase(u.id)
-			c.lost += 1
-			if c.leader == u.id:
-				_set_leader(c, c.members[0] if not c.members.is_empty() else -1)
+			drop_dead(c, u.id)
 		u.crew = -1
 	emit({"type": "death", "id": u.id, "kind": u.kind, "pos": u.pos, "faction": u.faction})
 	if u.faction == 0 and u.kind == "villager":

@@ -12,6 +12,13 @@ const Schema = preload("res://scripts/orders/schema.gd")
 const ChatGPTCallback = preload("res://scripts/orders/chatgpt_callback.gd")
 const ChatGPTVault = preload("res://scripts/orders/chatgpt_vault.gd")
 
+
+## Stands in for the first-person controller when a test drives the chat.
+class FakeCommander:
+	var move_enabled := true
+	var look_enabled := true
+
+
 var failures := 0
 var passes := 0
 
@@ -22,7 +29,7 @@ func _initialize() -> void:
 
 func _run_tests() -> void:
 	var only := OS.get_environment("MH_TEST")
-	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "crews", "selection", "walls", "combat", "parser", "schema", "chatgpt", "terra_orders", "duel"]
+	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "crews", "selection", "delegation", "walls", "combat", "parser", "schema", "chatgpt", "terra_orders", "duel"]
 	var t0 := Time.get_ticks_msec()
 	for name in tests:
 		if only != "" and only != name:
@@ -256,6 +263,109 @@ func test_selection() -> void:
 	check(not r["ok"], "an empty selection is refused")
 	var joined: Dictionary = m.reassign_crew(0, {"units": [a.id, d.id]}, b.id)
 	check(joined["ok"] and m.crew_of(a) == big and m.crew_of(d) == big and big.members.size() == 4, "a selection can join another crew")
+
+
+func chat_game(m):
+	var game = load("res://scripts/game/game.gd").new()
+	game.m = m
+	game.cmd = FakeCommander.new()
+	game.hud = game.Hud.new()
+	game.add_child(game.hud)
+	root.add_child(game)
+	return game
+
+
+func test_delegation() -> void:
+	var m = new_match(77)
+	var adults: Array = m.idle_adults(0, m.home_pos(0))
+	var captain = adults[0]
+	var second = adults[1]
+	var crew = m.make_crew(0, [captain, second, adults[2]])
+	m.command(0, {"crew": crew.id, "steps": [step("promote"), step("gather", "wood")]})
+	m.update_crews(0.0)
+	var game = chat_game(m)
+
+	# Selecting a captain means talking to their crew.
+	game.selected.assign([captain.id])
+	game.open_chat()
+	check(game.addressee.get("crew", -1) == crew.id, "a selected captain is addressed with their crew")
+	game._cycle_chat_address(false)
+	check(game.addressee.get("unit", -1) == captain.id and game.addressee.get("individual", false), "Tab still reaches the captain alone")
+	game.hud.close_chat()
+	game.selected.clear()
+	game.addressee = {}
+
+	# A title addresses the captain; it doesn't promote anyone.
+	game._on_chat("Captain %s, hold here" % captain.name)
+	check(captain.crew == crew.id and crew.steps[crew.idx]["action"] == "hold", "'Captain Name, hold here' orders that captain's crew")
+	var titled: Dictionary = Parser.parse("Captain Hal, take ten spearmen and hold the ford")
+	check(not titled["ok"], "an order the parser can't represent is left to Terra")
+	check(not titled["steps"].any(func(s): return s["action"] == "promote"), "a captain's title is not a promotion")
+	for phrase in ["promote", "make Hal a captain", "you are captain now", "become captain"]:
+		var p: Dictionary = Parser.parse(phrase)
+		check(p["ok"] and p["steps"][0]["action"] == "promote", "'%s' still promotes" % phrase)
+	check(not Parser.parse("hold the ford")["ok"], "an unknown place is not read as 'here'")
+	check(Parser.parse("hold the line")["ok"] and Parser.parse("guard the camp")["ok"], "known phrases still parse locally")
+	check(Parser.parse("fall back")["all"], "fall back with nobody addressed means everyone")
+	for phrase in ["send a scout east then come back", "gather 30 wood then come home", "bring the horses back to camp"]:
+		check(not Parser.parse(phrase)["all"], "'%s' isn't an order to everyone" % phrase)
+	for phrase in ["don't fall back", "never retreat", "do not retreat"]:
+		var p: Dictionary = Parser.parse(phrase)
+		check(not p["steps"].any(func(s): return s["action"] == "recall"), "'%s' doesn't recall anyone" % phrase)
+	for phrase in ["hold them off", "hold until the enemy comes", "stay there"]:
+		check(Parser.parse(phrase)["steps"][0]["where"] == "", "'%s' holds the crew's own ground" % phrase)
+
+	# Succession.
+	m.kill_unit(captain)
+	check(crew.leader == second.id and crew.captain and second.captain, "the longest-serving member succeeds a dead captain")
+	check(m.messages.any(func(msg): return msg["kind"] == "alarm" and msg["text"].contains(second.name)), "you are told who took over")
+
+	# Names stay unique and speakable past the end of the list.
+	var people := []
+	var names := {}
+	for i in 260:
+		var u = m.spawn_unit(0, "villager", m.home_pos(0))
+		u.name = m.pick_name(m.fac(0))
+		names[u.name] = true
+		people.append(u)
+	check(names.size() == people.size(), "260 people have 260 names")
+	check(not people.any(func(u): return u.name.right(1).is_valid_int()), "nobody is called 'Hal 2'")
+	check(not names.has("Rook"), "none of your people share the rival commander's name")
+	var surnamed: Array = people.filter(func(u): return u.name.contains(" "))
+	if not surnamed.is_empty():
+		var target = surnamed[0]
+		game._on_chat("@%s gather wood" % target.name)
+		check(target.task == "gather", "@ reaches '%s', not their namesake" % target.name)
+
+	var twins := []
+	for byname in ["Reed", "Moss"]:
+		var u = m.spawn_unit(0, "villager", m.home_pos(0))
+		u.name = "Zed " + byname
+		twins.append(u)
+	for phrase in ["Zed, gather stone", "tell zed to gather stone"]:
+		game._on_chat(phrase)
+		var answer: String = game.hud.log_lines[-1]["node"].get_parsed_text()
+		check(answer.contains("Which one") and twins.all(func(u): return u.task == "idle"), "'%s' asks which Zed" % phrase)
+
+	# Alarms survive a busy log.
+	game.hud.log_line("Alarm at the watch post!", "alarm")
+	var alarm: RichTextLabel = game.hud.log_lines[-1]["node"]
+	for i in 45:
+		game.hud.log_line("Routine %d" % i, "birth")
+	check(is_instance_valid(alarm) and not alarm.is_queued_for_deletion() and alarm.visible, "routine lines never push an alarm out")
+	check(game.has_method("_show_messages"), "routine messages are rolled up")
+	if game.has_method("_show_messages"):
+		m.messages.clear()
+		for i in 20:
+			m.post(0, "A child is born: %d." % i, "birth")
+			m.t += 1.0
+			game._show_messages()
+		var shown: Array = game.hud.log_lines.filter(func(e): return e["node"].get_parsed_text().begins_with("A child is born"))
+		check(shown.size() == 1, "twenty births in twenty seconds make one line (%d)" % shown.size())
+		m.t += 31.0
+		game._show_messages()
+		check(game.hud.log_lines[-1]["node"].get_parsed_text().contains("19"), "the rest arrive as one summary")
+	game.free()
 
 
 func test_walls() -> void:

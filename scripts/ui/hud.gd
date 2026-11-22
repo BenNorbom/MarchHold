@@ -19,11 +19,16 @@ const MENU_SIZE := Vector2(720, 483)
 const MENU_GRID_WIDTH := 1140.0
 const HINT_WIDTH := 460.0
 const HINT_GRID_WIDTH := 1100.0
+const LOG_KEPT := 40
+const LOG_LINES := 8
+const LINE_SECONDS := 14.0
+const ALARM_SECONDS := 30.0
+const ALARMS_PINNED := 3
 
 const KIND_COLORS := {
 	"info": "e8dcc2", "warn": "f0c060", "alarm": "ff6a50", "death": "e07060", "done": "a8d890",
 	"report": "9cc8f0", "terra": "d8c8ff", "you": "ffffff", "birth": "f0b8d0", "age": "ffd870",
-	"system": "b8b0a0", "hint": "a0e0d8", "crew": "e8dcc2",
+	"system": "b8b0a0", "hint": "a0e0d8", "crew": "e8dcc2", "grown": "e8dcc2",
 }
 
 var theme_res: Theme
@@ -36,7 +41,7 @@ var held_label: Label
 var prompt_label: Label
 var selection_label: Label
 var log_box: VBoxContainer
-var log_lines: Array = []       # [{node, t}]
+var log_lines: Array = []       # [{node, t, kind}]
 var chat_panel: PanelContainer
 var chat_to: Label
 var chat_edit: LineEdit
@@ -596,11 +601,21 @@ func log_line(text: String, kind: String = "info", who: String = "") -> void:
 		prefix = "[b]%s:[/b] " % who
 	l.text = "[color=#%s]%s%s[/color]" % [col, prefix, _escape(text)]
 	log_box.add_child(l)
-	log_lines.append({"node": l, "t": Time.get_ticks_msec() / 1000.0})
-	while log_lines.size() > 40:
-		var old: Dictionary = log_lines.pop_front()
-		old["node"].queue_free()
+	var now := Time.get_ticks_msec() / 1000.0
+	log_lines.append({"node": l, "t": now, "kind": kind})
+	while log_lines.size() > LOG_KEPT:
+		var drop := 0
+		for i in log_lines.size():
+			if not _fresh_alarm(log_lines[i], now):
+				drop = i
+				break
+		log_lines[drop]["node"].queue_free()
+		log_lines.remove_at(drop)
 	_refresh_log_visibility()
+
+
+func _fresh_alarm(e: Dictionary, now: float) -> bool:
+	return e["kind"] == "alarm" and now - e["t"] < ALARM_SECONDS
 
 
 func _escape(t: String) -> String:
@@ -609,25 +624,25 @@ func _escape(t: String) -> String:
 
 func _refresh_log_visibility() -> void:
 	var now := Time.get_ticks_msec() / 1000.0
-	var shown := 0
+	var max_lines := LOG_LINES * 2 if chat_open else LOG_LINES
+	# Recent alarms hold their places. Everything else shares what's left.
+	var pinned := {}
+	for i in range(log_lines.size() - 1, -1, -1):
+		if pinned.size() < ALARMS_PINNED and _fresh_alarm(log_lines[i], now):
+			pinned[i] = true
+	var shown := pinned.size()
 	for i in range(log_lines.size() - 1, -1, -1):
 		var e: Dictionary = log_lines[i]
 		var age: float = now - e["t"]
 		var node: RichTextLabel = e["node"]
-		var max_lines := 16 if chat_open else 8
-		if shown >= max_lines:
-			node.visible = false
-			continue
-		if chat_open:
-			node.visible = true
-			node.modulate.a = 1.0
+		var lasts := ALARM_SECONDS if e["kind"] == "alarm" else LINE_SECONDS
+		if not pinned.has(i):
+			if shown >= max_lines or (age >= lasts and not chat_open):
+				node.visible = false
+				continue
 			shown += 1
-		elif age < 14.0:
-			node.visible = true
-			node.modulate.a = clampf((14.0 - age) / 2.0, 0.0, 1.0)
-			shown += 1
-		else:
-			node.visible = false
+		node.visible = true
+		node.modulate.a = 1.0 if chat_open else clampf((lasts - age) / 2.0, 0.0, 1.0)
 
 
 # --- Per frame ----------------------------------------------------------------------

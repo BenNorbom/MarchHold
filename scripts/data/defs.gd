@@ -206,7 +206,12 @@ const NAMES := ["Hal", "Wren", "Ana", "Bram", "Cora", "Dunstan", "Edda", "Finn",
 	"Maud", "Nell", "Odo", "Piers", "Rowan", "Sabine", "Tilda", "Ulf", "Wynn", "Aldo", "Beth", "Col", "Dag",
 	"Esme", "Faye", "Garth", "Hob", "Isolde", "Jago", "Kara", "Lud", "Mags", "Nils", "Orla", "Pip", "Ralf",
 	"Saer", "Tove", "Viv", "Wat", "Agnes", "Brun", "Cuth", "Dwyn", "Elsa", "Fritha", "Gunn", "Herne", "Ilse",
-	"Jem", "Kell", "Lark", "Mott", "Nan", "Oswin", "Perrin", "Rook", "Sten", "Teg", "Ulric", "Vera", "Wulf"]
+	"Jem", "Kell", "Lark", "Mott", "Nan", "Oswin", "Perrin", "Roan", "Sten", "Teg", "Ulric", "Vera", "Wulf"]
+
+# Told apart by byname once the first names run out: "Hal Miller", never "Hal 2".
+const BYNAMES := ["Miller", "Reed", "Ash", "Fletcher", "Thatcher", "Cooper", "Wright", "Baker", "Tanner", "Shepherd",
+	"Carter", "Mason", "Fisher", "Brewer", "Weaver", "Potter", "Barley", "Thorn", "Hollis", "Birch", "Fenn", "Moss",
+	"Dyer", "Sawyer", "Hayward", "Crofter", "Alder", "Rush", "Flint", "Brook"]
 
 
 static func building_name(id: String) -> String:

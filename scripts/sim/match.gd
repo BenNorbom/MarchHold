@@ -361,6 +361,54 @@ func _addressed_crew(faction: int, req: Dictionary) -> Crew:
 	return c if c and c.faction == faction and not c.members.is_empty() else null
 
 
+## The person a piece of text opens with, matched on the longest name first.
+## A bare first name works while it is unambiguous. prefix also accepts the start of one.
+## Returns {unit, rest, error}: rest is the text after the name.
+func find_person(faction: int, text: String, prefix: bool = false) -> Dictionary:
+	var said := text.strip_edges()
+	var low := said.to_lower()
+	var living: Array[Unit] = []
+	var best: Unit = null
+	var taken := 0
+	for u: Unit in units:
+		if u.dead or u.faction != faction or u.kind != "villager" or u.name == "":
+			continue
+		living.append(u)
+		var n := u.name.to_lower()
+		if n.length() > taken and low.begins_with(n) and (low.length() == n.length() or low[n.length()] in " ,:.!?"):
+			best = u
+			taken = n.length()
+	var none := {"unit": null, "rest": said, "error": ""}
+	var words := low.split(" ", false)
+	if words.is_empty():
+		return none
+	# A dead "Hal Miller" must not turn into plain Hal.
+	if (best == null or not best.name.contains(" ")) and words.size() > 1 and not words[0].right(1) in ",:":
+		if words[1].rstrip(",:.!?").capitalize() in Defs.BYNAMES:
+			return none
+	if best == null:
+		var word := words[0].rstrip(",:.!?")
+		if word == "":
+			return none
+		var found := living.filter(func(u): return u.name.to_lower().get_slice(" ", 0) == word)
+		if found.is_empty() and prefix:
+			found = living.filter(func(u): return u.name.to_lower().begins_with(word))
+		if found.size() > 1:
+			var leaders := found.filter(func(u): return u.captain)
+			if leaders.size() != 1:
+				var options: Array[String] = []
+				for u in found.slice(0, 4):
+					options.append(u.name)
+				none["error"] = "Which one: %s?" % ", ".join(options)
+				return none
+			found = leaders
+		if found.is_empty():
+			return none
+		best = found[0]
+		taken = words[0].length()
+	return {"unit": best, "rest": said.substr(taken).lstrip(" ,:.!?"), "error": ""}
+
+
 ## Join one villager or their whole crew to an existing crew without restarting its plan.
 func reassign_crew(faction: int, req: Dictionary, destination_id: int) -> Dictionary:
 	var destination := _addressed_crew(faction, {"unit": destination_id})

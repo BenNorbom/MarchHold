@@ -41,6 +41,23 @@ const GATHER_WORDS := [
 	["food", "food:generic"], ["bronze", "bronze_ore"], ["iron", "iron_ore"], ["ore", "bronze_ore:generic"]]
 
 
+# Making someone a captain. The title alone ("Captain Hal, ...") is an address, not an order.
+const PROMOTE_RE := "( promote )|( (make|name|appoint|elect)( (?!for |with |to |from |by )[a-z']+){0,3} captains? )|( (be|become|you are|you're)( (a|an|the|my|our))? captains? )|(^ (a )?captain $)"
+# "Hold the line" means here. "Hold the ford" names a place the parser doesn't know.
+const PLACE_RE := " (hold|guard|defend|protect|watch)( at| by| near| over)? the ([a-z']+) "
+const HERE_WORDS := ["line", "position", "ground", "spot", "area"]
+const EVERYONE_BACK := ["fall back", "retreat", "recall", "come back", "come home", "go home"]
+
+
+static func _promotes(p: String) -> bool:
+	return RegEx.create_from_string(PROMOTE_RE).search(p) != null
+
+
+static func _unknown_place(p: String) -> bool:
+	var found := RegEx.create_from_string(PLACE_RE).search(p)
+	return found != null and not found.get_string(3) in HERE_WORDS and where_in(p) == ""
+
+
 static func normalize(text: String) -> String:
 	var s := text.to_lower().strip_edges()
 	for ch in ["!", "?", ".", "\"", "(", ")", ":"]:
@@ -171,6 +188,11 @@ static func parse(text: String) -> Dictionary:
 	if steps.is_empty():
 		return out
 	out["steps"] = steps
+	# A bare "fall back" is for everyone. As the end of a longer order it's only for that crew.
+	if steps.size() == 1 and steps[0]["action"] == "recall" and count_in(s) == 0:
+		for phrase in EVERYONE_BACK:
+			if s.contains(" %s " % phrase):
+				out["all"] = true
 	out["ok"] = Defs.validate_steps(_clean(steps)) == ""
 	return out
 
@@ -198,6 +220,8 @@ static func _parse_part(p: String, out: Dictionary):
 	var count := count_in(p)
 	# Recall / follow / hold.
 	if p.contains("fall back") or p.contains("come back") or p.contains("go home") or p.contains("come home") or has_word(p, "retreat") or has_word(p, "recall") or p.contains("back to camp") or p.contains("return home") or p.contains("return to camp"):
+		if p.contains(" don't ") or p.contains(" do not ") or p.contains(" never "):
+			return null
 		return _step("recall", "", 0, "home")
 	if has_word(p, "follow") or p.contains("with me") or p.contains("come with") or p.contains("on me"):
 		return _step("follow", "", 0, "", count)
@@ -206,12 +230,21 @@ static func _parse_part(p: String, out: Dictionary):
 		return [_step("arm", "", 0, "", count), _step("guard", "", 0, where_in(p, "home"))]
 	if p.contains("status") or p.contains("what are you doing") or p.contains("how are you") or bare_is(p, "report"):
 		return _step("status")
-	if has_word(p, "promote") or p.contains("captain"):
+	if _promotes(p):
 		return _step("promote")
 	if has_word(p, "dismiss") or has_word(p, "disband") or p.contains("dismissed"):
 		return _step("dismiss")
 	if has_word(p, "hold") or has_word(p, "stay") or p.contains("wait here") or p.contains("stand still") or p.contains("stand guard here"):
-		return _step("hold", "", 0, "" if not p.contains(" the mark") else "marked", count)
+		if _unknown_place(p):
+			return null
+		# "Hold here", "stay there" and "hold them off" all mean the crew's own ground.
+		var spot := ""
+		var named := where_in(p)
+		if p.contains(" the mark"):
+			spot = "marked"
+		elif named == "home" or named in DIRECTIONS.values():
+			spot = named
+		return _step("hold", "", 0, spot, count)
 	# Horses and siege.
 	if (has_word(p, "tame") or has_word(p, "catch") or p.contains("round up") or p.contains("bring in") or has_word(p, "capture")) and (has_word(p, "horse") or p.contains("herd")):
 		return _step("tame", "horses", number_in(p) if not p.contains(" a horse") else 1, "", 0)
@@ -236,6 +269,8 @@ static func _parse_part(p: String, out: Dictionary):
 	if has_word(p, "attack") or has_word(p, "charge") or has_word(p, "raid") or has_word(p, "assault") or p.contains("kill them") or p.contains("destroy"):
 		return _step("attack", "", 0, where_in(p, "enemy"), count)
 	if has_word(p, "guard") or has_word(p, "defend") or has_word(p, "protect") or p.contains("watch the"):
+		if _unknown_place(p):
+			return null
 		return _step("guard", "", 0, where_in(p, "here"), count)
 	if has_word(p, "arm") or has_word(p, "equip") or p.contains("take up") or p.contains("grab"):
 		var item := find_in(p, ITEM_WORDS)

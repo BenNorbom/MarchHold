@@ -299,8 +299,16 @@ func pick_name(f: Faction) -> String:
 			f.names_used[n] = 1
 			return n
 	var base: String = Defs.NAMES[rng.randi_range(0, Defs.NAMES.size() - 1)]
-	f.names_used[base] = int(f.names_used.get(base, 1)) + 1
-	return "%s %d" % [base, f.names_used[base]]
+	if not f.names_used.has(base):
+		f.names_used[base] = 1
+		return base
+	# The count survives deaths, so a name never comes back for someone else.
+	var nth := int(f.names_used[base]) - 1
+	f.names_used[base] = nth + 2
+	var full := "%s %s" % [base, Defs.BYNAMES[nth % Defs.BYNAMES.size()]]
+	for lap in nth / Defs.BYNAMES.size():
+		full += " the Younger"
+	return full
 
 
 # --- Entities ------------------------------------------------------------------------

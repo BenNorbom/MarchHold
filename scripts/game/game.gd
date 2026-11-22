@@ -18,6 +18,7 @@ const Parser = preload("res://scripts/orders/parser.gd")
 const Tutorial = preload("res://scripts/game/tutorial.gd")
 const Intro = preload("res://scripts/game/intro.gd")
 const Hints = preload("res://scripts/game/hints.gd")
+const Digest = preload("res://scripts/ui/digest.gd")
 
 const MENU_COLUMNS := 3
 const SLASH_ALIASES := {
@@ -49,6 +50,7 @@ var terra
 var tutorial
 var intro
 var hints
+var digest := Digest.new()
 var acc := 0.0
 var paused := false
 var over_shown := false
@@ -182,13 +184,7 @@ func _process(delta: float) -> void:
 	view.handle_events(m.events)
 	_sound_events(m.events)
 	m.events.clear()
-	for msg in m.messages:
-		if msg["faction"] == 0:
-			hud.log_line(msg["text"], msg["kind"])
-			hints.on_message(msg)
-			if msg["kind"] == "age":
-				hud.show_toast(msg["text"].split("!")[0] + "!")
-	m.messages.clear()
+	_show_messages()
 	view.update_frame(delta, alpha, cmd.eye())
 	Sfx.listener_pos = cmd.eye()
 	_update_hud()
@@ -205,6 +201,22 @@ func _process(delta: float) -> void:
 	peak_pop = maxi(peak_pop, m.fac(0).pop)
 	if m.over and not over_shown:
 		_show_end()
+
+
+func _show_messages() -> void:
+	for msg in m.messages:
+		if msg["faction"] != 0:
+			continue
+		var line: String = digest.take(msg, m.t)
+		if line != "":
+			hud.log_line(line, msg["kind"])
+		if hints:
+			hints.on_message(msg)
+		if msg["kind"] == "age":
+			hud.show_toast(msg["text"].split("!")[0] + "!")
+	m.messages.clear()
+	for summary in digest.due(m.t):
+		hud.log_line(summary[0], summary[1])
 
 
 func _sound_events(events: Array) -> void:
@@ -579,7 +591,12 @@ func _selection_label() -> String:
 
 
 func _show_selection() -> void:
-	hud.set_selection(("Selected: " + _selection_label() + "  ·  Enter to order · Esc to clear") if not selected.is_empty() else "")
+	var label := _selection_label()
+	if selected.size() == 1:
+		var led = _captains_crew(selected[0])
+		if led:
+			label = m.crew_label(led)
+	hud.set_selection(("Selected: " + label + "  ·  Enter to order · Esc to clear") if not selected.is_empty() else "")
 	view.selected_ids = selected
 
 
@@ -605,6 +622,10 @@ func open_chat(prefill: String = "") -> void:
 	address_label = "your people"
 	_prune_selection()
 	if selected.size() == 1:
+		var led = _captains_crew(selected[0])
+		if led:
+			_open_crew_chat(led, selected[0], prefill)
+			return
 		addressee = {"unit": selected[0], "individual": true}
 		address_label = m.unit(selected[0]).name + " alone"
 	elif selected.size() > 1:
@@ -624,6 +645,15 @@ func open_chat(prefill: String = "") -> void:
 				address_label = u.name
 	cmd.move_enabled = false
 	hud.open_chat(address_label, prefill)
+
+
+## The crew this person captains, if anyone else is in it.
+func _captains_crew(id: int):
+	var u = m.unit(id)
+	if u == null:
+		return null
+	var c = m.crew_of(u)
+	return c if c and c.captain and c.leader == id and c.members.size() > 1 else null
 
 
 func _open_crew_chat(c, first_member: int, prefill: String = "") -> void:
@@ -724,17 +754,45 @@ func _on_chat_closed() -> void:
 	cmd.move_enabled = true
 
 
-func _find_by_name(tag: String):
-	var best = null
-	for u in m.units:
-		if u.dead or u.faction != 0 or u.kind != "villager":
-			continue
-		var n: String = u.name.to_lower()
-		if n == tag:
-			return u
-		if n.begins_with(tag) and best == null:
-			best = u
-	return best
+## Who a message names: "@Hal ...", "Captain Hal, ...", "Hal, ..." or "tell Hal to ...".
+## {} when it names nobody, otherwise {unit, rest, error}.
+func _named_in(text: String) -> Dictionary:
+	var low := text.to_lower()
+	var found: Dictionary
+	if text.begins_with("@"):
+		var tag := text.substr(1)
+		if tag.to_lower().begins_with("captain "):
+			tag = tag.substr(8)
+		found = m.find_person(0, tag, true)
+		if found["unit"] == null and found["error"] == "":
+			found["error"] = "Nobody here is called %s. Type /p to see your people." % tag.get_slice(" ", 0).rstrip(",:").capitalize()
+		return found
+	if low.begins_with("captain "):
+		var said := text.substr(8)
+		found = m.find_person(0, said)
+		if found["unit"] != null or found["error"] != "":
+			return found
+		var comma := said.find(",")
+		if comma > 0 and said.left(comma).split(" ", false).size() <= 3:
+			found["error"] = "There's no Captain %s. Type /p to see your people." % said.left(comma)
+			return found
+		return {}
+	if low.begins_with("tell "):
+		found = m.find_person(0, text.substr(5))
+		if found["unit"] != null and found["rest"].to_lower().begins_with("to "):
+			found["rest"] = found["rest"].substr(3)
+			return found
+		return found if found["error"] != "" else {}
+	var mark := text.find(",") if text.contains(",") else text.find(":")
+	if mark > 0:
+		var head := text.left(mark).strip_edges()
+		found = m.find_person(0, head)
+		if found["error"] != "" and not head.contains(" "):
+			return found
+		if found["unit"] != null and found["rest"] == "":
+			found["rest"] = text.substr(mark + 1).strip_edges()
+			return found
+	return {}
 
 
 func _on_chat(text: String) -> void:
@@ -744,18 +802,19 @@ func _on_chat(text: String) -> void:
 		return
 	var req := addressee.duplicate()
 	var who := address_label if not addressee.is_empty() and address_label != "" else "your people"
-	if text.begins_with("@"):
-		var sp := text.find(" ")
-		var tag := (text.substr(1, sp - 1) if sp > 0 else text.substr(1)).to_lower().trim_suffix(",").trim_suffix(":")
-		text = text.substr(sp + 1).strip_edges() if sp > 0 else ""
-		if tag in ["all", "everyone", "everybody"]:
-			req = {"all": true}
-			who = "everyone"
-		else:
-			var u = _find_by_name(tag)
+	var first_word := text.get_slice(" ", 0)
+	if first_word.to_lower().rstrip(",:") in ["@all", "@everyone", "@everybody"]:
+		req = {"all": true}
+		who = "everyone"
+		text = text.substr(first_word.length()).strip_edges()
+	else:
+		var named := _named_in(text)
+		if not named.is_empty():
+			var u = named["unit"]
 			if u == null:
-				hud.log_line("Nobody here is called %s. Type /p to see your people." % tag.capitalize(), "warn")
+				hud.log_line(named["error"], "warn")
 				return
+			text = named["rest"]
 			if u.child:
 				hud.log_line("%s is a child and can't work yet." % u.name, "warn")
 				return
@@ -771,9 +830,10 @@ func _on_chat(text: String) -> void:
 	hud.log_line(text, "you", "You → " + who)
 	var order := text.strip_edges().to_lower()
 	if order.begins_with("join @"):
-		var destination = _find_by_name(order.substr(6).strip_edges().trim_suffix("."))
+		var named_dest: Dictionary = m.find_person(0, order.substr(6).strip_edges().trim_suffix("."), true)
+		var destination = named_dest["unit"]
 		if destination == null:
-			hud.log_line("Use 'join @Name' with the name of someone in the destination crew.", "warn")
+			hud.log_line(named_dest["error"] if named_dest["error"] != "" else "Use 'join @Name' with the name of someone in the destination crew.", "warn")
 			return
 		var result: Dictionary = m.reassign_crew(0, req, destination.id)
 		if result["ok"]:
