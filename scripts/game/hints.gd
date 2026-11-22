@@ -52,8 +52,9 @@ func tick(dt: float) -> void:
 	var t: float = m.t
 	if t > 25.0:
 		_hint("talk", "Look at a villager and press Enter to give orders. With nobody addressed, idle people take the job.")
-	if float(f.stock["wood"]) >= 20.0 and not m.has_building(0, "hut"):
-		_hint("hut", "You have 20 wood: build a hut with /b to make room for more people.")
+	var hut_wood: int = int(Defs.BUILDINGS["hut"]["cost"]["wood"])
+	if float(f.stock["wood"]) >= hut_wood and not m.has_building(0, "hut"):
+		_hint("hut", "You have %d wood: build a hut with /b to make room for more people." % hut_wood)
 	if f.pop >= f.housing and f.food_state == 3:
 		_hint("housing", "Housing is full, so no more births. Build huts (houses in the Stone age).")
 	if f.food_state <= 1 and t > 60.0:

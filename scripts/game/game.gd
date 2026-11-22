@@ -1176,7 +1176,7 @@ func _menu_build() -> void:
 func _menu_craft() -> void:
 	var all: Array = m.craft_menu(0)
 	if m.armory_tier(0) < 0:
-		_open_menu("none", "Craft", "You need an [b]armory[/b] first. Open /b to build one (50 wood).", "Esc to close")
+		_open_menu("none", "Craft", "You need an [b]armory[/b] first. Open /b to build one (%s)." % Defs.cost_text(Defs.BUILDINGS["armory"]["cost"]), "Esc to close")
 		return
 	var ready := all.filter(func(e): return e["locked"] == "")
 	var locked := all.filter(func(e): return e["locked"] != "")

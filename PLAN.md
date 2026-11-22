@@ -181,8 +181,8 @@ Seven raw resources and two refined ones:
 
 ### What each age gives you
 
-**Wood (start with nothing).** 6 villagers, a campfire, empty hands. Gather berries and wood, then build the **Armory**: clubs, wooden spears, wooden shields, bows and stone-tipped arrows. Palisades and watch posts.
-- **Rush window:** clubs and spears can field ~6–8 men by minute 4–5. If you've scouted it, the counter is a palisade, a watch post, and villagers armed from the armory's stock as **militia**.
+**Wood (start with nothing).** 6 villagers, a campfire, empty hands. Gather berries and wood, then build the **Armory**: wooden spears, wooden shields, bows and stone-tipped arrows. Palisades and watch posts.
+- **Rush window:** with the armory at 125 wood and a batch of four spears at 40, a rush fields about five armed men by minute 6–7. If you've scouted it, the counter is a palisade, a watch post, and villagers armed from the armory's stock as **militia**.
 
 **Stone.** Stone walls show up early but take a lot of labor. They're built in stages (foundation → courses → walkway → battlements) and every stage needs stone quarried and hauled. A partly built wall still gives partial cover. Cost grows with length, so you choose between a tight walled core and fields spread outside it. Target: ~30–40 s per segment with 4 masons once the stone is on site. Also: houses, granary, stone towers, stable, siege ladders.
 
@@ -218,7 +218,6 @@ Seven raw resources and two refined ones:
 
 | Item | Tiers | Role |
 |---|---|---|
-| Club | Wood | Cheap rush weapon |
 | Spear | Wood → bronze → iron | General infantry, decent vs cavalry |
 | Bow + arrows | Wood (stone tips) → bronze → iron tips | Ranged; quiver-limited |
 | Shield | Wood → bronze → iron | Blocks arrows and blows, slows the bearer |

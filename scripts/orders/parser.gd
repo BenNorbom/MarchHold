@@ -30,7 +30,7 @@ const ITEM_WORDS := [
 	["iron shield", "iron_shield"], ["bronze shield", "bronze_shield"], ["wooden shield", "wood_shield"], ["shield", "wood_shield:generic"],
 	["iron armor", "iron_armor"], ["bronze armor", "bronze_armor"], ["armor", "bronze_armor:generic"], ["armour", "bronze_armor:generic"],
 	["iron pike", "iron_pike"], ["pike", "bronze_pike:generic"], ["iron lance", "iron_lance"], ["lance", "bronze_lance:generic"],
-	["club", "club"], ["bow", "bow"], ["arrow", "arrows"], ["cannonball", "shot"], ["cannon shot", "shot"], ["shot", "shot"],
+	["bow", "bow"], ["arrow", "arrows"], ["cannonball", "shot"], ["cannon shot", "shot"], ["shot", "shot"],
 	["cannon", "cannon"], ["battering ram", "ram"], ["ram", "ram"]]
 
 const GATHER_WORDS := [

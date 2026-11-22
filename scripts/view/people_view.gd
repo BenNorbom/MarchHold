@@ -6,7 +6,7 @@ const Anim = preload("res://scripts/sim/match_base.gd").Anim
 
 const MAX_PEOPLE := 560
 const MAX_ANIMALS := 260
-const ITEMS := ["club", "wood_spear", "bronze_spear", "iron_spear", "bronze_sword", "iron_sword", "bronze_pike", "iron_pike",
+const ITEMS := ["wood_spear", "bronze_spear", "iron_spear", "bronze_sword", "iron_sword", "bronze_pike", "iron_pike",
 	"bronze_lance", "iron_lance", "bow", "axe", "hammer", "pick", "hoe", "basket", "bundle_wood", "bundle_stone",
 	"bundle_food", "wood_shield", "bronze_shield", "iron_shield", "bronze_helmet", "iron_helmet", "bronze_armor",
 	"iron_armor", "crown", "cloak"]
@@ -46,7 +46,7 @@ func setup(match_ref, mats, mesh_lib, quality: int) -> void:
 			side_meshes.append(_make(mesh, MAX_PEOPLE, true, crowd_material))
 		crowd_meshes.append(side_meshes)
 	for name in ITEMS:
-		var cap := MAX_PEOPLE if name in ["bundle_wood", "wood_spear", "club", "bow", "axe", "wood_shield"] else 260
+		var cap := MAX_PEOPLE if name in ["bundle_wood", "wood_spear", "bow", "axe", "wood_shield"] else 260
 		if name in ["crown", "cloak"]:
 			cap = 4
 		item_mm[name] = _make(meshes.item(name), cap, name != "crown")

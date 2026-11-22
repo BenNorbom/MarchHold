@@ -30,8 +30,6 @@ func describe_person(u: Unit) -> String:
 		return "spearman"
 	if u.weapon.ends_with("sword"):
 		return "swordsman"
-	if u.weapon == "club":
-		return "clubman"
 	if u.bow:
 		return "archer"
 	return "villager"
@@ -853,7 +851,7 @@ static func counts_text(counts: Dictionary) -> String:
 		var word: String = k
 		if n != 1:
 			word = {"commander": "commanders", "cannon": "cannons", "ram": "rams", "rider": "riders", "pikeman": "pikemen",
-				"spearman": "spearmen", "swordsman": "swordsmen", "clubman": "clubmen", "archer": "archers", "villager": "villagers"}.get(k, k + "s")
+				"spearman": "spearmen", "swordsman": "swordsmen", "archer": "archers", "villager": "villagers"}.get(k, k + "s")
 		if k == "commander":
 			parts.append("their crowned commander")
 		else:
