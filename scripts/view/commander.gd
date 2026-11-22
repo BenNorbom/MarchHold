@@ -6,6 +6,11 @@ const Geo = preload("res://scripts/view/geo.gd")
 
 signal attacked(result: String)
 
+const SHIELD_LOW := Vector3(-0.78, -0.56, -0.66)
+const SHIELD_LOW_ROT := Vector3(0.25, 0.75, 0.2)
+const SHIELD_HIGH := Vector3(-0.16, -0.32, -0.78)
+const SHIELD_HIGH_ROT := Vector3(-0.08, 0.12, 0.06)
+
 var m
 var mats
 var camera: Camera3D
@@ -22,6 +27,10 @@ var swing := 0.0
 var draw := 0.0
 var drawing := false
 var use_bow := false
+var shield_held := false    # right mouse is down
+var raise_k := 0.0          # 0 carried .. 1 raised, for the view model
+var jolt := 0.0
+var seen_block_t := -99.0
 var step_acc := 0.0
 var shown_weapon := "?"
 var shown_shield := "?"
@@ -100,18 +109,23 @@ func _physics_process(delta: float) -> void:
 	var u = me()
 	if u == null or u.dead:
 		return
+	# Polled, so the shield also drops when a menu, the chat or another window swallows the release.
+	if shield_held and (not look_enabled or not move_enabled or u.shield == "" or not Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)):
+		shield_held = false
 	var mounted: bool = u.mounted
 	camera.position.y = lerpf(camera.position.y, 2.45 if mounted else 1.68, minf(1.0, delta * 6.0))
 	var input := Vector2.ZERO
 	if move_enabled:
 		input = Vector2(Input.get_axis("move_left", "move_right"), Input.get_axis("move_back", "move_forward"))
-	var sprint := move_enabled and Input.is_action_pressed("sprint") and input.y > 0.1 and stamina > 0.05
+	var sprint := move_enabled and Input.is_action_pressed("sprint") and input.y > 0.1 and stamina > 0.05 and not shield_held
 	var base := (8.5 if mounted else 4.6)
 	var speed := base * (1.55 if sprint else 1.0)
 	if u.armor != "":
 		speed *= 1.0 - float(Defs.ITEMS[u.armor].get("slow", 0.0))
 	if drawing:
 		speed *= 0.5
+	if shield_held:
+		speed *= 0.6
 	if sprint and input.length() > 0.1:
 		stamina = maxf(0.0, stamina - delta * (0.08 if mounted else 0.16))
 	else:
@@ -184,7 +198,29 @@ func _push_out_of_trees() -> void:
 
 func can_shoot() -> bool:
 	var u = me()
-	return u != null and u.bow and (u.weapon == "" or use_bow)
+	return u != null and not shield_held and m.can_shoot_bow(u) and (u.weapon == "" or use_bow)
+
+
+## Right mouse went down. Returns why the shield can't come up, or "".
+func raise_shield() -> String:
+	var u = me()
+	if u == null or u.dead or not look_enabled or not move_enabled:
+		return ""
+	if u.shield == "":
+		return "You have no shield. Take one from the armory (E)."
+	shield_held = true
+	drawing = false
+	draw = 0.0
+	return ""
+
+
+func lower_shield() -> void:
+	shield_held = false
+
+
+## The guard opens for the length of a swing.
+func shield_up() -> bool:
+	return shield_held and swing <= 0.0
 
 
 func primary_pressed() -> void:
@@ -197,6 +233,9 @@ func primary_pressed() -> void:
 			draw = 0.0
 		else:
 			attacked.emit("Your quiver is empty. Refill it at the armory (E).")
+		return
+	if u.bow and u.mounted and not shield_held and (u.weapon == "" or use_bow):
+		attacked.emit("You can't shoot from the saddle yet. Research mounted archery at the stable (/r).")
 		return
 	if swing > 0.0:
 		return
@@ -251,8 +290,16 @@ func _update_view_model(delta: float, u) -> void:
 		k = sin(p * PI)
 	vm_weapon.position = Vector3(0.42, -0.46 + b - k * 0.1, -0.66 - k * 0.25)
 	vm_weapon.rotation = Vector3(-0.25 - k * 1.5, 0.15 - k * 0.6, 0.0)
-	vm_shield.position = Vector3(-0.42, -0.36 + b, -0.6)
-	vm_shield.rotation = Vector3(0.1, 0.5, 0.05)
+	if u.block_t > seen_block_t:
+		seen_block_t = u.block_t
+		jolt = 1.0
+	jolt = maxf(0.0, jolt - delta * 5.0)
+	raise_k = move_toward(raise_k, 1.0 if shield_up() else 0.0, delta * 7.0)
+	var up := smoothstep(0.0, 1.0, raise_k)
+	# Carried low in the corner; raised across the body, just under the crosshair.
+	vm_shield.position = SHIELD_LOW.lerp(SHIELD_HIGH, up) + Vector3(0, b * (1.0 - up) - jolt * 0.03, jolt * 0.07)
+	vm_shield.rotation = SHIELD_LOW_ROT.lerp(SHIELD_HIGH_ROT, up) + Vector3(jolt * 0.15, 0, 0)
+	vm_shield.scale = Vector3.ONE * lerpf(0.55, 0.8, up)
 	vm_bow.position = Vector3(-0.05, -0.18 + b, -0.6 + draw * 0.05)
 	vm_bow.rotation = Vector3(0.0, 0.0, -0.15)
 
@@ -262,7 +309,7 @@ func _vm_weapon_mesh(weapon: String) -> Mesh:
 	g.slot("skin", _flat(Color(0.72, 0.55, 0.42), 0.7))
 	g.cylinder(Vector3(0.05, -0.15, 0.35), Vector3(0, 0, 0), 0.045, 0.04, 7, true)
 	g.sphere(Vector3(0, 0.0, -0.02), 0.055, 3, 6)
-	g.slot("sleeve", _flat(Color(0.2, 0.24, 0.4), 0.9))
+	g.slot("sleeve", _flat(m.fac(0).color, 0.9))
 	g.cylinder(Vector3(0.08, -0.25, 0.65), Vector3(0.05, -0.15, 0.35), 0.06, 0.055, 7, true)
 	var wood: Material = mats.get_mat("roughwood")
 	var metal := _flat(Color(0.6, 0.61, 0.64), 0.35, 0.9)
@@ -298,6 +345,35 @@ func _vm_shield_mesh(shield: String) -> Mesh:
 	g.cylinder(Vector3(0, 0, 0.05), Vector3(0, 0, -0.03), 0.36, 0.36, 14, true)
 	g.slot("boss", _flat(Color(0.5, 0.5, 0.52), 0.3, 0.9))
 	g.sphere(Vector3(0, 0, -0.04), 0.07, 3, 6, Vector3(1, 1, 0.6))
+	# The back, which is the side the player sees: boards inside the rim, a team-coloured band and the arm in its straps.
+	const SIDES := 28
+	const BOARDS := 7
+	g.slot("gap", _flat(Color(0.14, 0.09, 0.05), 0.9))
+	g.cylinder(Vector3(0, 0, 0.0), Vector3(0, 0, 0.008), 0.34, 0.34, SIDES, true)
+	var board_w := 0.64 / BOARDS
+	for i in BOARDS:
+		var x := -0.32 + (i + 0.5) * board_w
+		var half := sqrt(0.335 * 0.335 - x * x)
+		g.slot("board%d" % (i % 2), _flat(Color(0.40, 0.27, 0.15) if i % 2 == 0 else Color(0.34, 0.22, 0.12), 0.85))
+		g.box(Vector3(x, 0, 0.014), Vector3(board_w - 0.008, half * 2.0, 0.012), 1.0)
+	for i in SIDES:
+		var a := Vector3(cos(TAU * i / SIDES), sin(TAU * i / SIDES), 0)
+		var b := Vector3(cos(TAU * (i + 1) / SIDES), sin(TAU * (i + 1) / SIDES), 0)
+		var z := Vector3(0, 0, 0.052)
+		g.slot("rim", _flat(c, 0.5, 0.0 if shield == "wood_shield" else 0.6))
+		g.quad(a * 0.335 + z, b * 0.335 + z, b * 0.365 + z, a * 0.365 + z, Vector3.BACK)
+		g.slot("band", _flat(m.fac(0).color, 0.8))
+		g.quad(a * 0.295 + z, b * 0.295 + z, b * 0.335 + z, a * 0.335 + z, Vector3.BACK)
+		g.quad(a * 0.295 + z, b * 0.295 + z, b * 0.295, a * 0.295, -(a + b).normalized())
+	g.slot("strap", _flat(Color(0.2, 0.12, 0.07), 0.7))
+	g.box(Vector3(0.08, 0.02, 0.07), Vector3(0.035, 0.22, 0.03), 1.0, false)
+	g.slot("sleeve", _flat(m.fac(0).color, 0.9))
+	g.cylinder(Vector3(-0.30, -0.30, 0.17), Vector3(-0.07, -0.08, 0.10), 0.075, 0.055, 10, true)
+	g.slot("skin", _flat(Color(0.72, 0.55, 0.42), 0.7))
+	g.cylinder(Vector3(-0.07, -0.08, 0.10), Vector3(0.06, 0.01, 0.09), 0.045, 0.037, 10, true)
+	g.sphere(Vector3(0.08, 0.02, 0.09), 0.052, 5, 10)
+	g.slot("strap", null)
+	g.cylinder(Vector3(-0.15, -0.155, 0.12), Vector3(-0.11, -0.117, 0.11), 0.074, 0.07, 10, false)
 	return g.finish()
 
 

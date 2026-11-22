@@ -10,6 +10,7 @@ const UiTheme = preload("res://scripts/ui/ui_theme.gd")
 const CHUNK := 32              # terrain cells per chunk side (64 m)
 const TREE_CHUNK := 256.0
 const GRASS_TILE := 16.0
+const WALL_BANNER_EVERY := 3   # wall pieces per banner
 const SPLAT_TEXEL := 2.0       # metres per splat map pixel
 const LANDMARK_RANGE := 160.0  # names show from this far, unless a hill is in the way
 const LANDMARK_CHECK := 0.2    # seconds between checks for hills in the way
@@ -32,6 +33,7 @@ var grass_radius := 32.0
 var grass_mat: ShaderMaterial
 var arrow_mm: MultiMesh
 var ball_mm: MultiMesh
+var banner_mats := {}           # faction id -> cloth material
 var engine_nodes := {}          # unit id -> MeshInstance3D
 var fx_pool: Array = []
 var mark_node: Node3D
@@ -591,7 +593,33 @@ func _sync_building(b) -> void:
 		body2.collision_layer = 0
 	if b.complete and not info["complete"]:
 		info["complete"] = true
+		# Walls carry one every few pieces, gates always.
+		if not is_wall or d.get("gate", false) or b.line < 0 or (b.id - b.line) % WALL_BANNER_EVERY == 0:
+			_add_banner(info["root"], b.faction, meshes.banner_spot(b.type, b.size))
 		paint_dirt(b.pos, b.size.length() * 0.5 + 2.5)
+
+
+func _add_banner(parent: Node3D, faction: int, spot: Array) -> void:
+	var f = m.fac(faction)
+	if f == null or spot.is_empty():
+		return
+	if not banner_mats.has(faction):
+		banner_mats[faction] = mats.banner(f.color)
+	var height: float = spot[1]
+	var pole := MeshInstance3D.new()
+	pole.name = "Banner"
+	pole.mesh = meshes.banner_pole(height)
+	pole.position = spot[0]
+	var cloth := MeshInstance3D.new()
+	cloth.mesh = meshes.banner_cloth()
+	cloth.material_override = banner_mats[faction]
+	cloth.position.y = height - 0.05
+	cloth.scale = Vector3.ONE * float(spot[2])
+	# The shader turns the cloth about the pole, so it can be culled only by the whole circle it sweeps.
+	cloth.custom_aabb = AABB(Vector3(-1.8, -1.3, -1.8), Vector3(3.6, 1.6, 3.6))
+	cloth.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF # it would turn toward the sun in the shadow pass
+	pole.add_child(cloth)
+	parent.add_child(pole)
 
 
 func _base_height(b) -> float:
@@ -791,6 +819,7 @@ func _update_engines(alpha: float) -> void:
 			mi = MeshInstance3D.new()
 			mi.mesh = meshes.cannon() if u.kind == "cannon" else meshes.ram()
 			add_child(mi)
+			_add_banner(mi, u.faction, meshes.banner_spot(u.kind))
 			engine_nodes[u.id] = mi
 		var p: Vector2 = u.prev.lerp(u.pos, alpha)
 		var tr: Terrain = m.terrain

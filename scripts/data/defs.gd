@@ -57,7 +57,7 @@ const BUILDINGS := {
 		"housing": 8, "food_cap": 150, "dropoff": true, "sight": 35, "buildable": false,
 		"desc": "Your home. Houses 8 and stores everything."},
 	"hut": {"name": "Hut", "age": 0, "cost": {"wood": 20}, "work": 60, "hp": 160, "size": Vector2(5, 5),
-		"housing": 5, "desc": "+5 housing."},
+		"housing": 6, "desc": "+6 housing."},
 	"stockpile": {"name": "Stockpile", "age": 0, "cost": {"wood": 15}, "work": 30, "hp": 120, "size": Vector2(5, 5),
 		"dropoff": true, "food_cap": 50, "desc": "Drop-off point near work. +50 food storage."},
 	"lodge": {"name": "Hunter's lodge", "age": 0, "cost": {"wood": 30}, "work": 60, "hp": 160, "size": Vector2(6, 5),
@@ -87,7 +87,7 @@ const BUILDINGS := {
 	"granary": {"name": "Granary", "age": 1, "cost": {"wood": 40, "stone": 20}, "work": 90, "hp": 300,
 		"size": Vector2(7, 7), "food_cap": 300, "food_dropoff": true, "desc": "+300 food storage, so you stay well fed through raids."},
 	"stable": {"name": "Stable", "age": 1, "cost": {"wood": 50, "stone": 10}, "work": 90, "hp": 260,
-		"size": Vector2(10, 7), "horse_cap": 12, "desc": "Holds horses driven in from the wild and breeds them."},
+		"size": Vector2(10, 7), "horse_cap": 12, "desc": "Holds horses driven in from the wild and breeds them. Researches mounted archery."},
 	"mine": {"name": "Mine", "age": 1, "cost": {"wood": 40, "stone": 20}, "work": 90, "hp": 300, "size": Vector2(6, 6),
 		"workers": 5, "near": "deposit", "near_dist": 22.0, "desc": "Placed on a bronze ore, coal or iron ore deposit."},
 	"smelter": {"name": "Smelter", "age": 1, "cost": {"stone": 50, "wood": 20}, "work": 100, "hp": 320,
@@ -107,19 +107,23 @@ const UPGRADES := {
 }
 
 const RESEARCH := {
+	"mounted_archery": {"name": "Mounted archery", "building": "stable", "age": 1, "cost": {"food": 60, "wood": 50},
+		"time": 60.0, "desc": "Riders can shoot their bows from the saddle."},
 	"gunpowder": {"name": "Gunpowder", "building": "university", "age": 3, "cost": {"food": 100, "coal": 40, "iron": 20},
 		"time": 90.0, "opens_age": 4, "desc": "The iron armory can cast cannons and make shot."},
 }
 
 # --- Gear ----------------------------------------------------------------------
 # tier: armory tier required (0 wood, 1 bronze, 2 iron). batch: items per craft.
+# block_*: share a carried shield stops. up_*: share it stops when raised, from the front.
+const SHIELD_ARC := 0.34          # cosine of the half angle a raised shield covers (70 degrees)
 const ITEMS := {
 	"club": {"name": "club", "plural": "clubs", "slot": "weapon", "tier": 0, "cost": {"wood": 6}, "batch": 4, "time": 10.0,
 		"dmg": 8.0, "reach": 1.8, "rate": 1.1},
 	"wood_spear": {"name": "wooden spear", "plural": "wooden spears", "slot": "weapon", "tier": 0, "cost": {"wood": 8},
 		"batch": 4, "time": 12.0, "dmg": 9.0, "reach": 2.4, "rate": 1.2, "vs_mounted": 2.0},
 	"wood_shield": {"name": "wooden shield", "plural": "wooden shields", "slot": "shield", "tier": 0, "cost": {"wood": 10},
-		"batch": 4, "time": 12.0, "block_arrow": 0.4, "block_melee": 0.15, "slow": 0.05},
+		"batch": 4, "time": 12.0, "block_arrow": 0.4, "block_melee": 0.15, "up_arrow": 0.75, "up_melee": 0.5, "slow": 0.05},
 	"bow": {"name": "bow", "plural": "bows", "slot": "bow", "tier": 0, "cost": {"wood": 10}, "batch": 4, "time": 14.0},
 	"arrows": {"name": "arrow", "plural": "arrows", "slot": "ammo", "tier": 0, "cost": {"wood": 4, "stone": 2},
 		"batch": 16, "time": 10.0, "tier_cost": [{"wood": 4, "stone": 2}, {"wood": 4, "bronze": 1}, {"wood": 4, "iron": 1}]},
@@ -128,7 +132,7 @@ const ITEMS := {
 	"bronze_sword": {"name": "bronze sword", "plural": "bronze swords", "slot": "weapon", "tier": 1, "cost": {"bronze": 5},
 		"batch": 4, "time": 14.0, "dmg": 15.0, "reach": 1.7, "rate": 1.0},
 	"bronze_shield": {"name": "bronze shield", "plural": "bronze shields", "slot": "shield", "tier": 1, "cost": {"wood": 4, "bronze": 3},
-		"batch": 4, "time": 12.0, "block_arrow": 0.55, "block_melee": 0.25, "slow": 0.06},
+		"batch": 4, "time": 12.0, "block_arrow": 0.55, "block_melee": 0.25, "up_arrow": 0.85, "up_melee": 0.65, "slow": 0.06},
 	"bronze_armor": {"name": "bronze armor", "plural": "sets of bronze armor", "slot": "armor", "tier": 1, "cost": {"bronze": 8},
 		"batch": 4, "time": 16.0, "armor": 0.25, "slow": 0.08},
 	"bronze_pike": {"name": "bronze pike", "plural": "bronze pikes", "slot": "weapon", "tier": 1, "cost": {"wood": 6, "bronze": 3},
@@ -142,7 +146,7 @@ const ITEMS := {
 	"iron_sword": {"name": "iron sword", "plural": "iron swords", "slot": "weapon", "tier": 2, "cost": {"iron": 5},
 		"batch": 4, "time": 14.0, "dmg": 20.0, "reach": 1.7, "rate": 1.0},
 	"iron_shield": {"name": "iron shield", "plural": "iron shields", "slot": "shield", "tier": 2, "cost": {"wood": 4, "iron": 3},
-		"batch": 4, "time": 12.0, "block_arrow": 0.65, "block_melee": 0.3, "slow": 0.07},
+		"batch": 4, "time": 12.0, "block_arrow": 0.65, "block_melee": 0.3, "up_arrow": 0.9, "up_melee": 0.75, "slow": 0.07},
 	"iron_armor": {"name": "iron armor", "plural": "sets of iron armor", "slot": "armor", "tier": 2, "cost": {"iron": 8},
 		"batch": 4, "time": 16.0, "armor": 0.35, "slow": 0.1},
 	"iron_pike": {"name": "iron pike", "plural": "iron pikes", "slot": "weapon", "tier": 2, "cost": {"wood": 6, "iron": 3},
@@ -225,9 +229,22 @@ static func item_name(id: String, count: int = 1) -> String:
 
 static func item_cost(id: String, armory_tier: int) -> Dictionary:
 	var it: Dictionary = ITEMS[id]
+	var cost: Dictionary = it["cost"]
 	if it.has("tier_cost"):
-		return it["tier_cost"][clampi(armory_tier, 0, 2)]
-	return it["cost"]
+		cost = it["tier_cost"][clampi(armory_tier, 0, 2)]
+	if it.get("slot", "") == "siege":
+		return cost  # rams and cannons keep their listed costs
+	return _even_cost(cost)
+
+
+## Weapons, shields and armor: a fractional amount rounds to the nearest even
+## number (12.5 -> 12). Whole numbers are left exactly as written.
+static func _even_cost(cost: Dictionary) -> Dictionary:
+	var out := {}
+	for r in cost:
+		var v := float(cost[r])
+		out[r] = cost[r] if is_equal_approx(v, roundf(v)) else int(roundf(v / 2.0)) * 2
+	return out
 
 
 static func cost_text(cost: Dictionary) -> String:

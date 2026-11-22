@@ -68,7 +68,7 @@ static func action_guide() -> String:
 	lines.append("craft: subject an item id; amount = how many items (0 = one batch). Siege items (cannon, ram) are made one per batch.")
 	lines.append("arm: crew members take gear from the armory; subject an item id, or empty for the best kit available.")
 	lines.append("mount: crew members take horses from a stable. man: subject cannon or ram, crew members crew a siege engine.")
-	lines.append("smelt: subject bronze or iron. research: subject gunpowder. tame: drive wild horses into a stable; amount = horses.")
+	lines.append("smelt: subject bronze or iron. research: subject gunpowder (university) or mounted_archery (stable; riders may only shoot after it). tame: drive wild horses into a stable; amount = horses.")
 	lines.append("scout: go out, look, come back and report. where = direction, enemy (their camp, or across the map if unknown), or marked.")
 	lines.append("guard / attack / hold / follow: military orders that never end, so they must be the last step. attack defaults to where=enemy.")
 	lines.append("recall: come home. promote: make the crew leader or addressed individual a captain. dismiss: release the addressed individual or disband the whole crew. status: report.")

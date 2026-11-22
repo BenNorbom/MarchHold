@@ -22,7 +22,7 @@ func _initialize() -> void:
 
 func _run_tests() -> void:
 	var only := OS.get_environment("MH_TEST")
-	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "crews", "selection", "walls", "combat", "parser", "schema", "chatgpt", "terra_orders", "duel"]
+	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "crews", "selection", "walls", "combat", "research", "shield", "parser", "schema", "chatgpt", "terra_orders", "duel"]
 	var t0 := Time.get_ticks_msec()
 	for name in tests:
 		if only != "" and only != name:
@@ -189,7 +189,7 @@ func test_economy() -> void:
 	run(m, 60.0)
 	check(m.bld(site.get("id", -1)) != null and m.bld(site["id"]).complete, "hut built")
 	m._refresh_counts(f)
-	check(f.housing == 13, "housing rose to 13 (%d)" % f.housing)
+	check(f.housing == 14, "housing rose to 14 (%d)" % f.housing)
 	check(f.pop > Defs.START_VILLAGERS, "births happened while well fed (%d people)" % f.pop)
 	var bad: Dictionary = m.place_site(0, "house", home + Vector2(30, 30), 0.0)
 	check(not bad.get("ok", true), "house locked in the Wood age")
@@ -356,6 +356,78 @@ func test_combat() -> void:
 		m2._set_task(cm, "hold")
 	run(m2, 70.0)
 	check(w.dead or w.hp < w.max_hp * 0.5, "cannon shots break a stone wall (hp %.0f / %.0f)" % [w.hp, w.max_hp])
+
+
+func test_research() -> void:
+	var m = new_match(14)
+	var f = m.fac(0)
+	f.age = 1
+	var entry := {}
+	for e in m.research_menu(0):
+		if e["id"] == "mounted_archery":
+			entry = e
+	check(not entry.is_empty() and entry["locked"] != "", "mounted archery is listed but locked without a stable")
+	for e in m.build_menu(0):
+		check(e["kind"] != "research", "research is not in the build menu")
+	var rider = m.spawn_unit(0, "villager", m.home_pos(0))
+	rider.bow = true
+	rider.arrows = 10
+	check(m.can_shoot_bow(rider), "archers shoot on foot")
+	rider.mounted = true
+	check(not m.can_shoot_bow(rider), "riders can't shoot before the research")
+	f.researched["mounted_archery"] = true
+	check(m.can_shoot_bow(rider), "riders shoot once mounted archery is known")
+	var pr: Dictionary = Parser.parse("research mounted archery")
+	check(pr.get("ok", false) and pr["steps"][0]["action"] == "research" and pr["steps"][0]["subject"] == "mounted_archery", "parser reads 'research mounted archery'")
+	check("mounted_archery" in Defs.subjects_for("research"), "schema offers mounted_archery")
+
+
+func test_shield() -> void:
+	var m = new_match(13)
+	var me = m.commander(0)
+	var foe = m.spawn_unit(1, "villager", me.pos + Vector2(0, 1.5))
+	foe.weapon = "club"
+	m.units.assign([me, foe]) # no bystanders in the line of fire
+	var base: float = m.melee_damage(foe, me)
+	m.set_commander(0, me.pos, 0.0, 0, true)
+	check(not me.shield_up, "nothing to raise without a shield")
+	for id in ["wood_shield", "bronze_shield", "iron_shield"]:
+		var d: Dictionary = Defs.ITEMS[id]
+		me.shield = id
+		m.set_commander(0, me.pos, 0.0, 0, false)
+		foe.pos = me.pos + Vector2(0, 1.5)
+		check(is_equal_approx(m.melee_damage(foe, me), base * (1.0 - d["block_melee"])), "%s carried keeps its usual protection" % id)
+		m.set_commander(0, me.pos, 0.0, 0, true)
+		for deg in [0.0, 65.0, -65.0, 75.0, -75.0, 180.0]:
+			foe.pos = me.pos + Vector2(sin(deg_to_rad(deg)), cos(deg_to_rad(deg))) * 1.5
+			var key := "up_melee" if absf(deg) < 70.0 else "block_melee"
+			check(is_equal_approx(m.melee_damage(foe, me), base * (1.0 - d[key])), "%s raised, blow from %d degrees" % [id, deg])
+		for side in [1.0, -1.0]:
+			for free in [false, true]:
+				m.shots.clear()
+				me.hp = me.max_hp
+				me.prev = me.pos
+				var s = m.Shot.new()
+				s.kind = "arrow"
+				s.faction = 1
+				s.shooter = foe.id
+				s.dmg = 20.0
+				var ground: float = m.terrain.height_at(me.pos.x, me.pos.y)
+				s.start = Vector3(me.pos.x, ground + 1.1, me.pos.y + 12.0 * side)
+				s.end = Vector3(me.pos.x, ground + 1.1, me.pos.y)
+				s.free = free
+				if free:
+					s.pos = s.end + Vector3(0, 0, 0.8 * side)
+					s.vel = Vector3(0, 0, -10.0 * side)
+				else:
+					s.hits = true
+					s.target = me.id
+					s.dur = 0.05
+				m.rebuild_unit_hash()
+				m.shots.append(s)
+				m.update_shots(0.1)
+				var stopped: float = d["up_arrow"] if side > 0.0 else d["block_arrow"] * (0.7 if free else 1.0)
+				check(absf((me.max_hp - me.hp) - 20.0 * (1.0 - stopped)) < 0.01, "%s raised, %s arrow from the %s" % [id, "free" if free else "aimed", "front" if side > 0.0 else "back"])
 
 
 func test_parser() -> void:

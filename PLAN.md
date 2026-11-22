@@ -102,7 +102,7 @@ Like supply in StarCraft: you can't grow beyond the housing you've built.
 | Source | Housing | Build (3 workers) |
 |---|---|---|
 | Starting campfire | 8 | — |
-| Hut (wood) | +5 | ~20 s |
+| Hut (wood) | +6 | ~20 s |
 | House (wood + stone) | +10 | ~35 s |
 | **Hard cap** | **200** | |
 
@@ -162,7 +162,7 @@ Seven raw resources and two refined ones:
 | Building | Age | Purpose |
 |---|---|---|
 | Campfire | Start | Housing 8, drop-off |
-| Hut | Wood | +5 housing |
+| Hut | Wood | +6 housing |
 | Stockpile | Wood | Drop-off point near work |
 | Hunter's lodge | Wood | Hunting |
 | Farm | Wood | Grain |

@@ -25,6 +25,7 @@ var face_shape := Vector3.ONE
 var rig_space: Transform3D
 var last_arm_targets: Array[Vector3] = []
 var cloth := ShaderMaterial.new()
+var apron: StandardMaterial3D
 
 static func model_for(u) -> int:
 	return 2 if u.child else int(u.female)
@@ -51,9 +52,18 @@ func setup(index: int) -> void:
 	cloth.set_shader_parameter("normal_map", mat.normal_texture)
 	cloth.set_shader_parameter("plain_linen", model_index != 0)
 	mesh_instance.set_surface_override_material(0, cloth)
+	if mesh_instance.mesh.get_surface_count() > 1:
+		apron = mesh_instance.mesh.surface_get_material(1).duplicate()
+		apron.albedo_texture = null # Its beige weave would swallow the dye.
+		apron.vertex_color_use_as_albedo = false
+		mesh_instance.set_surface_override_material(1, apron)
 
 func customize(seed_value: float, faction_color: Color) -> void:
-	cloth.set_shader_parameter("dye", faction_color.lerp(Color(0.54, 0.41, 0.31), seed_value * 0.55))
+	# Vary people by shade only, never by hue.
+	var dye := faction_color.darkened(seed_value * 0.12)
+	cloth.set_shader_parameter("dye", dye)
+	if apron:
+		apron.albedo_color = dye.darkened(0.2)
 	cloth.set_shader_parameter("complexion", Color.WHITE.lerp(Color(0.78, 0.65, 0.55), seed_value))
 	face_shape = Vector3(lerpf(0.93, 1.09, seed_value), lerpf(1.05, 0.97, seed_value), 1.0)
 	gait = seed_value

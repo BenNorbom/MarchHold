@@ -37,6 +37,11 @@ func describe_person(u: Unit) -> String:
 	return "villager"
 
 
+## A bow works on foot. In the saddle it needs the mounted archery research.
+func can_shoot_bow(u: Unit) -> bool:
+	return u.bow and (not u.mounted or fac(u.faction).researched.has("mounted_archery"))
+
+
 ## Returns true when the unit spent this tick fighting or fleeing.
 func combat_update(u: Unit, dt: float, radius: float) -> bool:
 	u.cooldown = maxf(0.0, u.cooldown - dt)
@@ -83,7 +88,7 @@ func _maybe_flee(u: Unit, dt: float, r: float) -> bool:
 func _fight(u: Unit, foe: Unit, dt: float) -> void:
 	var d := u.pos.distance_to(foe.pos)
 	var bow_range := Defs.TOWER_BOW_RANGE if u.in_tower >= 0 else Defs.BOW_RANGE
-	if u.bow and u.arrows > 0 and (u.weapon == "" or d > 6.0) and d <= bow_range:
+	if can_shoot_bow(u) and u.arrows > 0 and (u.weapon == "" or d > 6.0) and d <= bow_range:
 		face(u, foe.pos)
 		u.anim = Anim.SHOOT
 		if u.cooldown <= 0.0:
@@ -132,10 +137,22 @@ func melee_damage(att: Unit, tgt: Unit) -> float:
 	if tgt.kind in ["cannon", "ram"]:
 		return dmg * 0.8
 	if tgt.shield != "":
-		dmg *= 1.0 - float(Defs.ITEMS[tgt.shield]["block_melee"])
+		dmg *= 1.0 - _shield_block(tgt, att.pos, "melee")
 	if tgt.armor != "":
 		dmg *= 1.0 - float(Defs.ITEMS[tgt.armor]["armor"])
 	return dmg
+
+
+## Share of a blow from `from` that the shield stops. carried_scale applies only to a lowered shield.
+func _shield_block(tgt: Unit, from: Vector2, kind: String, carried_scale: float = 1.0) -> float:
+	var d: Dictionary = Defs.ITEMS[tgt.shield]
+	if tgt.shield_up:
+		var to := from - tgt.pos
+		if to.length() < 0.3 or Vector2(sin(tgt.facing), cos(tgt.facing)).dot(to.normalized()) >= Defs.SHIELD_ARC:
+			tgt.block_t = t
+			sound("clash", tgt.pos)
+			return float(d["up_" + kind])
+	return float(d["block_" + kind]) * carried_scale
 
 
 func deal_damage(tgt: Unit, dmg: float, att: Unit, kind: String) -> void:
@@ -307,7 +324,7 @@ func update_shots(dt: float) -> void:
 				if s.hits and tgt and not tgt.dead:
 					var dmg := s.dmg
 					if tgt.shield != "":
-						dmg *= 1.0 - float(Defs.ITEMS[tgt.shield]["block_arrow"])
+						dmg *= 1.0 - _shield_block(tgt, Vector2(s.start.x, s.start.z), "arrow")
 					if tgt.armor != "":
 						dmg *= 1.0 - float(Defs.ITEMS[tgt.armor]["armor"])
 					if tgt.in_tower >= 0:
@@ -334,7 +351,7 @@ func _free_shot(s: Shot, dt: float) -> void:
 		if hd < (0.9 if u.mounted else 0.55) and seg_closest.y > _height(u.pos) and seg_closest.y < top:
 			var dmg := s.dmg
 			if u.shield != "":
-				dmg *= 1.0 - float(Defs.ITEMS[u.shield]["block_arrow"]) * 0.7
+				dmg *= 1.0 - _shield_block(u, Vector2(s.start.x, s.start.z), "arrow", 0.7)
 			if u.armor != "":
 				dmg *= 1.0 - float(Defs.ITEMS[u.armor]["armor"])
 			deal_damage(u, dmg, shooter, "arrow")

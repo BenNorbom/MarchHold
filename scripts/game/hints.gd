@@ -60,6 +60,9 @@ func tick(dt: float) -> void:
 		_hint("food", "Food is short. Say 'pick berries', build a farm (/b), or a hunter's lodge.")
 	if m.has_building(0, "armory"):
 		_hint("armory", "The armory is up. /c makes gear; 'arm 5 with spears' equips people. Stand by it and press E to arm yourself.")
+	var me = m.commander(0)
+	if me and me.shield != "":
+		_hint("shield", "Hold right click to raise your shield. It only covers what is in front of you.")
 	if t > 170.0 and f.reports.is_empty():
 		_hint("scout", "You don't know where Rook is. Say 'send a scout' — the report comes when the scout returns.")
 	if t > 300.0 and f.age == 0:
