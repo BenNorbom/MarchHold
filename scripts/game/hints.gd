@@ -67,7 +67,7 @@ func tick(dt: float) -> void:
 	if me and me.shield != "":
 		_hint("shield", "Hold right click to raise your shield. It only covers what is in front of you.")
 	if t > 170.0 and f.reports.is_empty():
-		_hint("scout", "You don't know where Rook is. Say 'send a scout' — the report comes when the scout returns.")
+		_hint("scout", "You don't know what your rivals are doing. Say 'send a scout' — the report comes when the scout returns.")
 	if t > 300.0 and f.age == 0:
 		_hint("quarry", "A quarry next to a big rock outcrop opens the Stone age.")
 	if t > 240.0 and not m.has_building(0, "farm"):

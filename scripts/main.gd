@@ -18,6 +18,7 @@ var smoke := false
 var shot_menu := false
 var shot_ui := ""
 var smoke_tutorial := false
+var dev_rivals := 1
 
 
 func _ready() -> void:
@@ -38,6 +39,8 @@ func _ready() -> void:
 			shot_menu = true
 		elif a.begins_with("--shot-ui="):
 			shot_ui = a.substr(10)
+		elif a.begins_with("--rivals="):
+			dev_rivals = int(a.substr(9))
 		elif a == "--smoke-tutorial":
 			smoke_tutorial = true
 	if shot_menu:
@@ -71,12 +74,12 @@ func _ready() -> void:
 		return
 	if smoke:
 		Settings.data["intro_seen"] = true
-		_start({"seed": 777, "difficulty": 1})
+		_start({"seed": 777, "difficulty": 1, "opponents": dev_rivals})
 		_smoke()
 		return
 	if shot_path != "":
 		Settings.data["intro_seen"] = true
-		_start({"seed": 4242, "difficulty": 1})
+		_start({"seed": 4242, "difficulty": 1, "opponents": dev_rivals})
 		if shot_demo:
 			_demo_buildings()
 		_take_shot()
@@ -203,7 +206,7 @@ func _smoke() -> void:
 	say.call("pick berries")
 	for i in 600:
 		m.tick(0.1)
-		g.ai.update(0.1)
+		g.run_rivals(0.1)
 	g._process(0.016)
 	say.call("/b b h")
 	print("placing: ", g.placing, " type: ", g.place_type)
@@ -257,7 +260,7 @@ func _smoke() -> void:
 		g._place_click()
 	for i in 1200:
 		m.tick(0.1)
-		g.ai.update(0.1)
+		g.run_rivals(0.1)
 		if i % 20 == 0:
 			g._process(0.05)
 	g._process(0.016)

@@ -41,22 +41,30 @@ var forest_res := 0
 var heights := PackedFloat32Array()
 var forest := PackedFloat32Array()
 var starts: Array[Vector2] = []
+var kit := Vector2.ZERO        # how far each camp's own deposits and deer are
 var nodes: Array = []           # Array[RNode]
+var deposits: Array = []        # the deposit and outcrop nodes, also found in nodes
+var outcrops: Array = []
 var herds: Array = []           # {kind, pos, count}
 var rng := RandomNumberGenerator.new()
 
 
-func generate(seed_in: int, map_in: String = Defs.MAP_LARGEST) -> void:
-	map_id = map_in if Defs.MAP_SIZES.has(map_in) else Defs.MAP_DEFAULT
+func generate(seed_in: int, map_in: String = Defs.MAP_REFERENCE, settlements: int = 2) -> void:
+	var camps := clampi(settlements, 2, Defs.MAX_SETTLEMENTS)
+	map_id = Defs.map_for(camps, map_in)
 	config = Defs.MAP_SIZES[map_id]
 	size = float(config["size"])
-	size_scale = size / float(Defs.MAP_SIZES[Defs.MAP_LARGEST]["size"])
+	size_scale = size / float(Defs.MAP_SIZES[Defs.MAP_REFERENCE]["size"])
 	height_res = int(size / STEP) + 1
 	forest_res = int(size / FOREST_CELL)
 	seed_value = seed_in
 	rng.seed = seed_in
 	_heights()
-	_pick_starts()
+	kit = config["kit"]
+	if camps == 2:
+		_pick_starts()
+	else:
+		_pick_ring(camps)
 	for s in starts:
 		_flatten(s, 34.0, 80.0)
 	_forest_map()
@@ -149,6 +157,38 @@ func _pick_starts() -> void:
 	if best.is_empty():
 		best = [Vector2(220, 800) * size_scale, Vector2(800, 220) * size_scale]
 	starts = best
+
+
+## Three or more camps stand evenly on a ring, so each has two neighbours equally far away.
+func _pick_ring(camps: int) -> void:
+	var c := Vector2(size, size) * 0.5
+	var r: float = size * 0.5 - float(config["margin"])
+	var best: Array[Vector2] = []
+	var best_score := -INF
+	for attempt in 80:
+		var turn := rng.randf() * TAU
+		var ring: Array[Vector2] = []
+		var worst := 0.0
+		var total := 0.0
+		for k in camps:
+			var p := c + Vector2.from_angle(turn + k * TAU / camps) * r
+			var rough := _roughness(p)
+			worst = maxf(worst, rough)
+			total += rough
+			ring.append(p)
+		var score := -worst - total / camps + rng.randf() * 2.0
+		if score > best_score:
+			best_score = score
+			best = ring
+	# Shuffled, so a faction's number says nothing about where it starts or who its neighbours are.
+	for k in range(camps - 1, 0, -1):
+		var j := rng.randi_range(0, k)
+		var held := best[k]
+		best[k] = best[j]
+		best[j] = held
+	starts = best
+	var spacing := 2.0 * r * sin(PI / camps)
+	kit = Vector2(minf(kit.x, spacing * 0.28), minf(kit.y, spacing * 0.45))
 
 
 func _roughness(p: Vector2) -> float:
@@ -266,6 +306,10 @@ func _add(kind: String, sub: String, p: Vector2, amount: float, scale: float = 1
 	n.scale = scale
 	n.rot = rng.randf() * TAU
 	nodes.append(n)
+	if kind == "deposit":
+		deposits.append(n)
+	elif sub == "outcrop":
+		outcrops.append(n)
 	return n
 
 
@@ -298,10 +342,11 @@ func _too_close_to_nodes(p: Vector2, r: float) -> bool:
 
 func _place_nodes() -> void:
 	nodes.clear()
+	deposits.clear()
+	outcrops.clear()
 	herds.clear()
 	var k_size := size_scale
 	var k_area := k_size * k_size
-	var kit: Vector2 = config["kit"]
 	# Camp essentials first, so both sides get the same kit at similar distances.
 	for s in starts:
 		for c in 3:
@@ -335,9 +380,11 @@ func _place_nodes() -> void:
 				_add("tree", "oak" if rng.randf() < 0.6 else "pine", tp, 40.0, rng.randf_range(0.8, 1.25))
 		herds.append({"kind": "deer", "pos": _free_spot(s, kit.x + 10.0, kit.y, 5.0), "count": 5})
 	# Contested deposits in the middle band between the camps.
-	var mid := (starts[0] + starts[1]) * 0.5
+	var duel := starts.size() == 2
+	var mid := (starts[0] + starts[1]) * 0.5 if duel else Vector2(size, size) * 0.5
+	var contested := 2 if duel else starts.size()
 	for dep in Defs.DEPOSITS:
-		for k in 2:
+		for k in contested:
 			_add("deposit", dep, _free_spot(mid, 40.0 * k_size, 200.0 * k_size, 40.0), -1.0)
 	var inset := 120.0 * k_size
 	for k in roundi(6 * k_area):

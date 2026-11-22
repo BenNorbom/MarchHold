@@ -5,6 +5,7 @@ const WOOD_TYPES := ["hut", "stockpile", "farm", "armory", "palisade", "palisade
 const STONE_TYPES := ["stone_wall", "stone_gate", "tower"]
 
 var vision_t := 0.0
+var armed_filter: Callable = armed      # one Callable, not a new lambda for every villager every tick
 
 
 # --- Fighting -----------------------------------------------------------------
@@ -75,7 +76,7 @@ func _maybe_flee(u: Unit, dt: float, r: float) -> bool:
 		u.flee_t -= dt
 		move_to(u, home_pos(u.faction) + _ring(u, 5.0), dt, 3.0, true)
 		return true
-	var foe := nearest_enemy(u.pos, r, u.faction, func(o): return armed(o))
+	var foe := nearest_enemy(u.pos, r, u.faction, armed_filter)
 	if foe:
 		u.flee_t = 6.0
 		u.carry = 0.0
@@ -464,7 +465,7 @@ func _engine_move(e: Unit, goal: Vector2, dt: float, speed: float, arrive: float
 		e.anim = Anim.IDLE
 		return
 	if e.path.is_empty() or e.path_goal.distance_squared_to(goal) > 9.0:
-		e.path = find_path(e.faction, e.pos, goal)
+		e.path = route_for(e, goal)
 		e.path_i = 0
 		e.path_goal = goal
 		if e.path.is_empty():
@@ -663,10 +664,11 @@ func update_animal(a: Unit, dt: float) -> void:
 	# Wild animals: flee from people, otherwise graze near the herd.
 	var flee_r := 18.0 if a.kind == "deer" else 12.0
 	var threat: Unit = null
-	for o: Unit in units_near(a.pos, flee_r, -2):
-		if is_person(o) and o.faction >= 0:
-			threat = o
-			break
+	if sides_near(a.pos, flee_r, rivals_mask(-1)):
+		for o: Unit in units_near(a.pos, flee_r, -2):
+			if is_person(o) and o.faction >= 0:
+				threat = o
+				break
 	if threat:
 		var away := (a.pos - threat.pos).normalized()
 		a.goal = a.pos + away * 25.0
@@ -718,24 +720,22 @@ func _animal_move(a: Unit, goal: Vector2, dt: float, run: bool) -> bool:
 # --- Vision, knowledge and intelligence -------------------------------------------
 
 func update_vision() -> void:
-	for f: Faction in factions:
-		f.visible.fill(0)
 	for u: Unit in units:
 		if u.dead or u.faction < 0 or u.stable >= 0:
 			continue
-		if not (is_person(u) or u.kind in ["cannon", "ram"]):
+		# Only commanders and scouts learn from what they see; buildings are below.
+		var scouting := u.task == "scout" and u.scout_leg < 3
+		var leader := u.kind == "commander"
+		if not (leader or (scouting and u.kind == "villager")):
 			continue
 		var f: Faction = factions[u.faction]
-		var r: float = Defs.VILLAGER["sight"]
-		var scouting := u.task == "scout" and u.scout_leg < 3
-		if u.kind == "commander":
+		var r: float = 0.0
+		if leader:
 			r = Defs.COMMANDER["sight"]
 		elif scouting:
 			r = Defs.SCOUT_SIGHT * (1.15 if u.mounted else 1.0)
 		var cells := kcells_in(u.pos, r)
-		for k in cells:
-			f.visible[k] = 1
-		if u.kind == "commander":
+		if leader:
 			for k in cells:
 				f.knowledge[k] = t
 			_sight(f, u.pos, r, null)
@@ -749,9 +749,10 @@ func update_vision() -> void:
 		var d: Dictionary = Defs.BUILDINGS[b.type]
 		var r := float(d.get("sight", 18.0))
 		var f: Faction = factions[b.faction]
-		var cells := kcells_in(b.pos, r)
+		if b.sight_cells.is_empty():
+			b.sight_cells = kcells_in(b.pos, r)
+		var cells := b.sight_cells
 		for k in cells:
-			f.visible[k] = 1
 			f.knowledge[k] = t
 		var seen := _sight(f, b.pos, r, null)
 		if d.get("alarm", false) or b.type == "campfire":
@@ -772,7 +773,8 @@ func update_vision() -> void:
 ## Records what is visible from p. Scouts keep it to themselves until they report.
 func _sight(f: Faction, p: Vector2, r: float, scout) -> Array:
 	var foes := []
-	for o: Unit in units_near(p, r, -2):
+	var around: Array = units_near(p, r, -2) if sides_near(p, r, rivals_mask(f.id) | WILD_HORSE) else []
+	for o: Unit in around:
 		if o.faction == f.id:
 			continue
 		if o.faction < 0:
@@ -788,15 +790,19 @@ func _sight(f: Faction, p: Vector2, r: float, scout) -> Array:
 			continue
 		foes.append(o)
 	if not foes.is_empty():
-		var entry := _group_entry(foes)
-		var key := "army%d" % kcell(p)
-		if scout:
-			scout.sightings[key] = entry
-		else:
-			f.intel[key] = entry
-	for b: Building in buildings:
-		if b.dead or b.faction == f.id or b.pos.distance_squared_to(p) > r * r:
-			continue
+		var sides := {}
+		for o in foes:
+			if not sides.has(o.faction):
+				sides[o.faction] = []
+			sides[o.faction].append(o)
+		for side in sides:
+			var entry := _group_entry(sides[side])
+			var key := _army_key(side, p)
+			if scout:
+				scout.sightings[key] = entry
+			else:
+				f.intel[key] = entry
+	for b: Building in foreign_buildings_near(f.id, p, r):
 		var e := {"kind": "building", "type": b.type, "pos": b.pos, "faction": b.faction, "t": t, "complete": b.complete, "id": b.id}
 		if scout:
 			scout.sightings["b%d" % b.id] = e
@@ -826,7 +832,11 @@ func _note_units(f: Faction, p: Vector2, foes: Array, when: float) -> void:
 		return
 	var e := _group_entry(foes)
 	e["t"] = when
-	f.intel["army%d" % kcell(p)] = e
+	f.intel[_army_key(e["faction"], p)] = e
+
+
+func _army_key(faction: int, p: Vector2) -> String:
+	return "army%d:%d" % [faction, kcell(p)]
 
 
 static func approx(n: int) -> String:
@@ -865,7 +875,7 @@ func deliver_report(u: Unit, c: Crew) -> void:
 		if float(u.seen[k]) > f.knowledge[k]:
 			f.knowledge[k] = u.seen[k]
 	var oldest := t
-	var camp = null
+	var camps := {}
 	var enemy_buildings := {}
 	var walls := 0
 	var armies := []
@@ -880,7 +890,7 @@ func deliver_report(u: Unit, c: Crew) -> void:
 		match e["kind"]:
 			"building":
 				if e["type"] == "campfire":
-					camp = e["pos"]
+					camps[e["faction"]] = e["pos"]
 				elif Defs.BUILDINGS[e["type"]].get("wall", false):
 					walls += 1
 				else:
@@ -895,9 +905,11 @@ func deliver_report(u: Unit, c: Crew) -> void:
 	var ago := int((t - oldest) / 60.0)
 	var when := "just now" if ago < 1 else ("%d minute%s ago" % [ago, "" if ago == 1 else "s"])
 	var parts: Array[String] = []
-	if camp != null:
-		var d := int(round((camp as Vector2).distance_to(home_pos(u.faction)) / 10.0) * 10.0)
-		parts.append("their camp is about %d m %s" % [d, Terrain.compass_name((camp as Vector2) - home_pos(u.faction))])
+	for who in camps:
+		var away: Vector2 = camps[who] - home_pos(u.faction)
+		var d := int(round(away.length() / 10.0) * 10.0)
+		var whose := "their" if factions.size() == 2 else "%s's" % factions[who].short_name
+		parts.append("%s camp is about %d m %s" % [whose, d, Terrain.compass_name(away)])
 	var total_men := 0
 	var counts := {}
 	for e in armies:
@@ -911,7 +923,7 @@ func deliver_report(u: Unit, c: Crew) -> void:
 		for k in enemy_buildings:
 			bl.append("%s %s" % [approx(enemy_buildings[k]), Defs.building_name(k).to_lower() + ("s" if enemy_buildings[k] > 1 else "")])
 		parts.append("buildings: " + ", ".join(bl))
-	if camp != null:
+	if not camps.is_empty():
 		parts.append("walls: %s" % ("none" if walls == 0 else ("%d sections" % walls)))
 	if herds > 0:
 		parts.append("wild horses graze out there")

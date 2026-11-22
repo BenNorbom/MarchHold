@@ -71,7 +71,6 @@ func _draw() -> void:
 	var f = m.fac(0)
 	var ink := Color(0.22, 0.15, 0.08)
 	var ours: Color = f.color
-	var theirs: Color = m.fac(1).color
 	# Known terrain features.
 	var show_names := bool(Settings.get_val("resource_labels", true))
 	for n in m.terrain.nodes:
@@ -101,6 +100,8 @@ func _draw() -> void:
 	# What you know about the enemy.
 	for key in f.intel:
 		var e: Dictionary = f.intel[key]
+		var side = m.fac(int(e.get("faction", -1)))
+		var theirs: Color = side.color if side else Color(0.6, 0.12, 0.1)
 		var p := _to_screen(r, e["pos"])
 		match e["kind"]:
 			"building":
@@ -110,7 +111,7 @@ func _draw() -> void:
 				draw_rect(Rect2(p - Vector2(sz, sz) * 0.5, Vector2(sz, sz)), theirs)
 				if e["type"] == "campfire":
 					draw_circle(p, 8, theirs)
-					draw_string(font, p + Vector2(10, 5), "Rook's camp (%s)" % _ago(e["t"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 15, theirs.darkened(0.45))
+					draw_string(font, p + Vector2(10, 5), "%s's camp (%s)" % [m.fac(e["faction"]).short_name, _ago(e["t"])], HORIZONTAL_ALIGNMENT_LEFT, -1, 15, theirs.darkened(0.45))
 			"units":
 				if e.get("faction", -1) == 0 or m.t - float(e["t"]) > 300.0:
 					continue

@@ -726,7 +726,7 @@ func _projectiles() -> void:
 	var ai := MultiMeshInstance3D.new()
 	ai.multimesh = arrow_mm
 	ai.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	ai.custom_aabb = AABB(Vector3(-100, -100, -100), Vector3(1300, 400, 1300))
+	ai.custom_aabb = AABB(Vector3(-100, -100, -100), Vector3(m.map_size + 276, 400, m.map_size + 276))
 	add_child(ai)
 	ball_mm = MultiMesh.new()
 	ball_mm.transform_format = MultiMesh.TRANSFORM_3D
@@ -735,7 +735,7 @@ func _projectiles() -> void:
 	ball_mm.visible_instance_count = 0
 	var bi := MultiMeshInstance3D.new()
 	bi.multimesh = ball_mm
-	bi.custom_aabb = AABB(Vector3(-100, -100, -100), Vector3(1300, 400, 1300))
+	bi.custom_aabb = AABB(Vector3(-100, -100, -100), Vector3(m.map_size + 276, 400, m.map_size + 276))
 	add_child(bi)
 	for i in 12:
 		var p := GPUParticles3D.new()

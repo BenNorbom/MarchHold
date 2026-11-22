@@ -3,32 +3,37 @@ extends "res://scripts/sim/match_combat.gd"
 ## commander's actions and read-only queries for menus and Terra.
 
 const START_FOOD := 40.0
+const MOVING_ANIMS := [Anim.WALK, Anim.RUN, Anim.CARRY, Anim.RIDE]
 
 
 func setup(opts: Dictionary) -> void:
 	options = opts
 	var seed_in := int(opts.get("seed", 1))
 	rng.seed = seed_in * 7919 + 13
+	var count := clampi(int(opts.get("settlements", 2)), 2, Defs.MAX_SETTLEMENTS)
 	var tr := Terrain.new()
-	tr.generate(seed_in, str(opts.get("map", Defs.MAP_LARGEST)))
-	_init_world(tr)
+	tr.generate(seed_in, str(opts.get("map", Defs.MAP_REFERENCE)), count)
+	_init_world(tr, count)
+	birth_acc.resize(count)
+	birth_acc.fill(0.0)
 	factions.clear()
-	for i in 2:
+	for i in count:
 		var f := Faction.new()
 		f.id = i
-		f.name = "Your people" if i == 0 else "Rook's people"
-		f.commander_name = "Commander" if i == 0 else "Commander Rook"
-		f.color = Color(0.05, 0.38, 1.0) if i == 0 else Color(1.0, 0.08, 0.05)
-		f.is_ai = i == 1 or bool(opts.get("ai_both", false))
+		var who: Dictionary = Defs.COMMANDERS[i]
+		f.short_name = who["name"]
+		f.name = "Your people" if i == 0 else "%s's people" % who["name"]
+		f.commander_name = "Commander" if i == 0 else "Commander %s" % who["name"]
+		f.color = who["color"]
+		f.is_ai = i > 0 or bool(opts.get("ai_both", false))
 		f.start = tr.starts[i]
 		for r in Defs.RESOURCES:
 			f.stock[r] = 0.0
 		f.knowledge.resize(kres * kres)
 		f.knowledge.fill(-1.0)
-		f.visible.resize(kres * kres)
 		factions.append(f)
 	for f: Faction in factions:
-		var other: Vector2 = factions[1 - f.id].start
+		var other: Vector2 = factions[1 - f.id].start if count == 2 else Vector2(map_size, map_size) * 0.5
 		var rot := atan2((other - f.start).y, (other - f.start).x)
 		add_building(f.id, "campfire", f.start, rot, true)
 		var cmd := spawn_unit(f.id, "commander", f.start + Vector2.from_angle(rot) * 7.0)
@@ -63,6 +68,8 @@ func tick(dt: float = Defs.TICK) -> void:
 	t += dt
 	ticks += 1
 	paths_this_tick = 0
+	if fair_paths:
+		share_paths()
 	rebuild_unit_hash()
 	upkeep_t += dt
 	if upkeep_t >= 1.0:
@@ -117,7 +124,8 @@ func _update_commander(u: Unit, dt: float) -> void:
 	var foes := 0
 	var friends := 0
 	var threat := Vector2.ZERO
-	for o: Unit in units_near(u.pos, 26.0, -2):
+	var around: Array = units_near(u.pos, 26.0, -2) if sides_near(u.pos, 26.0, rivals_mask(u.faction)) else []
+	for o: Unit in around:
 		if o.dead or o.stable >= 0 or not is_person(o) or o.id == u.id:
 			continue
 		if o.faction == u.faction and armed(o):
@@ -149,15 +157,15 @@ func _unstick(u: Unit, dt: float) -> void:
 	if u.kind == "commander" and u.task == "player":
 		return
 	var moved := u.pos.distance_to(u.last_pos)
-	if u.anim in [Anim.WALK, Anim.RUN, Anim.CARRY, Anim.RIDE] and moved < 0.02:
+	if u.anim in MOVING_ANIMS and moved < 0.02:
 		u.stuck += dt
 		if u.stuck > 2.5:
 			u.stuck = 0.0
 			u.path = PackedVector2Array()
 			u.path_goal = Vector2(-999, -999)
 			var c := cell_of(u.pos)
-			if solid_for(clampi(u.faction, 0, 1), c):
-				u.pos = cell_center(nearest_free_cell(clampi(u.faction, 0, 1), c))
+			if solid_for(maxi(u.faction, 0), c):
+				u.pos = cell_center(nearest_free_cell(maxi(u.faction, 0), c))
 			else:
 				u.pos += Vector2.from_angle(rng.randf() * TAU) * 1.5
 	else:
@@ -187,10 +195,63 @@ func _cleanup() -> void:
 func on_commander_dead(u: Unit) -> void:
 	if over:
 		return
+	var f := fac(u.faction)
+	f.alive = false
+	f.out_t = t
+	var left := living()
+	if left.size() > 1 and not is_player_faction(f.id):
+		eliminate(f)
+		return
 	over = true
-	winner = 1 - u.faction
+	if left.size() == 1:
+		winner = left[0]
+	else:
+		# The player fell with rivals still standing: the killer's side takes the win.
+		var killer := unit(u.attacker)
+		winner = killer.faction if killer else -1
 	end_reason = "%s was killed." % u.name
 	emit({"type": "over", "winner": winner})
+
+
+func living() -> Array:
+	var out := []
+	for f: Faction in factions:
+		if f.alive:
+			out.append(f.id)
+	return out
+
+
+## A fallen commander's settlement breaks up: people scatter and buildings collapse.
+## This can run in the middle of a tick, so nothing is taken out of the arrays here.
+func eliminate(f: Faction) -> void:
+	for c: Crew in crews.values():
+		if c.faction == f.id:
+			dissolve(c)
+	for u: Unit in units:
+		if u.dead or u.faction != f.id:
+			continue
+		if u.kind == "horse":
+			u.faction = -1
+			u.stable = -1
+			u.herd = -1
+			u.goal = u.pos
+			continue
+		_release_claim(u)
+		u.dead = true
+		u.dead_t = -1.0     # gone, with no body left to draw
+	for b: Building in buildings:
+		if not b.dead and b.faction == f.id:
+			remove_building(b, "abandoned")
+	for other: Faction in factions:
+		for key in other.intel.keys():
+			if int(other.intel[key].get("faction", -1)) == f.id:
+				other.intel.erase(key)
+	for c: Crew in crews.values():
+		if c.idx < c.steps.size() and c.steps[c.idx]["action"] == "attack" and int(c.state.get("foe", -1)) == f.id:
+			# Nobody is left to fight there. The crew keeps together and marches home.
+			start_plan(c, [{"action": "guard", "subject": "", "count": 0, "amount": 0, "where": "home"}])
+	post(0, "Commander %s has fallen. %s scatter." % [f.short_name, f.name], "done")
+	emit({"type": "eliminated", "faction": f.id})
 
 
 # --- Orders --------------------------------------------------------------------

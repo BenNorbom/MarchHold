@@ -1,5 +1,5 @@
 extends RefCounted
-## Commander Rook: a utility AI with build-order templates. It plays through the
+## A rival commander (one per AI settlement): a utility AI with build-order templates. It plays through the
 ## same validated command interface as the player and only knows what its own
 ## scouts, buildings and commander have seen.
 
@@ -38,6 +38,9 @@ func setup(match_ref, opts: Dictionary) -> void:
 	calm_until = 600.0 if opts.get("calm_start", false) else 0.0
 	max_pop = int(opts.get("max_pop", 200))
 	next_attack = _first_attack_time()
+	if m.factions.size() > 2:
+		# Seven rivals thinking on the same tick would be a spike.
+		think_t = fid * 0.17
 
 
 func _first_attack_time() -> float:
@@ -396,8 +399,8 @@ func _find_deposit(dep: String):
 	_mine_dep = dep
 	var best = null
 	var bd := 330.0
-	for n in m.terrain.nodes:
-		if n.kind != "deposit" or n.sub != dep:
+	for n in m.terrain.deposits:
+		if n.sub != dep:
 			continue
 		var d: float = n.pos.distance_to(_home())
 		if d < bd:
@@ -461,8 +464,8 @@ func _find_site(type: String):
 	if type == "quarry":
 		var best = null
 		var bd := 400.0
-		for n in m.terrain.nodes:
-			if n.kind == "rock" and n.sub == "outcrop" and n.pos.distance_to(home) < bd:
+		for n in m.terrain.outcrops:
+			if n.pos.distance_to(home) < bd:
 				bd = n.pos.distance_to(home)
 				best = n
 		if best == null:

@@ -2,7 +2,7 @@ extends "res://scripts/sim/match_base.gd"
 ## Crews, plans, work and the settlement economy.
 
 var claims := {}          # resource node id -> gatherers heading to it
-var birth_acc := [0.0, 0.0]
+var birth_acc := PackedFloat64Array()      # by faction
 var breed_acc := {}       # stable id -> progress
 var upkeep_t := 0.0
 
@@ -247,17 +247,32 @@ func resolve_where(c: Crew, where: String, default_dist: float = 140.0):
 	return p.clamp(Vector2(20, 20), Vector2(map_size - 20, map_size - 20))
 
 
-func known_enemy_camp(faction: int):
+## Every living rival's camp this faction has seen: [{"faction", "pos", "t"}, ...].
+func known_camps(faction: int) -> Array:
+	var out := []
 	var f := fac(faction)
-	var best = null
-	var bt := -INF
 	for k in f.intel:
 		var e: Dictionary = f.intel[k]
-		if e.get("kind", "") == "building" and e.get("type", "") == "campfire" and e.get("faction", -1) != faction:
-			if float(e["t"]) > bt:
-				bt = float(e["t"])
-				best = e["pos"]
+		if e.get("kind", "") != "building" or e.get("type", "") != "campfire":
+			continue
+		var who := int(e.get("faction", -1))
+		if who >= 0 and who != faction and factions[who].alive:
+			out.append({"faction": who, "pos": e["pos"], "t": e["t"]})
+	return out
+
+
+## The nearest of those camps, or {}.
+func known_enemy(faction: int) -> Dictionary:
+	var best := {}
+	var home := home_pos(faction)
+	for camp in known_camps(faction):
+		if best.is_empty() or (camp["pos"] as Vector2).distance_squared_to(home) < (best["pos"] as Vector2).distance_squared_to(home):
+			best = camp
 	return best
+
+
+func known_enemy_camp(faction: int):
+	return known_enemy(faction).get("pos")
 
 
 func _begin_step(c: Crew) -> void:
@@ -405,6 +420,8 @@ func _prepare_step(c: Crew, s: Dictionary) -> String:
 			if p == null:
 				return "we don't know where their camp is. Scout first." if where in ["", "enemy"] else "mark a spot first (look at the ground and press R)."
 			c.state["target"] = p
+			if where in ["", "enemy"]:
+				c.state["foe"] = known_enemy(c.faction).get("faction", -1)
 		"follow":
 			if unit(f.commander) == null:
 				return "there's no one to follow."
@@ -498,10 +515,33 @@ func _enemy_guess(faction: int):
 	var e = known_enemy_camp(faction)
 	if e != null:
 		return e
-	# The camps face each other across the middle of the map.
 	var home := home_pos(faction)
 	var c := Vector2(map_size, map_size) * 0.5
+	if factions.size() > 2:
+		return _unexplored_on_ring(faction, home, c)
+	# Two camps face each other across the middle of the map.
 	return (c * 2.0 - home).clamp(Vector2(40, 40), Vector2(map_size - 40, map_size - 40))
+
+
+## With several camps, all anyone knows is that they stand on a ring. Go to the nearest
+## part of it this faction hasn't seen, or failing that the part seen longest ago.
+func _unexplored_on_ring(faction: int, home: Vector2, c: Vector2) -> Vector2:
+	var known := fac(faction).knowledge
+	var r: float = map_size * 0.5 - float(terrain.config["margin"])
+	var from := (home - c).angle()
+	var best := c
+	var best_seen := INF
+	# Outwards from home to either side, starting past the home kit.
+	for k in range(2, 13):
+		for side in [1.0, -1.0]:
+			var p := c + Vector2.from_angle(from + side * k * TAU / 24.0) * r
+			if p.distance_to(home) < Defs.RING_SPACING * 0.8:
+				continue
+			var seen: float = known[kcell(p)]
+			if seen < best_seen:
+				best_seen = seen
+				best = p
+	return best
 
 
 func _advance(c: Crew) -> void:
@@ -672,7 +712,7 @@ func move_to(u: Unit, goal: Vector2, dt: float, arrive: float = 1.0, run: bool =
 		u.path = PackedVector2Array()
 		return true
 	if u.path.is_empty() or u.path_goal.distance_squared_to(goal) > 4.0:
-		u.path = find_path(u.faction, u.pos, goal)
+		u.path = route_for(u, goal)
 		u.path_i = 0
 		u.path_goal = goal
 		if u.path.is_empty():
@@ -1561,6 +1601,8 @@ func _refresh_counts(f: Faction) -> void:
 
 func upkeep(dt: float) -> void:
 	for f: Faction in factions:
+		if not f.alive:
+			continue
 		_refresh_counts(f)
 		var food := float(f.stock.get("food", 0.0))
 		food -= (f.adults * Defs.RATION_ADULT + f.children * Defs.RATION_CHILD) * dt
@@ -1666,8 +1708,8 @@ func _open_age(f: Faction, age: int) -> void:
 	if f.id == 0:
 		post(0, "The %s age has begun! Type /b and /c to see what's new." % Defs.AGES[age], "age")
 		sound("age", home_pos(0), 0)
-	elif f.id == 1:
-		emit({"type": "rival_age", "age": age})
+	else:
+		emit({"type": "rival_age", "faction": f.id, "age": age})
 
 
 func kill_unit(u: Unit, why: String = "") -> void:
