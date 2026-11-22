@@ -71,7 +71,7 @@ static func action_guide() -> String:
 	lines.append("mount: crew members take horses from a stable. man: subject cannon or ram, crew members crew a siege engine.")
 	lines.append("smelt: subject bronze or iron. research: subject gunpowder (university) or mounted_archery (stable; riders may only shoot after it). tame: drive wild horses into a stable; amount = horses.")
 	lines.append("scout: go out, look, come back and report. where = direction, enemy (their camp, or across the map if unknown), or marked.")
-	lines.append("guard / attack / hold / follow: military orders that never end, so they must be the last step. attack defaults to where=enemy.")
+	lines.append("guard / attack / hold / follow: military orders that never end, so they must be the last step. attack defaults to where=enemy. An attack never needs a scout first: if their camp hasn't been seen, troops march to the best guess in known_map and spot it on the way. Never refuse or ask the player to scout before attacking.")
 	lines.append("recall: come home. promote: make the crew leader or addressed individual a captain. dismiss: release the addressed individual or disband the whole crew. status: report.")
 	lines.append("resume_work: 'back to work'. People pulled off their jobs by a military order (arm, guard, attack, recall...) return to what they were doing. Use it as the only step.")
 	lines.append("mandate: put the addressed person in charge of a place and a purpose. It is the first step and only limits may follow it. subject village (runs the main camp and takes everyone idle), farming, industry, garrison or army. count = how many people the post should have (0 = default). where = its place. The captain then assigns the work and builds what it needs without further orders.")

@@ -980,19 +980,23 @@ func update_vision() -> void:
 	for u: Unit in units:
 		if u.dead or u.faction < 0 or u.stable >= 0:
 			continue
-		# Only commanders and scouts learn from what they see; buildings are below.
+		# Commanders, scouts and armed people learn from what they see; buildings are below.
 		var scouting := u.task == "scout" and u.scout_leg < 3
 		var leader := u.kind == "commander"
-		if not (leader or (scouting and u.kind == "villager")):
+		var soldier: bool = u.kind == "villager" and not scouting and u.weapon != ""
+		if not (leader or soldier or (scouting and u.kind == "villager")):
 			continue
 		var f: Faction = factions[u.faction]
 		var r: float = 0.0
 		if leader:
 			r = Defs.COMMANDER["sight"]
+		elif soldier:
+			r = Defs.SOLDIER_SIGHT
 		elif scouting:
 			r = Defs.SCOUT_SIGHT * (1.15 if u.mounted else 1.0)
 		var cells := kcells_in(u.pos, r)
-		if leader:
+		if leader or soldier:
+			# Troops report what they see straight to their own side, unlike scouts.
 			for k in cells:
 				f.knowledge[k] = t
 			_sight(f, u.pos, r, null)

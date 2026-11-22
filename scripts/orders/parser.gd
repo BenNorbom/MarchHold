@@ -220,7 +220,7 @@ static func where_in(s: String, default_where: String = "") -> String:
 	for k in DIRECTIONS:
 		if has_word(s, k):
 			return DIRECTIONS[k]
-	if has_word(s, "enemy") or s.contains("their camp") or s.contains("their base") or s.contains("their village") or has_word(s, "them") or s.contains(" rook"):
+	if has_word(s, "enemy") or s.contains("their camp") or s.contains("their base") or s.contains("their village") or s.contains("their town") or s.contains("their house") or has_word(s, "them") or s.contains(" rook"):
 		return "enemy"
 	if s.contains(" the mark") or s.contains(" marked") or s.contains(" flag") or s.contains(" over there") or s.contains(" there "):
 		return "marked"
@@ -429,7 +429,9 @@ static func _parse_part(p: String, out: Dictionary):
 		return _step("scout", "", 0, where_in(p, ""), maxi(count, 0))
 	# Fighting.
 	if has_word(p, "attack") or has_word(p, "charge") or has_word(p, "raid") or has_word(p, "assault") or p.contains("kill them") or p.contains("destroy"):
-		return _step("attack", "", 0, where_in(p, "enemy"), count)
+		# "Attack the village" can only mean theirs: you never attack your own home.
+		var target := where_in(p, "enemy")
+		return _step("attack", "", 0, "enemy" if target == "home" else target, count)
 	if has_word(p, "guard") or has_word(p, "defend") or has_word(p, "protect") or p.contains("watch the"):
 		if _unknown_place(p):
 			return null

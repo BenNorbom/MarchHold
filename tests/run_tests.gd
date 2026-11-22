@@ -1346,6 +1346,10 @@ func test_parser() -> void:
 	for text in places:
 		r = P.parse(text)
 		check(r["ok"] and r["steps"][0]["where"] == places[text], "gather place: " + text)
+	r = P.parse("attack the village")
+	check(r.get("ok", false) and r["steps"][0]["where"] == "enemy", "attack the village means their village")
+	r = P.parse("attack the enemy town hall")
+	check(r.get("ok", false) and r["steps"][0]["where"] == "enemy", "attack the enemy town hall")
 	r = P.parse("attack their camp")
 	check(r.get("ok", false) and r["steps"][0]["action"] == "attack" and r["steps"][0]["where"] == "enemy", "attack their camp")
 
@@ -1768,6 +1772,20 @@ func test_settlements() -> void:
 			sides[e["faction"]] = int(e["total"])
 	check(sides.size() == 2 and sides.get(2) == 1 and sides.get(5) == 1, "a mixed group is reported by side (%s)" % str(sides))
 	check(m.known_camps(0).is_empty(), "no rival camp is known before it has been seen")
+	# Attacking an unseen camp marches to the best guess instead of asking for a scout.
+	var raw = m.make_crew(0, m.idle_adults(0, m.home_pos(0)).slice(0, 2))
+	var blind: Dictionary = m.command(0, {"crew": raw.id, "steps": [step("attack", "", 0, "enemy")]})
+	check(blind.get("ok", false), "an attack on an unseen camp is not refused (%s)" % str(blind))
+	check(not m.enemy_ground(0)["sure"], "an unseen camp is only a guess")
+	# Armed troops report what they see to their own side.
+	var armed_u = m.unit(raw.members[0])
+	armed_u.weapon = "wood_spear"
+	var rb = m.home_of(3)
+	armed_u.pos = rb.pos + Vector2(8, 0)
+	m.rebuild_unit_hash()
+	m.update_vision()
+	check(not m.known_camps(0).is_empty(), "a soldier beside a rival camp reveals it")
+	m.fac(0).intel.clear()
 	# An army whose target falls comes home, still together.
 	var camp = m.home_of(3)
 	m.fac(0).intel["b%d" % camp.id] = {"kind": "building", "type": "campfire", "pos": camp.pos, "faction": 3, "t": 0.0}

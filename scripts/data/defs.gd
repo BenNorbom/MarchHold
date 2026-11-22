@@ -207,6 +207,8 @@ const CHILD := {"hp": 20.0, "speed": 3.2}
 const COMMANDER := {"hp": 200.0, "speed": 5.0, "sight": 55.0}
 const MOUNTED := {"hp_bonus": 60.0, "speed": 8.5}
 const SCOUT_SIGHT := 62.0
+## How far an armed person sees. Enough to recognise a camp they are marching on.
+const SOLDIER_SIGHT := 34.0
 
 # --- Work ------------------------------------------------------------------------
 # node: a resource node on the map. building: work happens at a building.

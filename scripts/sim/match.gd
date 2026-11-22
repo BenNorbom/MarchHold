@@ -383,11 +383,9 @@ func first_step_problem(faction: int, s: Dictionary) -> String:
 				why = "there's no site placed for the %s." % Defs.building_name(subj).to_lower()
 		"scout", "guard", "hold", "attack":
 			var where: String = s.get("where", "")
-			var needs_enemy_camp: bool = (where == "enemy" and s["action"] != "scout") or (where == "" and s["action"] == "attack")
+			# An unseen enemy camp is no reason to refuse: attack marches to the best guess.
 			if where == "marked" and not fac(faction).has_mark:
 				why = "mark a spot first (look at the ground and press R)."
-			elif needs_enemy_camp and known_enemy_camp(faction) == null:
-				why = "we don't know where their camp is. Scout first."
 		"gather":
 			var g: Dictionary = Defs.GATHER[subj]
 			if g.has("building") and not g.has("node"):
@@ -1477,12 +1475,17 @@ func brief(faction: int, addressed: String, crew_id: int, individual: bool = fal
 	for p in posts_of(faction):
 		post_rows.append(post_status(p))
 	var known := {}
-	var camp = known_enemy_camp(faction)
-	if camp != null:
-		var d := int((camp as Vector2).distance_to(home_pos(faction)))
-		known["enemy_camp"] = "%d m %s of home" % [d, Terrain.compass_name((camp as Vector2) - home_pos(faction))]
-	else:
-		known["enemy_camp"] = "unknown (send a scout)"
+	var ground := enemy_ground(faction)
+	var camp: Vector2 = ground["pos"]
+	var camp_off := camp - home_pos(faction)
+	known["enemy_camp"] = "%d m %s of home%s" % [int(camp_off.length()), Terrain.compass_name(camp_off), "" if ground["sure"] else " (best guess, not yet seen; attack still works and troops will find it)"]
+	var sighted := []
+	for k in f.intel:
+		var e: Dictionary = f.intel[k]
+		if e.get("kind", "") == "building" and int(e.get("faction", -1)) not in [-1, faction] and t - float(e["t"]) < 120.0:
+			sighted.append("%s %d m %s of home" % [Defs.building_name(e["type"]).to_lower(), int((e["pos"] - home_pos(faction)).length()), Terrain.compass_name(e["pos"] - home_pos(faction))])
+	if not sighted.is_empty():
+		known["enemy_buildings_seen"] = sighted.slice(0, 6)
 	var reports := []
 	for r in f.reports.slice(0, 3):
 		reports.append("%s (%d s ago)" % [r["text"], int(t - float(r["t"]))])

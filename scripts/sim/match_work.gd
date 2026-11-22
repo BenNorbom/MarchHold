@@ -496,7 +496,7 @@ func resolve_where(c: Crew, where: String, default_dist: float = 140.0):
 		"marked":
 			return f.mark if f.has_mark else null
 		"enemy":
-			return known_enemy_camp(c.faction)
+			return enemy_ground(c.faction)["pos"]
 	if where.begins_with(Defs.PLACE):
 		var place: Dictionary = places_of(c.faction).get(where.substr(Defs.PLACE.length()), {})
 		return place.get("pos")
@@ -506,6 +506,7 @@ func resolve_where(c: Crew, where: String, default_dist: float = 140.0):
 
 
 ## Every living rival's camp this faction has seen: [{"faction", "pos", "t"}, ...].
+## Only campfires count; the rival AI relies on that. Use known_enemy_ground for orders.
 func known_camps(faction: int) -> Array:
 	var out := []
 	var f := fac(faction)
@@ -531,6 +532,28 @@ func known_enemy(faction: int) -> Dictionary:
 
 func known_enemy_camp(faction: int):
 	return known_enemy(faction).get("pos")
+
+
+## Where to send the player's troops against a rival: the camp if seen, otherwise the
+## nearest rival building seen, otherwise the best guess. Returns {"pos", "faction", "sure"}.
+func enemy_ground(faction: int) -> Dictionary:
+	var camp := known_enemy(faction)
+	if not camp.is_empty():
+		return {"pos": camp["pos"], "faction": camp["faction"], "sure": true}
+	var home := home_pos(faction)
+	var best := {}
+	for k in fac(faction).intel:
+		var e: Dictionary = fac(faction).intel[k]
+		if e.get("kind", "") != "building":
+			continue
+		var who := int(e.get("faction", -1))
+		if who < 0 or who == faction or not factions[who].alive:
+			continue
+		if best.is_empty() or (e["pos"] as Vector2).distance_squared_to(home) < (best["pos"] as Vector2).distance_squared_to(home):
+			best = {"pos": e["pos"], "faction": who, "sure": true}
+	if not best.is_empty():
+		return best
+	return {"pos": _enemy_guess(faction), "faction": -1, "sure": false}
 
 
 func _begin_step(c: Crew) -> void:
@@ -694,12 +717,17 @@ func _prepare_step(c: Crew, s: Dictionary) -> String:
 			c.state["target"] = p
 		"attack":
 			var where: String = s.get("where", "")
-			var p = resolve_where(c, where if where != "" else "enemy", 380.0 * terrain.size_scale)
-			if p == null:
-				return "we don't know where their camp is. Scout first." if where in ["", "enemy"] else "mark a spot first (look at the ground and press R)."
-			c.state["target"] = p
+			var ground := {}
 			if where in ["", "enemy"]:
-				c.state["foe"] = known_enemy(c.faction).get("faction", -1)
+				ground = enemy_ground(c.faction)
+			var p = ground["pos"] if not ground.is_empty() else resolve_where(c, where, 380.0 * terrain.size_scale)
+			if p == null:
+				return "mark a spot first (look at the ground and press R)."
+			c.state["target"] = p
+			if not ground.is_empty():
+				c.state["foe"] = ground["faction"]
+				if not ground["sure"] and c.faction == 0:
+					post(0, "We haven't seen their camp yet, so we're marching to where it should be. Troops will spot it on the way.")
 		"follow":
 			if unit(f.commander) == null:
 				return "there's no one to follow."
