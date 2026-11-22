@@ -432,12 +432,9 @@ func nearest_building(faction: int, p: Vector2, types: Array, complete_only: boo
 	return best
 
 
-## Nearest place to drop a resource: campfire or stockpile, plus granary / lodge for food.
-func nearest_dropoff(faction: int, p: Vector2, res: String) -> Building:
-	var types := ["campfire", "stockpile"]
-	if res == "food":
-		types += ["granary", "lodge"]
-	return nearest_building(faction, p, types)
+## Nearest place to drop a resource: campfire or stockpile.
+func nearest_dropoff(faction: int, p: Vector2, _res: String) -> Building:
+	return nearest_building(faction, p, ["campfire", "stockpile"])
 
 
 # --- Grid and pathing ----------------------------------------------------------------

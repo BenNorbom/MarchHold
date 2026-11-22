@@ -18,16 +18,14 @@ const Parser = preload("res://scripts/orders/parser.gd")
 const Tutorial = preload("res://scripts/game/tutorial.gd")
 const Intro = preload("res://scripts/game/intro.gd")
 const Hints = preload("res://scripts/game/hints.gd")
+const Hotkeys = preload("res://scripts/game/hotkeys.gd")
 
-const MENU_COLUMNS := 3
 const SLASH_ALIASES := {
 	"build": "b", "craft": "c", "make": "c", "ledger": "l",
 	"people": "p", "crews": "p", "scouts": "s", "reports": "s",
 	"map": "m", "tech": "t", "help": "h", "?": "h", "stop": "cancel",
 }
 const CHAT_HINTS := {
-	"b": ["Build · /b", "Type [b]/b hut[/b] or choose a structure below."],
-	"c": ["Craft · /c", "Choose a recipe or type [b]/c spears 2[/b] for two batches."],
 	"l": ["Ledger · /l", "Press Enter to see supplies, food, housing and crew status."],
 	"p": ["People and crews · /p", "Press Enter to list crews. Type [b]@Name[/b] to address one."],
 	"s": ["Scout reports · /s", "Press Enter to read reports. To send a scout, type [b]send a scout east[/b]."],
@@ -70,7 +68,7 @@ var placed_ids: Array = []
 var menu_kind := ""
 var menu_items: Array = []
 var chat_hint_command := ""
-var chat_hint_items: Array = []
+var picker_quick := false     # opened with B or C: a key acts without Enter
 var map_open := false
 var map_refresh_t := 0.0
 var look_unit := -1
@@ -113,7 +111,8 @@ func start(options: Dictionary) -> void:
 	hud.chat_submitted.connect(_on_chat)
 	hud.chat_changed.connect(_on_chat_changed)
 	hud.chat_closed.connect(_on_chat_closed)
-	hud.chat_choice.connect(_on_chat_choice)
+	hud.picker_page.connect(_on_picker_page)
+	hud.picker_key.connect(_on_picker_key)
 	hud.chat_cycle.connect(_cycle_chat_address)
 	hud.menu_clicked.connect(_menu_select)
 	hud.pause_choice.connect(_on_pause_choice)
@@ -143,7 +142,7 @@ func _welcome() -> void:
 		tutorial.begin()
 		return
 	hud.log_line("You stand at your campfire with six villagers. Commander Rook has made camp somewhere across the valley.", "system")
-	hud.log_line("Look at a villager and press Enter to give orders. Type /b to build, /h for help.", "system")
+	hud.log_line("Look at a villager and press Enter to give orders. Press B to build (/b b h is a hut), /h for help.", "system")
 	if not terra.available():
 		hud.log_line("Simple orders work offline. Choose a Terra connection in Settings for orders in your own words.", "hint")
 
@@ -424,9 +423,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_M:
 				_toggle_map()
 			KEY_B:
-				_menu_build()
+				open_chat("/b ", true)
 			KEY_C:
-				_menu_craft()
+				open_chat("/c ", true)
 			KEY_F1, KEY_H:
 				_menu_help()
 			KEY_E:
@@ -598,7 +597,8 @@ func _on_attack_result(text: String) -> void:
 
 # --- Chat and orders -----------------------------------------------------------------
 
-func open_chat(prefill: String = "") -> void:
+func open_chat(prefill: String = "", quick: bool = false) -> void:
+	picker_quick = quick
 	chat_crew = -1
 	chat_first_member = -1
 	addressee = {}
@@ -663,64 +663,92 @@ func _cycle_chat_address(backward: bool) -> void:
 
 
 func _on_chat_changed(text: String) -> void:
+	# The line edit reports changes deferred, so one can arrive after the chat has closed.
+	if not hud.chat_open:
+		return
 	var draft := text.strip_edges()
 	if not draft.begins_with("/"):
+		picker_quick = false
 		return
-	var token := draft.substr(1).strip_edges().get_slice(" ", 0).to_lower()
+	var words := draft.substr(1).strip_edges().split(" ", false)
+	var token := words[0].to_lower() if not words.is_empty() else ""
 	if token == "" and chat_hint_command != "":
 		return
 	var command: String = SLASH_ALIASES.get(token, "h" if token == "" else token)
+	if Defs.HOTKEYS.has(command):
+		_update_picker(command, words.slice(1))
+		return
+	picker_quick = false
 	if command == chat_hint_command or not CHAT_HINTS.has(command):
 		return
 	chat_hint_command = command
-	chat_hint_items = []
 	var hint: Array = CHAT_HINTS[command]
 	var body: String = hint[1]
-	var choices := ""
-	match command:
-		"b":
-			choices = _chat_hint_grid(m.build_menu(0))
-		"c":
-			var has_armory: bool = m.armory_tier(0) >= 0
-			var recipes: Array = m.craft_menu(0)
-			if not has_armory:
-				body = "Build an armory with [b]/b armory[/b] to unlock these recipes."
-				recipes = recipes.filter(func(e): return Defs.ITEMS[e["id"]]["tier"] == 0)
-			choices = _chat_hint_grid(recipes, has_armory)
-		"t":
-			body += "\n" + m.next_age_text(0)
-	hud.show_chat_hint(hint[0], body, choices)
+	if command == "t":
+		body += "\n" + m.next_age_text(0)
+	hud.show_chat_hint(hint[0], body)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
-func _chat_hint_grid(entries: Array, show_lock_reason: bool = true) -> String:
-	chat_hint_items = _by_shortfall(entries.filter(func(e): return e["locked"] == ""))
-	var cells: Array[String] = []
-	for i in chat_hint_items.size():
-		var e: Dictionary = chat_hint_items[i]
-		cells.append("[url=%d][color=#ffd870]%s[/color]  %s[/url]" % [i, e["name"], _cost_bb(e["cost"], e["missing"])])
-	var locked := entries.filter(func(e): return e["locked"] != "")
-	if show_lock_reason:
-		return _grid_bb(cells, 1) + _locked_bb(locked)
-	for e in locked:
-		cells.append("[color=#b8b0a0]%s[/color]  %s" % [e["name"], _cost_bb(e["cost"], {})])
-	return _grid_bb(cells, 1)
+func _update_picker(command: String, args: PackedStringArray) -> void:
+	chat_hint_command = command
+	# An order recalled with Up waits for Enter like a typed one.
+	var quick: bool = picker_quick and hud.history_i < 0
+	var pick: Dictionary = Hotkeys.read(m, command, Hotkeys.split_keys(args) if quick else args)
+	if quick and pick.get("key", "") != "":
+		if pick["error"] == "":
+			_take_pick(pick)
+			return
+		hud.set_draft("/%s %s" % [command, pick["page"]])
+	var page: String = pick.get("page", "")
+	if page == "":
+		hud.show_picker_pages(command)
+	else:
+		hud.show_picker_entries(command, pick, Hotkeys.page_entries(m, command, page), quick)
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
-func _on_chat_choice(index: int) -> void:
-	if not hud.chat_open or index < 0 or index >= chat_hint_items.size():
+func _on_picker_page(page: String) -> void:
+	if not hud.chat_open or not Defs.HOTKEYS.has(chat_hint_command):
 		return
-	var entry: Dictionary = chat_hint_items[index]
+	var draft := "/%s %s " % [chat_hint_command, page]
+	hud.set_draft(draft)
+	_on_chat_changed(draft)
+
+
+func _on_picker_key(key: String) -> void:
+	if not hud.chat_open or not Defs.HOTKEYS.has(chat_hint_command):
+		return
+	var command := chat_hint_command
+	# The page comes from what's typed, so read it the same way the popup did.
+	var args: PackedStringArray = hud.chat_edit.text.strip_edges().split(" ", false).slice(1)
+	if picker_quick:
+		args = Hotkeys.split_keys(args)
+	var shown: Dictionary = Hotkeys.read(m, command, args)
+	var page: String = shown.get("page", "")
+	if page == "":
+		return
+	var chosen := PackedStringArray([page, key])
+	if shown["key"] == key and shown["batches"] > 1:
+		chosen.append(str(shown["batches"]))
+	var pick: Dictionary = Hotkeys.read(m, command, chosen)
+	if pick["error"] == "":
+		_take_pick(pick)
+	else:
+		hud.show_picker_entries(command, pick, Hotkeys.page_entries(m, command, page), picker_quick)
+
+
+func _take_pick(pick: Dictionary) -> void:
 	hud.close_chat()
 	_on_chat_closed()
-	_choose_order_entry(entry)
+	_choose_order_entry(pick["entry"], pick["batches"])
 
 
 func _on_chat_closed() -> void:
 	if chat_hint_command != "":
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	chat_hint_command = ""
-	chat_hint_items.clear()
+	picker_quick = false
 	cmd.move_enabled = true
 
 
@@ -1050,16 +1078,20 @@ func _slash(text: String) -> void:
 	var c: String = SLASH_ALIASES.get(token, token)
 	var arg := " ".join(parts.slice(1)).strip_edges()
 	match c:
-		"b":
-			if arg != "":
-				_build_by_name(arg)
+		"b", "c":
+			var pick: Dictionary = Hotkeys.read(m, c, parts.slice(1))
+			if pick.is_empty():
+				if c == "b":
+					_build_by_name(arg)
+				else:
+					_craft_by_name(arg)
+			elif pick["key"] == "":
+				# Deferred: the line edit stops editing once this submit returns.
+				_open_picker.call_deferred(c, pick["page"])
+			elif pick["error"] != "":
+				hud.log_line(pick["error"], "warn")
 			else:
-				_menu_build()
-		"c":
-			if arg != "":
-				_craft_by_name(arg)
-			else:
-				_menu_craft()
+				_choose_order_entry(pick["entry"], pick["batches"])
 		"l":
 			_menu_ledger()
 		"p":
@@ -1083,9 +1115,18 @@ func _slash(text: String) -> void:
 			hud.log_line("Unknown command /%s. Type /h for the list." % c, "warn")
 
 
-func _open_menu(kind: String, title: String, body: String, footer: String = "Number keys or click to choose · Esc to close", grid: bool = false) -> void:
+## Reopens the chat for a key, still addressed to the same people.
+func _open_picker(command: String, page: String) -> void:
+	if over_shown:
+		return
+	picker_quick = true
+	cmd.move_enabled = false
+	hud.open_chat(address_label if address_label != "" else "your people", "/%s %s" % [command, page], chat_crew >= 0)
+
+
+func _open_menu(kind: String, title: String, body: String, footer: String = "Number keys or click to choose · Esc to close") -> void:
 	menu_kind = kind
-	hud.show_menu(title, body, footer, grid)
+	hud.show_menu(title, body, footer)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	cmd.look_enabled = false
 	cmd.move_enabled = false
@@ -1099,100 +1140,15 @@ func _close_menu() -> void:
 	cmd.move_enabled = not hud.chat_open
 
 
-func _cost_bb(cost: Dictionary, miss: Dictionary) -> String:
-	if cost.is_empty():
-		return "free"
-	var parts: Array[String] = []
-	for r in cost:
-		var col := "ff8070" if miss.has(r) else "e8dcc2"
-		parts.append("[color=#%s]%d %s[/color]" % [col, int(cost[r]), Defs.RESOURCE_NAMES.get(r, r)])
-	return ", ".join(parts)
-
-
-## Affordable first. sort_custom isn't stable, so ties are broken by catalog order.
-func _by_shortfall(entries: Array) -> Array:
-	var order := range(entries.size())
-	order.sort_custom(func(a, b):
-		var short_a: int = entries[a]["missing"].size()
-		var short_b: int = entries[b]["missing"].size()
-		return short_a < short_b or (short_a == short_b and a < b))
-	return order.map(func(i): return entries[i])
-
-
-func _grid_bb(cells: Array[String], gap: int) -> String:
-	if cells.is_empty():
-		return ""
-	var out := "[table=%d]" % MENU_COLUMNS
-	# Pad the last row, so short lists keep the same column widths.
-	for i in ceili(cells.size() / float(MENU_COLUMNS)) * MENU_COLUMNS:
-		out += "[cell expand=1 shrink=false padding=0,%d,18,%d]%s[/cell]" % [gap, gap, cells[i] if i < cells.size() else " "]
-	return out + "[/table]"
-
-
-## Locked entries share a few reasons, so name each reason once.
-func _locked_bb(locked: Array) -> String:
-	var groups := {}
-	for e in locked:
-		var label: String = e["name"]
-		if e["kind"] == "craft":
-			label = Defs.item_name(e["id"], 2)
-		groups.get_or_add(e["locked"], []).append(label)
-	var out := ""
-	for reason: String in groups:
-		var sentence := reason.left(1).to_upper() + reason.substr(1)
-		out += "\n[font_size=16][color=#c0a878]%s[/color]  [color=#948c7e]%s[/color][/font_size]" % [sentence, ", ".join(groups[reason])]
-	return out
-
-
-func _menu_build() -> void:
-	var all: Array = m.build_menu(0)
-	var ready := _by_shortfall(all.filter(func(e): return e["locked"] == ""))
-	var locked := all.filter(func(e): return e["locked"] != "")
-	menu_items = ready
-	var cells: Array[String] = []
-	for i in ready.size():
-		var e: Dictionary = ready[i]
-		var key := str(i + 1) if i < 9 else ("0" if i == 9 else "·")
-		cells.append("[url=%d][b][color=#ffd870]%s  %s[/color][/b]  %s\n[font_size=15][color=#b8b0a0]%s[/color][/font_size][/url]" % [i + 1, key, e["name"], _cost_bb(e["cost"], e["missing"]), e["desc"]])
-	var who := ("for " + address_label) if not addressee.is_empty() else "(the nearest free villagers will build)"
-	_open_menu("build", "Build  " + who, _grid_bb(cells, 4) + _locked_bb(locked),
-		"Number keys or click to choose · red means you're short · Esc to close", true)
-
-
-func _menu_craft() -> void:
-	var all: Array = m.craft_menu(0)
-	if m.armory_tier(0) < 0:
-		_open_menu("none", "Craft", "You need an [b]armory[/b] first. Open /b to build one (50 wood).", "Esc to close")
-		return
-	var ready := all.filter(func(e): return e["locked"] == "")
-	var locked := all.filter(func(e): return e["locked"] != "")
-	menu_items = ready
-	var cells: Array[String] = []
-	for i in ready.size():
-		var e: Dictionary = ready[i]
-		var key := str(i + 1) if i < 9 else ("0" if i == 9 else "·")
-		cells.append("[url=%d][b][color=#ffd870]%s  %s[/color][/b]\n[font_size=16]%s  [color=#b8b0a0]· %d in armory[/color][/font_size][/url]" % [i + 1, key, e["name"], _cost_bb(e["cost"], e["missing"]), e["stock"]])
-	_open_menu("craft", "Armory (%s)" % ["wood", "bronze", "iron"][maxi(0, m.armory_tier(0))], _grid_bb(cells, 4) + _locked_bb(locked),
-		"Number keys or click: one batch · type '/c arrows 3' for three batches · Esc to close", true)
-
-
 func _menu_select(i: int) -> void:
 	if menu_kind == "people":
 		if i >= 1 and i <= menu_items.size():
 			var c = menu_items[i - 1]
 			_close_menu()
 			_open_crew_chat(c, c.leader)
-		return
-	if not menu_kind in ["build", "craft"]:
-		return
-	if i < 1 or i > menu_items.size():
-		return
-	var e: Dictionary = menu_items[i - 1]
-	_close_menu()
-	_choose_order_entry(e)
 
 
-func _choose_order_entry(e: Dictionary) -> void:
+func _choose_order_entry(e: Dictionary, batches: int = 1) -> void:
 	var req := addressee.duplicate()
 	var who := address_label if not addressee.is_empty() else "your people"
 	match e["kind"]:
@@ -1203,7 +1159,7 @@ func _choose_order_entry(e: Dictionary) -> void:
 		"research":
 			_issue(req, [{"action": "research", "subject": e["id"], "count": 0, "amount": 0, "where": ""}], who)
 		"craft":
-			_issue(req, [{"action": "craft", "subject": e["id"], "count": 0, "amount": int(Defs.ITEMS[e["id"]]["batch"]), "where": ""}], who)
+			_issue(req, [{"action": "craft", "subject": e["id"], "count": 0, "amount": int(Defs.ITEMS[e["id"]]["batch"]) * batches, "where": ""}], who)
 
 
 func _build_by_name(arg: String) -> void:
@@ -1248,9 +1204,9 @@ func _menu_ledger() -> void:
 	var fs: String = Defs.FOOD_STATES[f.food_state]
 	var why := ""
 	if f.food_state < 3:
-		why = "  — well fed needs %d food stored (storage %d)" % [need, f.food_cap]
+		why = "  — well fed needs %d food stored (storage %d%s)" % [need, f.food_cap, ": build stockpiles" if need > f.food_cap else ""]
 	elif f.pop >= f.housing:
-		why = "  — but housing is full: build huts or houses"
+		why = "  — but housing is full: build huts"
 	lines.append("[b]Food[/b]  %d stored · [color=#%s]%s[/color]%s" % [int(f.stock["food"]), "a8d890" if f.food_state == 3 else ("f0c060" if f.food_state >= 1 else "ff6a50"), fs, why])
 	lines.append("")
 	var res: Array[String] = []
@@ -1338,13 +1294,13 @@ func _menu_help() -> void:
 [b]Marking[/b]  R marks the spot you look at; orders can then say 'there' or 'the mark'.
 
 [b]Slash commands[/b] (instant, no Terra needed)
-   /b  build menu (or B) · /b hut builds a hut directly
-   /c  craft menu (or C) · /c spears 2 makes two batches
+   /b  build · b basic or v advanced, then one key: /b b h is a hut (or press B, B, H) · /b hut works too
+   /c  craft weapons the same way: /c b w is spears (or C, B, W) · /c b w 2 or /c spears 2 makes two batches
    /l  ledger (or Tab outside chat) · /p people and crews · /s scout reports
    /m  field map (or M) · /t tech tree · /h this help · /cancel stop a crew
 
 [b]Orders you can type[/b]
-   gather wood · gather 30 stone then build a house · pick berries · work the farms · hunt
+   gather wood · gather 30 wood then build a hut · pick berries · work the farms · hunt
    build a hut · build a palisade · make 32 arrows · arm 6 with spears · to arms! · fall back
    send two scouts east · scout their camp · attack their camp · guard the mark · follow me · hold
    tame 3 horses · mount up · smelt bronze · upgrade the armory · research gunpowder · man the cannon

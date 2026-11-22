@@ -5,7 +5,7 @@ const Defs = preload("res://scripts/data/defs.gd")
 
 const AGE_TIPS := [
 	"",
-	"Stone age: houses (+10 housing), granaries, stone walls, towers, stables and mines are open. Try /b.",
+	"Stone age: stone walls, towers, stables and mines are open. Try /b v for advanced structures.",
 	"Bronze age: upgrade the armory to bronze for swords, pikes, lances and armor. Then upgrade the smelter to an iron furnace.",
 	"Iron age: upgrade the armory to iron, and build a university to research gunpowder.",
 	"Gunpowder: the iron armory can now cast cannons and shot. 'man the cannon' then 'attack their camp'.",
@@ -53,13 +53,15 @@ func tick(dt: float) -> void:
 	if t > 25.0:
 		_hint("talk", "Look at a villager and press Enter to give orders. With nobody addressed, idle people take the job.")
 	if float(f.stock["wood"]) >= 20.0 and not m.has_building(0, "hut"):
-		_hint("hut", "You have 20 wood: build a hut with /b to make room for more people.")
+		_hint("hut", "You have 20 wood: build a hut with /b b h to make room for more people.")
 	if f.pop >= f.housing and f.food_state == 3:
-		_hint("housing", "Housing is full, so no more births. Build huts (houses in the Stone age).")
+		_hint("housing", "Housing is full, so no more births. Build huts (/b b h).")
 	if f.food_state <= 1 and t > 60.0:
-		_hint("food", "Food is short. Say 'pick berries', build a farm (/b), or a hunter's lodge.")
+		_hint("food", "Food is short. Say 'pick berries', build a farm (/b b f), or say 'hunt'.")
+	if f.pop * Defs.WELL_FED_STOCK > f.food_cap:
+		_hint("storage", "Your stores are too small to keep this many people well fed. Each stockpile (/b b s) holds 50 more food.")
 	if m.has_building(0, "armory"):
-		_hint("armory", "The armory is up. /c makes gear; 'arm 5 with spears' equips people. Stand by it and press E to arm yourself.")
+		_hint("armory", "The armory is up. /c makes gear (/c b w for spears); 'arm 5 with spears' equips people. Stand by it and press E to arm yourself.")
 	if t > 170.0 and f.reports.is_empty():
 		_hint("scout", "You don't know where Rook is. Say 'send a scout' — the report comes when the scout returns.")
 	if t > 300.0 and f.age == 0:

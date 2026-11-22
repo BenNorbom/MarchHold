@@ -62,7 +62,7 @@ static func _whole_number(value, maximum: int) -> bool:
 
 static func action_guide() -> String:
 	var lines: Array[String] = []
-	lines.append("gather: subject wood, stone, berries, hunt (needs a hunter's lodge), farm (needs a farm), bronze_ore/coal/iron_ore (need a mine on that deposit). amount = units to deliver, 0 = keep going (last step only).")
+	lines.append("gather: subject wood, stone, berries, hunt (deer near a stockpile or the campfire), farm (needs a farm), bronze_ore/coal/iron_ore (need a mine on that deposit). amount = units to deliver, 0 = keep going (last step only).")
 	lines.append("build: subject is a structure id; the player places each site. One step builds one structure, or one whole wall line for palisade/stone_wall.")
 	lines.append("upgrade: subject armory or smelter (armory wood->bronze->iron, smelter->iron furnace).")
 	lines.append("craft: subject an item id; amount = how many items (0 = one batch). Siege items (cannon, ram) are made one per batch.")

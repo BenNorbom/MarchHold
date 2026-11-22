@@ -6,6 +6,7 @@ extends RefCounted
 const Defs = preload("res://scripts/data/defs.gd")
 const Terrain = preload("res://scripts/world/terrain.gd")
 
+const FOOD_HEADROOM := 75.0   # storage kept beyond what "well fed" needs
 const STRATEGIES := ["rush", "boom", "turtle", "cavalry", "cannons"]
 
 var m                       # the Match
@@ -134,14 +135,12 @@ func _economy(f) -> void:
 		stone_need = int(ceil(adults * (0.18 if strategy == "turtle" else 0.12)))
 	elif _count("quarry", true) == 0 and m.t > 150.0:
 		stone_need = 1
-	# Food: berries first, then farms, then hunting.
+	# Food: berries first, then farms.
 	var farms := _count("farm", false)
 	var food_src := "farm" if farms > 0 else "berries"
-	if food_src == "berries" and m.nearest_node("berry", _home(), 150.0) == null:
-		food_src = "hunt" if m.has_building(fid, "lodge") else "berries"
 	_keep_gathering("food", food_src, mini(food_need, farms * 2) if food_src == "farm" else food_need)
 	if food_src == "farm" and food_need > farms * 2:
-		var extra := "berries" if m.nearest_node("berry", _home(), 160.0) != null else ("hunt" if m.has_building(fid, "lodge") else "")
+		var extra := "berries" if m.nearest_node("berry", _home(), 160.0) != null else ""
 		if extra != "":
 			_keep_gathering("food2", extra, food_need - farms * 2)
 	_keep_gathering("wood", "wood", wood_need)
@@ -191,12 +190,17 @@ func _keep_gathering(role: String, subject: String, want: int) -> void:
 # --- Construction --------------------------------------------------------------
 
 func _construction(f) -> void:
-	var need_house: bool = f.housing < 200 and f.pop < max_pop and f.housing - f.pop <= maxi(3, f.pop / 6) and not _site_pending(["hut", "house"])
-	if need_house:
-		var hrole := "build" if not _busy("build") else ("build2" if not _busy("build2") and f.adults >= 10 else "")
-		if hrole != "":
-			_place_and_build(f, hrole, "house" if f.age >= 1 and float(f.stock.get("stone", 0)) >= 20.0 else "hut")
-			return
+	var need_hut: bool = f.housing < 200 and f.pop < max_pop and f.housing - f.pop <= maxi(3, f.pop / 6)
+	if need_hut:
+		var raising := _count("hut") - _count("hut", false)
+		if raising == 0:
+			var hrole := "build" if not _busy("build") else ("build2" if not _busy("build2") and f.adults >= 10 else "")
+			if hrole != "":
+				_place_and_build(f, hrole, "hut")
+				return
+		elif f.age >= 1 and raising < 2 and not _busy("huts"):
+			# A hut houses few. A second one gets its own builders, so other construction carries on.
+			_place_and_build(f, "huts", "hut")
 	if _busy("build") and (_busy("build2") or f.adults < 16):
 		return
 	var want := _next_building(f)
@@ -255,8 +259,8 @@ func _next_building(f) -> String:
 		return ""
 	if _count("stockpile") == 0 and t > 240.0:
 		return "stockpile"
-	if pop > 35 and _count("granary") == 0:
-		return "granary"
+	if pop > 35 and f.food_cap < pop * Defs.WELL_FED_STOCK + FOOD_HEADROOM and not _site_pending(["stockpile"]):
+		return "stockpile"
 	if strategy == "cavalry" and _count("stable") == 0:
 		return "stable"
 	for dep in ["bronze_ore", "coal"]:
@@ -360,6 +364,8 @@ func _find_site(type: String):
 	var r0 := 12.0
 	var r1 := 42.0
 	match type:
+		"hut":
+			r1 += maxi(0, _count("hut") - 8) * 1.5   # room for all the huts it takes to house 200
 		"farm":
 			r0 = 26.0
 			r1 = 70.0

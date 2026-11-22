@@ -33,7 +33,7 @@ Start with **The Founding** (tutorial) from the main menu. Terra, your steward, 
 | R | Mark the spot you're looking at (orders can say "there" or "the mark") |
 | Tab | Cycle between the whole crew and individual members in chat. Open the ledger outside chat. |
 | M | Field map (only what you and your scouts have seen) |
-| B / C | Build menu / craft menu |
+| B / C | Build / craft. Then B (basic) or V (advanced), then one key: B, B, H is a hut |
 | F1 or H | Help |
 | Esc | Close menus, cancel placement, clear the selection, pause |
 | F11 / F12 | Fullscreen / screenshot |
@@ -50,8 +50,8 @@ Slash commands work instantly and never need Terra:
 
 | Command | Opens |
 |---|---|
-| `/b` | Build menu: everything you can build now, with costs (`/b hut` builds directly) |
-| `/c` | Craft menu: what the armory can make (`/c spears 2` makes two batches) |
+| `/b` | Build popup with pictures and keys. `b` is basic and `v` advanced, then one key: `/b b h` is a hut (`/b hut` also works) |
+| `/c` | Weapons popup, keyed the same way: `/c b w` is wooden spears, `/c b w 2` two batches (`/c spears 2` also works) |
 | `/l` | Ledger: stores, people, food, housing, crews |
 | `/p` | People and crews |
 | `/s` | Scout reports, newest first |
@@ -62,12 +62,23 @@ Slash commands work instantly and never need Terra:
 Orders the game understands without Terra, for example:
 
 ```
-gather wood · gather 30 stone then build a house · pick berries · work the farms · hunt
+gather wood · gather 30 wood then build a hut · pick berries · work the farms · hunt
 build a hut · build a palisade · make 32 arrows · arm 6 with spears · to arms! · fall back
 send two scouts east · scout their camp · attack their camp · guard the mark · follow me · hold
 tame 3 horses · mount up · smelt bronze · upgrade the armory · research gunpowder · man the cannon
 promote · dismiss · status · cancel
 ```
+
+### Hotkeys
+
+A typed hotkey runs when you press Enter. After pressing B or C, or entering a bare `/b` or `/c`, the key acts immediately. You can also click a picture.
+
+| | Keys |
+|---|---|
+| `/b b` Basic structures | **H** hut · **F** farm · **S** stockpile · **A** armory · **P** palisade · **G** palisade gate · **W** watch post · **Q** quarry |
+| `/b v` Advanced structures | **W** stone wall · **G** stone gate · **T** tower · **H** stable · **M** mine · **S** smelter · **U** university · **A** upgrade armory · **F** iron furnace · **R** gunpowder |
+| `/c b` Basic weapons | **C** club · **W** wooden spear · **D** wooden shield · **B** bow · **A** arrows · **R** ram · bronze: **E** spear, **S** sword, **H** shield, **M** armor, **P** pike, **L** lance |
+| `/c v` Advanced weapons | iron: **E** spear, **S** sword, **H** shield, **M** armor, **P** pike, **L** lance · **C** cannon · **T** cannon shot |
 
 Walls are placed post to post: choose a palisade or stone wall, click each post, press Enter to finish.
 
@@ -81,7 +92,7 @@ MarchHold keeps account credentials encrypted on your PC. When you submit a free
 
 ## How the game works
 
-- **Growth.** Villagers are born only when the village is *well fed* (3 food stored per person) and there's free housing. The campfire houses 8, each hut 5 and each house 10, up to 200 people.
+- **Growth.** Villagers are born only when the village is *well fed* (3 food stored per person) and there's free housing. The campfire houses 8 and each hut 5, up to 200 people. The campfire stores 150 food and each stockpile 50 more.
 - **Ages.** Wood (start) → Stone (build a quarry by a rock outcrop) → Bronze (smelt bronze from bronze ore and coal) → Iron (upgrade the smelter to an iron furnace) → Gunpowder (university research). The armory upgrades in place from wood to bronze to iron.
 - **Scouting.** You only know what you've seen. Scouts report when they return, and if they die, what they saw dies with them. Watch posts and towers ring the alarm when enemies appear.
 - **Combat.** Pikes beat cavalry. Cavalry runs down archers. Shields and armor blunt arrows. Sword and shield beat pikes up close. Cannons smash walls but scatter in the open, reload slowly and need a crew of three. Horses pull cannons faster.
@@ -95,6 +106,9 @@ Requirements: [Godot 4.7.2](https://godotengine.org/download) with the Windows e
 ```powershell
 # Run the headless tests (simulation, orders parser, schema, AI duel)
 godot --headless --path . -s res://tests/run_tests.gd
+
+# Redraw the popup's pictures after changing a model
+godot --headless --path . -s res://tools/make_icons.gd
 
 # Play from source
 godot --path .
@@ -114,7 +128,7 @@ powershell -ExecutionPolicy Bypass -File tools\build.ps1
 | `scripts/ai/rival.gd` | Commander Rook, playing through the same command interface as the player |
 | `scripts/orders/` | Local order parser, Terra schema and the OpenAI client |
 | `scripts/view/` | Rendering: terrain, forests, buildings, people (GPU-animated), the commander |
-| `scripts/ui/`, `scripts/game/` | HUD, menus, field map, intro, tutorial, hints |
+| `scripts/ui/`, `scripts/game/` | HUD, menus, hotkeys, field map, intro, tutorial, hints |
 | `shaders/` | Terrain, foliage, grass, people, rocks, sky |
 | `tests/run_tests.gd` | Headless test suite, including AI-vs-AI duels |
 

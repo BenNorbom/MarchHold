@@ -18,10 +18,9 @@ const BUILD_WORDS := [
 	["stone wall", "stone_wall"], ["stone gate", "stone_gate"], ["palisade gate", "palisade_gate"],
 	["wooden wall", "palisade"], ["wood wall", "palisade"], ["palisade", "palisade"], ["wall", "palisade"],
 	["gate", "palisade_gate"], ["watch post", "watch_post"], ["watchpost", "watch_post"], ["lookout", "watch_post"],
-	["hunter's lodge", "lodge"], ["hunters lodge", "lodge"], ["hunting lodge", "lodge"], ["lodge", "lodge"],
 	["stockpile", "stockpile"], ["storehouse", "stockpile"], ["farm", "farm"], ["field", "farm"],
-	["armory", "armory"], ["armoury", "armory"], ["quarry", "quarry"], ["tower", "tower"], ["house", "house"],
-	["hut", "hut"], ["granary", "granary"], ["stable", "stable"], ["mine", "mine"], ["smelter", "smelter"],
+	["armory", "armory"], ["armoury", "armory"], ["quarry", "quarry"], ["tower", "tower"],
+	["hut", "hut"], ["stable", "stable"], ["mine", "mine"], ["smelter", "smelter"],
 	["furnace", "smelter"], ["university", "university"], ["college", "university"]]
 
 const ITEM_WORDS := [

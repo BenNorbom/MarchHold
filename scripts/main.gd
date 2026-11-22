@@ -161,9 +161,9 @@ func _demo_buildings() -> void:
 	var home: Vector2 = m.home_pos(0)
 	var f = m.fac(0)
 	f.age = 4
-	var plan := [["hut", 14, 0.4], ["hut", 16, 1.2], ["house", 22, 2.0], ["house", 24, 2.7], ["armory", 20, 3.5], ["granary", 26, 4.3],
+	var plan := [["hut", 14, 0.4], ["hut", 16, 1.2], ["hut", 22, 2.0], ["hut", 24, 2.7], ["armory", 20, 3.5],
 		["stable", 32, 5.0], ["smelter", 30, 5.8], ["watch_post", 36, 0.9], ["tower", 40, 2.4], ["university", 44, 3.1], ["farm", 34, 4.0],
-		["stockpile", 18, 5.4], ["lodge", 28, 6.1]]
+		["stockpile", 18, 5.4]]
 	for p in plan:
 		var pos: Vector2 = home + Vector2.from_angle(p[2]) * float(p[1])
 		var r: Dictionary = m.place_site(0, p[0], pos, p[2] + PI)
@@ -205,9 +205,7 @@ func _smoke() -> void:
 		m.tick(0.1)
 		g.ai.update(0.1)
 	g._process(0.016)
-	say.call("/b")
-	print("menu open: ", g.hud.menu_open, " items: ", g.menu_items.size())
-	g._menu_select(1)
+	say.call("/b b h")
 	print("placing: ", g.placing, " type: ", g.place_type)
 	for k in 30:
 		var p: Vector2 = home + Vector2.from_angle(k * 0.7) * (16.0 + k)
@@ -232,6 +230,10 @@ func _smoke() -> void:
 	say.call("what is the meaning of the weather")
 	for cmdtxt in ["/l", "/p", "/s", "/t", "/h", "/c", "/b hut", "/c arrows 2"]:
 		say.call(cmdtxt)
+		await get_tree().process_frame   # /b and /c reopen the chat as a picker
+		if g.hud.chat_open:
+			g.hud.close_chat()
+			g._on_chat_closed()
 		if g.hud.menu_open:
 			g._close_menu()
 		if g.placing:
@@ -284,7 +286,7 @@ func _take_shot() -> void:
 				game.m.fac(0).knowledge.fill(game.m.t - 120.0)
 				game._toggle_map()
 			"build":
-				game._menu_build()
+				game.open_chat("/b b", true)
 			"ledger":
 				game._menu_ledger()
 			"chat":
