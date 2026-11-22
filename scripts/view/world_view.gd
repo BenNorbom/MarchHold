@@ -5,10 +5,13 @@ extends Node3D
 const Defs = preload("res://scripts/data/defs.gd")
 const Terrain = preload("res://scripts/world/terrain.gd")
 const PeopleView = preload("res://scripts/view/people_view.gd")
+const UiTheme = preload("res://scripts/ui/ui_theme.gd")
 
 const CHUNK := 32              # terrain cells per chunk side (64 m)
 const TREE_CHUNK := 256.0
 const GRASS_TILE := 16.0
+const SPLAT_TEXEL := 2.0       # metres per splat map pixel
+const LANDMARK_RANGE := 40.0   # names show from a little beyond quarry and mine placement reach
 
 var m                           # Match
 var mats
@@ -21,6 +24,7 @@ var splat_tex: ImageTexture
 var terrain_mat: ShaderMaterial
 var people: PeopleView
 var node_slots := {}            # resource node id -> [[MultiMesh, index], ...]
+var bush_slots := {}            # the same for bush leaves, which outlast their berries
 var bld_nodes := {}             # building id -> {"root", "mesh", "body", "tier", "len", "h", "fire"}
 var grass_tiles := {}           # Vector2i -> MultiMeshInstance3D
 var grass_radius := 32.0
@@ -39,6 +43,8 @@ var cam_pos := Vector3.ZERO
 var fires: Array = []
 var selected_ids: Array[int] = []
 var select_mm: MultiMesh
+var landmark_labels: Node3D
+var landmark_font: Font
 
 
 func setup(match_ref, materials, mesh_lib, q: int) -> void:
@@ -51,7 +57,12 @@ func setup(match_ref, materials, mesh_lib, q: int) -> void:
 	grass_radius = [20.0, 30.0, 38.0][q]
 	_environment()
 	_terrain()
+	landmark_labels = Node3D.new()
+	add_child(landmark_labels)
+	landmark_font = UiTheme.font("res://assets/fonts/EBGaramond.ttf", 700)
 	_nature()
+	_show_landmark_labels()
+	Settings.changed.connect(_show_landmark_labels)
 	people = PeopleView.new()
 	add_child(people)
 	people.setup(m, mats, meshes, q)
@@ -88,7 +99,7 @@ func _selection_rings() -> void:
 	var mi := MultiMeshInstance3D.new()
 	mi.multimesh = select_mm
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	mi.custom_aabb = AABB(Vector3(-60, -60, -60), Vector3(Defs.MAP_SIZE + 120, 320, Defs.MAP_SIZE + 120))
+	mi.custom_aabb = AABB(Vector3(-60, -60, -60), Vector3(m.map_size + 120, 320, m.map_size + 120))
 	add_child(mi)
 
 
@@ -180,8 +191,9 @@ func _terrain() -> void:
 	var tr: Terrain = m.terrain
 	_build_splat()
 	terrain_mat = mats.terrain_material(splat_tex)
+	terrain_mat.set_shader_parameter("map_size", tr.size)
 	# Near: 64 m chunks at full detail. Far: 128 m chunks at half detail (fewer draw calls).
-	var n := (Terrain.RES - 1) / CHUNK
+	var n := (tr.height_res - 1) / CHUNK
 	for cj in n:
 		for ci in n:
 			var mi := MeshInstance3D.new()
@@ -190,7 +202,7 @@ func _terrain() -> void:
 			mi.visibility_range_end = 280.0
 			mi.visibility_range_end_margin = 10.0
 			add_child(mi)
-	var n2 := (Terrain.RES - 1) / (CHUNK * 2)
+	var n2 := (tr.height_res - 1) / (CHUNK * 2)
 	for cj in n2:
 		for ci in n2:
 			var far := MeshInstance3D.new()
@@ -203,12 +215,12 @@ func _terrain() -> void:
 	var body := StaticBody3D.new()
 	var shape := CollisionShape3D.new()
 	var hm := HeightMapShape3D.new()
-	hm.map_width = Terrain.RES
-	hm.map_depth = Terrain.RES
+	hm.map_width = tr.height_res
+	hm.map_depth = tr.height_res
 	hm.map_data = tr.heights
 	shape.shape = hm
 	shape.scale = Vector3(Terrain.STEP, 1.0, Terrain.STEP)
-	shape.position = Vector3(Defs.MAP_SIZE * 0.5, 0.0, Defs.MAP_SIZE * 0.5)
+	shape.position = Vector3(m.map_size * 0.5, 0.0, m.map_size * 0.5)
 	body.add_child(shape)
 	add_child(body)
 
@@ -229,7 +241,7 @@ func _chunk_mesh(tr: Terrain, ci: int, cj: int, step: int, chunk: int) -> ArrayM
 			var gj := j0 + j * step
 			var x := gi * Terrain.STEP
 			var z := gj * Terrain.STEP
-			verts.append(Vector3(x, tr.heights[gj * Terrain.RES + gi] - (0.06 if step > 1 else 0.0), z))
+			verts.append(Vector3(x, tr.heights[gj * tr.height_res + gi] - (0.06 if step > 1 else 0.0), z))
 			norms.append(tr.normal_at(x, z))
 			uvs.append(Vector2(x, z) * 0.25)
 	var arrays := []
@@ -277,7 +289,7 @@ func _chunk_mesh(tr: Terrain, ci: int, cj: int, step: int, chunk: int) -> ArrayM
 
 func _build_splat() -> void:
 	var tr: Terrain = m.terrain
-	var s := 512
+	var s := int(m.map_size / SPLAT_TEXEL)
 	splat_img = Image.create(s, s, false, Image.FORMAT_RGBA8)
 	var noise := FastNoiseLite.new()
 	noise.seed = tr.seed_value + 5
@@ -285,7 +297,7 @@ func _build_splat() -> void:
 	var dry := FastNoiseLite.new()
 	dry.seed = tr.seed_value + 9
 	dry.frequency = 0.006
-	var k := Defs.MAP_SIZE / s
+	var k: float = m.map_size / s
 	for y in s:
 		for x in s:
 			var px := (x + 0.5) * k
@@ -311,7 +323,7 @@ func _build_splat() -> void:
 ## Paint a channel of the splat map around p (0 rock, 1 dirt, 2 forest, 3 dry).
 func _paint(p: Vector2, r: float, channel: int, amount: float) -> void:
 	var s := splat_img.get_width()
-	var k := Defs.MAP_SIZE / s
+	var k: float = m.map_size / s
 	var c := Vector2i(int(p.x / k), int(p.y / k))
 	var rr := int(ceil(r / k))
 	for y in range(maxi(0, c.y - rr), mini(s, c.y + rr + 1)):
@@ -357,10 +369,16 @@ func _nature() -> void:
 				key = "dep:%s" % n.sub
 				xf = Transform3D(Basis(Vector3.UP, n.rot), p - Vector3(0, 0.1, 0))
 			"berry":
-				key = "bush"
+				key = "bush:%d:%d" % [int(n.pos.x / TREE_CHUNK), int(n.pos.y / TREE_CHUNK)]
 				xf = Transform3D(Basis(Vector3.UP, n.rot).scaled(Vector3.ONE * n.scale), p - Vector3(0, 0.05, 0))
 		if key == "":
 			continue
+		var title: String = n.landmark_name()
+		if title != "":
+			var mesh: Mesh = meshes.rock_mesh(n.sub, n.id % 3 if n.kind == "rock" else 0)
+			# At least 4 m up, to clear a mine built on the deposit.
+			var height := maxf(mesh.get_aabb().end.y * xf.basis.get_scale().y + 0.8, 4.0)
+			_add_landmark_label(title, xf.origin + Vector3(0, height, 0))
 		if not groups.has(key):
 			groups[key] = []
 		groups[key].append([n, xf])
@@ -370,9 +388,12 @@ func _nature() -> void:
 		match parts[0]:
 			"tree":
 				for lod in 2:
-					var mm := _mm(meshes.tree(parts[1], int(parts[2]), lod), list, lod == 0)
+					var mm := _mm(meshes.tree(parts[1], int(parts[2]), lod), list, node_slots)
 					var mi := MultiMeshInstance3D.new()
 					mi.multimesh = mm
+					# LOD is measured to the middle of the bounds. Fix them now, or
+					# hide_node moving a felled tree away would drag that middle along.
+					mi.custom_aabb = mm.get_aabb()
 					if lod == 0:
 						mi.visibility_range_end = near_lod
 						mi.visibility_range_end_margin = 12.0
@@ -384,46 +405,69 @@ func _nature() -> void:
 					add_child(mi)
 			"rock":
 				var mi2 := MultiMeshInstance3D.new()
-				mi2.multimesh = _mm(meshes.rock_mesh(parts[1], int(parts[2])), list, true)
-				mi2.visibility_range_end = 700.0 if parts[1] == "outcrop" else 260.0
+				mi2.multimesh = _mm(meshes.rock_mesh(parts[1], int(parts[2])), list, node_slots)
+				# No visibility range, as for bushes: each group spans the whole map.
 				add_child(mi2)
 			"dep":
 				var mi3 := MultiMeshInstance3D.new()
-				mi3.multimesh = _mm(meshes.rock_mesh(parts[1], 0), list, true)
+				mi3.multimesh = _mm(meshes.rock_mesh(parts[1], 0), list, node_slots)
 				add_child(mi3)
 			"bush":
+				# No visibility range: it's measured to the middle of the whole
+				# MultiMesh, not to each bush. The chunks are frustum culled.
 				var mi4 := MultiMeshInstance3D.new()
-				mi4.multimesh = _mm(meshes.bush(false), list, false)
-				mi4.visibility_range_end = 220.0
+				mi4.multimesh = _mm(meshes.bush(), list, bush_slots)
 				add_child(mi4)
 				var mi5 := MultiMeshInstance3D.new()
-				mi5.multimesh = _mm(meshes.bush(true), list, true)
-				mi5.visibility_range_end = 160.0
+				mi5.multimesh = _mm(meshes.bush_berries(), list, node_slots)
 				mi5.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 				add_child(mi5)
 	grass_mat = mats.get_mat("grass")
 
 
-func _mm(mesh: Mesh, list: Array, record: bool) -> MultiMesh:
+func _add_landmark_label(title: String, at: Vector3) -> void:
+	var label := Label3D.new()
+	label.text = title
+	label.font = landmark_font
+	label.font_size = 32
+	label.outline_size = 10
+	label.modulate = UiTheme.INK
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	# The same size on screen at any distance, and readable through leaves.
+	label.fixed_size = true
+	label.pixel_size = 0.0017
+	label.no_depth_test = true
+	label.render_priority = 10
+	label.outline_render_priority = 9
+	label.visibility_range_end = LANDMARK_RANGE
+	label.position = at
+	landmark_labels.add_child(label)
+
+
+func _show_landmark_labels() -> void:
+	landmark_labels.visible = bool(Settings.get_val("resource_labels", true))
+
+
+func _mm(mesh: Mesh, list: Array, slots = null) -> MultiMesh:
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.mesh = mesh
 	mm.instance_count = list.size()
 	for i in list.size():
 		mm.set_instance_transform(i, list[i][1])
-		if record:
+		if slots != null:
 			var id: int = list[i][0].id
-			if not node_slots.has(id):
-				node_slots[id] = []
-			node_slots[id].append([mm, i])
+			if not slots.has(id):
+				slots[id] = []
+			slots[id].append([mm, i])
 	return mm
 
 
-func hide_node(id: int) -> void:
-	for slot in node_slots.get(id, []):
+func hide_node(id: int, slots: Dictionary = node_slots) -> void:
+	for slot in slots.get(id, []):
 		var mm: MultiMesh = slot[0]
 		mm.set_instance_transform(slot[1], Transform3D(Basis().scaled(Vector3.ONE * 0.0001), Vector3(0, -50, 0)))
-	node_slots.erase(id)
+	slots.erase(id)
 
 
 # --- Grass ----------------------------------------------------------------------------
@@ -435,7 +479,7 @@ func _update_grass(cam: Vector3) -> void:
 	for dz in range(-r, r + 1):
 		for dx in range(-r, r + 1):
 			var k := Vector2i(c.x + dx, c.y + dz)
-			if k.x < 0 or k.y < 0 or k.x * GRASS_TILE >= Defs.MAP_SIZE or k.y * GRASS_TILE >= Defs.MAP_SIZE:
+			if k.x < 0 or k.y < 0 or k.x * GRASS_TILE >= m.map_size or k.y * GRASS_TILE >= m.map_size:
 				continue
 			var center := Vector2((k.x + 0.5) * GRASS_TILE, (k.y + 0.5) * GRASS_TILE)
 			if center.distance_to(Vector2(cam.x, cam.z)) > grass_radius + GRASS_TILE:
@@ -459,7 +503,7 @@ func _grass_tile(k: Vector2i) -> MultiMeshInstance3D:
 	var xfs: Array = []
 	var density: int = [320, 720, 1000][quality]
 	var s := splat_img.get_width()
-	var kk := Defs.MAP_SIZE / s
+	var kk: float = m.map_size / s
 	for i in density:
 		var p := Vector2((k.x + r.randf()) * GRASS_TILE, (k.y + r.randf()) * GRASS_TILE)
 		var sp := splat_img.get_pixel(clampi(int(p.x / kk), 0, s - 1), clampi(int(p.y / kk), 0, s - 1))
@@ -822,6 +866,8 @@ func handle_events(events: Array) -> void:
 				_remove_building(ev["id"])
 			"node_gone":
 				hide_node(ev["id"])
+				if ev.get("cleared", false):
+					hide_node(ev["id"], bush_slots)
 			"node_new":
 				var n = m.terrain.nodes[ev["id"]]
 				if n.kind == "carcass":
@@ -910,7 +956,7 @@ func pick_unit(from: Vector3, dir: Vector3, max_d: float = 40.0, faction: int = 
 func map_image(size: int = 512) -> Image:
 	var tr: Terrain = m.terrain
 	var img := Image.create(size, size, false, Image.FORMAT_RGB8)
-	var k := Defs.MAP_SIZE / size
+	var k: float = m.map_size / size
 	var light := Vector3(-0.6, 0.7, -0.4).normalized()
 	for y in size:
 		for x in size:

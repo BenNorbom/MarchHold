@@ -244,7 +244,7 @@ func resolve_where(c: Crew, where: String, default_dist: float = 140.0):
 			return known_enemy_camp(c.faction)
 	var v := Terrain.direction_vector(where)
 	var p := home_pos(c.faction) + v * default_dist
-	return p.clamp(Vector2(20, 20), Vector2(Defs.MAP_SIZE - 20, Defs.MAP_SIZE - 20))
+	return p.clamp(Vector2(20, 20), Vector2(map_size - 20, map_size - 20))
 
 
 func known_enemy_camp(faction: int):
@@ -377,7 +377,7 @@ func _prepare_step(c: Crew, s: Dictionary) -> String:
 		"tame":
 			if buildings_of(c.faction, "stable").is_empty():
 				return "we need a stable to keep horses in."
-			var p = resolve_where(c, s.get("where", ""), 200.0)
+			var p = resolve_where(c, s.get("where", ""), 200.0 * terrain.size_scale)
 			c.state["origin"] = p if p != null else home_pos(c.faction)
 		"scout":
 			var where: String = s.get("where", "")
@@ -389,7 +389,7 @@ func _prepare_step(c: Crew, s: Dictionary) -> String:
 			elif where in ["", "here"]:
 				p = _enemy_guess(c.faction)
 			else:
-				p = resolve_where(c, where, 380.0)
+				p = resolve_where(c, where, 380.0 * terrain.size_scale)
 			if p == null:
 				return "mark a spot first (look at the ground and press R)."
 			c.state["target"] = p
@@ -401,7 +401,7 @@ func _prepare_step(c: Crew, s: Dictionary) -> String:
 			c.state["target"] = p
 		"attack":
 			var where: String = s.get("where", "")
-			var p = resolve_where(c, where if where != "" else "enemy", 380.0)
+			var p = resolve_where(c, where if where != "" else "enemy", 380.0 * terrain.size_scale)
 			if p == null:
 				return "we don't know where their camp is. Scout first." if where in ["", "enemy"] else "mark a spot first (look at the ground and press R)."
 			c.state["target"] = p
@@ -500,8 +500,8 @@ func _enemy_guess(faction: int):
 		return e
 	# The camps face each other across the middle of the map.
 	var home := home_pos(faction)
-	var c := Vector2(Defs.MAP_SIZE, Defs.MAP_SIZE) * 0.5
-	return (c * 2.0 - home).clamp(Vector2(40, 40), Vector2(Defs.MAP_SIZE - 40, Defs.MAP_SIZE - 40))
+	var c := Vector2(map_size, map_size) * 0.5
+	return (c * 2.0 - home).clamp(Vector2(40, 40), Vector2(map_size - 40, map_size - 40))
 
 
 func _advance(c: Crew) -> void:
@@ -866,6 +866,8 @@ func _do_gather(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
 				u.phase = "find"
 				return
 			var reach: float = 1.6 + n.scale * (1.2 if n.kind == "rock" and n.sub == "outcrop" else 0.6)
+			if n.kind == "berry":
+				reach = 0.2 + n.scale * 1.4  # right up against the leaves
 			if move_to(u, n.pos, dt, reach):
 				u.phase = "work"
 		"work":
@@ -1061,14 +1063,15 @@ func _start_construction(b: Building) -> void:
 	var az := Vector2(-ax.y, ax.x)
 	var wood := 0.0
 	for n in _nodes_within(b.pos, r + 2.0):
-		if n.amount == 0.0 or n.kind == "deposit" or (n.kind == "rock" and n.sub == "outcrop"):
+		# Picked-clean bushes still have leaves to clear away.
+		if (n.amount == 0.0 and n.kind != "berry") or n.kind == "deposit" or (n.kind == "rock" and n.sub == "outcrop"):
 			continue
 		var d: Vector2 = n.pos - b.pos
 		if absf(d.dot(ax)) <= b.size.x * 0.5 + 0.6 and absf(d.dot(az)) <= b.size.y * 0.5 + 0.6:
 			if n.kind == "tree":
 				wood += n.amount
 			n.amount = 0.0
-			emit({"type": "node_gone", "id": n.id})
+			emit({"type": "node_gone", "id": n.id, "cleared": true})
 	if wood > 0.0:
 		add_stock(b.faction, "wood", wood)
 	_block(b)
@@ -1077,13 +1080,13 @@ func _start_construction(b: Building) -> void:
 
 func _nodes_within(p: Vector2, r: float) -> Array:
 	var out := []
-	var i0 := clampi(int((p.x - r) / NODE_BUCKET), 0, NNB - 1)
-	var i1 := clampi(int((p.x + r) / NODE_BUCKET), 0, NNB - 1)
-	var j0 := clampi(int((p.y - r) / NODE_BUCKET), 0, NNB - 1)
-	var j1 := clampi(int((p.y + r) / NODE_BUCKET), 0, NNB - 1)
+	var i0 := clampi(int((p.x - r) / NODE_BUCKET), 0, node_bucket_n - 1)
+	var i1 := clampi(int((p.x + r) / NODE_BUCKET), 0, node_bucket_n - 1)
+	var j0 := clampi(int((p.y - r) / NODE_BUCKET), 0, node_bucket_n - 1)
+	var j1 := clampi(int((p.y + r) / NODE_BUCKET), 0, node_bucket_n - 1)
 	for j in range(j0, j1 + 1):
 		for i in range(i0, i1 + 1):
-			for nid in node_buckets[j * NNB + i]:
+			for nid in node_buckets[j * node_bucket_n + i]:
 				var n = terrain.nodes[nid]
 				if n.pos.distance_to(p) <= r:
 					out.append(n)
@@ -1496,7 +1499,7 @@ func _do_scout(u: Unit, c: Crew, dt: float) -> void:
 				u.scout_dir = Vector2(-away.y, away.x) * (1.0 if u.id % 2 == 0 else -1.0)
 		1:
 			# Circle around the target at a safe distance.
-			var side := (target + u.scout_dir * 75.0 - (target - home_pos(u.faction)).normalized() * 20.0).clamp(Vector2(20, 20), Vector2(Defs.MAP_SIZE - 20, Defs.MAP_SIZE - 20))
+			var side := (target + u.scout_dir * 75.0 - (target - home_pos(u.faction)).normalized() * 20.0).clamp(Vector2(20, 20), Vector2(map_size - 20, map_size - 20))
 			if move_to(u, side, dt, 10.0, true):
 				u.scout_leg = 2
 		2:

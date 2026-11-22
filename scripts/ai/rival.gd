@@ -117,7 +117,7 @@ func _toward_enemy() -> Vector2:
 	var e = m.known_enemy_camp(fid)
 	if e != null:
 		return ((e as Vector2) - _home()).normalized()
-	var c := Vector2(Defs.MAP_SIZE, Defs.MAP_SIZE) * 0.5
+	var c := Vector2(m.map_size, m.map_size) * 0.5
 	return (c - _home()).normalized()
 
 

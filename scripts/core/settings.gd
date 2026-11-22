@@ -26,7 +26,9 @@ var data := {
 	"matches_played": 0,
 	"tutorial_done": false,
 	"hints": true,
+	"resource_labels": true, # names over stone and ore, and on the map
 	"difficulty": 1,
+	"map": "medium",
 	"strategy": "random",
 	"calm_start": false,
 	"request_limit": 120,

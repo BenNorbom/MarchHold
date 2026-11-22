@@ -5,6 +5,16 @@ extends RefCounted
 const Geo = preload("res://scripts/view/geo.gd")
 const Defs = preload("res://scripts/data/defs.gd")
 
+# [centre, radius] of each clump of a berry bush
+const BUSH_LOBES := [
+	[Vector3(0, 0.95, 0), 0.8],
+	[Vector3(0.75, 0.6, 0.1), 0.65],
+	[Vector3(0.1, 0.65, 0.8), 0.65],
+	[Vector3(-0.75, 0.65, 0.2), 0.65],
+	[Vector3(-0.3, 0.55, -0.75), 0.65],
+	[Vector3(0.5, 0.6, -0.65), 0.6],
+]
+
 var mats                         # Materials library
 var cache := {}
 var heights := {}                # mesh key -> height (for the construction clip)
@@ -601,30 +611,60 @@ func rock_mesh(kind: String, variant: int) -> ArrayMesh:
 	return mesh
 
 
-func bush(with_berries: bool) -> ArrayMesh:
-	var key := "bush:%s" % str(with_berries)
-	if cache.has(key):
-		return cache[key]
+## Leaves of a berry bush, about 3 m across and head high at scale 1.
+func bush() -> ArrayMesh:
+	if cache.has("bush"):
+		return cache["bush"]
 	var g := _g(55)
 	g.slot("leaves", m("bush_leaves"))
-	for i in 16:
-		var dir := Vector3(g.rng.randf_range(-1, 1), g.rng.randf_range(0.0, 1.0), g.rng.randf_range(-1, 1)).normalized()
-		var p := Vector3(0, 0.55, 0) + dir * Vector3(0.7, 0.45, 0.7)
-		var right := dir.cross(Vector3.UP).normalized()
-		if right.length() < 0.1:
-			right = Vector3.RIGHT
-		var up := dir.cross(right).normalized()
-		g.color = Color(0.4 + dir.y * 0.5, 1.0, 0, 1)
-		g.card(p - up * 0.55, right * 1.1, up * 1.1, dir)
+	for lobe in BUSH_LOBES:
+		var c: Vector3 = lobe[0]
+		var r: float = lobe[1]
+		for i in 40:
+			var dir := _bush_dir(g)
+			var depth := g.rng.randf_range(0.6, 1.0)
+			var p := c + dir * r * depth
+			# Tilt each card so the crown doesn't look like scales.
+			var facing := (dir + _bush_dir(g) * 0.5).normalized()
+			var right := facing.cross(Vector3.UP).normalized()
+			if right.length() < 0.1:
+				right = Vector3.RIGHT
+			right = right.rotated(facing, g.rng.randf() * TAU)
+			var up := facing.cross(right).normalized()
+			var s := g.rng.randf_range(0.6, 0.85)
+			g.color = Color(clampf(depth - 0.35 + dir.y * 0.35, 0.0, 1.0), 1.0, 0, 1)
+			g.card(p - up * s * 0.5, right * s, up * s, dir)
 	g.color = Color(1, 1, 1, 1)
-	if with_berries:
-		g.slot("berries", m("berries"))
-		for i in 22:
-			var dir := Vector3(g.rng.randf_range(-1, 1), g.rng.randf_range(-0.1, 1.0), g.rng.randf_range(-1, 1)).normalized()
-			g.sphere(Vector3(0, 0.55, 0) + dir * Vector3(0.78, 0.5, 0.78), 0.05, 2, 4)
 	var mesh := g.finish()
-	cache[key] = mesh
+	cache["bush"] = mesh
 	return mesh
+
+
+## The fruit is its own mesh, so a picked-clean bush keeps its leaves.
+func bush_berries() -> ArrayMesh:
+	if cache.has("bush_berries"):
+		return cache["bush_berries"]
+	var g := _g(56)
+	g.slot("berries", m("bush_berries"))
+	for lobe in BUSH_LOBES:
+		var c: Vector3 = lobe[0]
+		var r: float = lobe[1]
+		for bunch in 6:
+			var p := c + _bush_dir(g) * r * 1.12
+			if p.y < 0.2:
+				continue
+			for i in 4:
+				var off := Vector3(g.rng.randf_range(-1, 1), g.rng.randf_range(-1, 1), g.rng.randf_range(-1, 1)) * 0.075
+				g.sphere(p + off, g.rng.randf_range(0.045, 0.065), 3, 5)
+	var mesh := g.finish()
+	cache["bush_berries"] = mesh
+	return mesh
+
+
+func _bush_dir(g: Geo) -> Vector3:
+	var y := g.rng.randf_range(-0.35, 1.0)
+	var flat := Vector2.from_angle(g.rng.randf() * TAU) * sqrt(1.0 - y * y)
+	return Vector3(flat.x, y, flat.y)
 
 
 func carcass() -> ArrayMesh:

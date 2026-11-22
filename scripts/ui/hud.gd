@@ -14,6 +14,12 @@ const Defs = preload("res://scripts/data/defs.gd")
 
 const RESOURCE_DISPLAY_ORDER := ["food", "wood", "stone", "bronze_ore", "coal", "iron_ore", "bronze", "iron"]
 
+# Widths are in base 1600x900 pixels: the "expand" stretch never gives less room than that.
+const MENU_SIZE := Vector2(720, 483)
+const MENU_GRID_WIDTH := 1140.0
+const HINT_WIDTH := 460.0
+const HINT_GRID_WIDTH := 1100.0
+
 const KIND_COLORS := {
 	"info": "e8dcc2", "warn": "f0c060", "alarm": "ff6a50", "death": "e07060", "done": "a8d890",
 	"report": "9cc8f0", "terra": "d8c8ff", "you": "ffffff", "birth": "f0b8d0", "age": "ffd870",
@@ -80,10 +86,10 @@ func _ready() -> void:
 	_build_status()
 	_build_log()
 	_build_chat()
-	_build_menu()
 	_build_map()
 	_build_village()
 	_build_objective()
+	_build_menu()   # after the village widgets, so the wide menus draw over them
 	_build_caption()
 	_build_pause()
 	_build_end()
@@ -242,7 +248,6 @@ func _build_chat() -> void:
 func _build_chat_hint() -> void:
 	chat_hint = _panel("ChatPanel")
 	chat_hint.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	chat_hint.custom_minimum_size.x = 460
 	chat_hint.add_theme_stylebox_override("panel", UiTheme.box(Color(0.07, 0.055, 0.04, 0.97), Color(UiTheme.GOLD, 0.7), 1, 3, 10))
 	chat_hint.hide()
 	root.add_child(chat_hint)
@@ -261,6 +266,9 @@ func _build_chat_hint() -> void:
 	chat_hint_choices = RichTextLabel.new()
 	chat_hint_choices.bbcode_enabled = true
 	chat_hint_choices.focus_mode = Control.FOCUS_NONE
+	chat_hint_choices.fit_content = true
+	chat_hint_choices.scroll_active = false
+	chat_hint_choices.meta_underlined = false
 	chat_hint_choices.meta_clicked.connect(func(meta): chat_choice.emit(int(str(meta))))
 	rows.add_child(chat_hint_choices)
 	for label in [chat_hint_text, chat_hint_choices]:
@@ -268,6 +276,7 @@ func _build_chat_hint() -> void:
 		label.add_theme_font_size_override("bold_font_size", 17)
 		label.add_theme_constant_override("line_separation", 0)
 	chat_hint.resized.connect(_position_chat_hint)
+	chat_hint.minimum_size_changed.connect(chat_hint.reset_size)
 	chat_panel.item_rect_changed.connect(_position_chat_hint)
 
 
@@ -275,13 +284,15 @@ func _position_chat_hint() -> void:
 	chat_hint.position = chat_panel.position - Vector2(0, chat_hint.size.y + 6)
 
 
-func show_chat_hint(title: String, body: String, choices: Array[String]) -> void:
+func show_chat_hint(title: String, body: String, choices: String) -> void:
 	chat_hint_title.text = title
 	chat_hint_text.text = body
-	chat_hint_choices.visible = not choices.is_empty()
-	chat_hint_choices.custom_minimum_size.y = mini(choices.size(), 5) * 23
-	chat_hint_choices.text = "\n".join(choices)
-	chat_hint_choices.scroll_to_line(0)
+	chat_hint_choices.visible = choices != ""
+	var width := HINT_GRID_WIDTH if choices != "" else HINT_WIDTH
+	# fit_content needs a known width, or it measures the text wrapped at zero.
+	chat_hint_text.custom_minimum_size.x = width
+	chat_hint_choices.custom_minimum_size.x = width
+	chat_hint_choices.text = choices
 	chat_hint.show()
 	chat_hint.reset_size()
 	_position_chat_hint()
@@ -355,13 +366,14 @@ func close_chat() -> void:
 
 
 func _build_menu() -> void:
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(center)
 	menu_panel = _panel("MenuPanel")
-	menu_panel.set_anchors_preset(Control.PRESET_CENTER)
-	menu_panel.position = Vector2(-380, -300)
-	menu_panel.size = Vector2(760, 600)
 	menu_panel.visible = false
 	menu_panel.mouse_filter = Control.MOUSE_FILTER_STOP
-	root.add_child(menu_panel)
+	center.add_child(menu_panel)
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 8)
 	menu_panel.add_child(v)
@@ -370,9 +382,7 @@ func _build_menu() -> void:
 	v.add_child(menu_title)
 	menu_body = RichTextLabel.new()
 	menu_body.bbcode_enabled = true
-	menu_body.fit_content = false
-	menu_body.scroll_active = true
-	menu_body.custom_minimum_size = Vector2(720, 470)
+	menu_body.custom_minimum_size = MENU_SIZE
 	menu_body.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	menu_body.meta_clicked.connect(func(meta): menu_clicked.emit(int(str(meta))))
 	v.add_child(menu_body)
@@ -381,8 +391,13 @@ func _build_menu() -> void:
 	v.add_child(menu_footer)
 
 
-func show_menu(title: String, bbcode: String, footer: String = "Number keys or click to choose · Esc to close") -> void:
+func show_menu(title: String, bbcode: String, footer: String = "Number keys or click to choose · Esc to close", grid: bool = false) -> void:
 	menu_open = true
+	# Grid menus grow to fit their content; the text menus keep a fixed, scrolling box.
+	menu_body.custom_minimum_size = Vector2(MENU_GRID_WIDTH, 0) if grid else MENU_SIZE
+	menu_body.fit_content = grid
+	menu_body.scroll_active = not grid
+	menu_body.meta_underlined = not grid
 	menu_title.text = title
 	menu_body.text = bbcode
 	menu_body.scroll_to_line(0)

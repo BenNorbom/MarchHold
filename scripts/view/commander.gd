@@ -134,8 +134,8 @@ func _physics_process(delta: float) -> void:
 	move_and_slide()
 	_push_out_of_trees()
 	# Keep inside the land.
-	position.x = clampf(position.x, 6.0, Defs.MAP_SIZE - 6.0)
-	position.z = clampf(position.z, 6.0, Defs.MAP_SIZE - 6.0)
+	position.x = clampf(position.x, 6.0, m.map_size - 6.0)
+	position.z = clampf(position.z, 6.0, m.map_size - 6.0)
 	var ground: float = m.terrain.height_at(position.x, position.z)
 	if position.y < ground - 0.5:
 		position.y = ground + 0.2

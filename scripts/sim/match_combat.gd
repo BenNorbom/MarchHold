@@ -677,7 +677,7 @@ var herd_pos := {}
 
 
 func herd_center(h: int) -> Vector2:
-	return herd_pos.get(h, Vector2(512, 512))
+	return herd_pos.get(h, Vector2(map_size, map_size) * 0.5)
 
 
 func _animal_move(a: Unit, goal: Vector2, dt: float, run: bool) -> bool:

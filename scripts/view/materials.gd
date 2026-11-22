@@ -81,7 +81,7 @@ func get_mat(name: String) -> Material:
 		"pine_needles":
 			m = foliage(make_needles(), Color(0.7, 0.8, 0.62), 0.4)
 		"bush_leaves":
-			m = foliage(make_leaves(false), Color(0.6, 0.72, 0.45), 0.45)
+			m = foliage(make_leaves(false), Color(1.0, 1.15, 0.65), 0.45)
 		"crop":
 			m = foliage(make_grass(true), Color(1.0, 0.92, 0.62), 0.45)
 		"grass":
@@ -91,9 +91,13 @@ func get_mat(name: String) -> Material:
 		"boulder":
 			m = rock("rock_boulder_dry", Color(0.95, 0.93, 0.9), 0.32)
 		"outcrop":
-			m = rock("rock_face", Color(0.9, 0.9, 0.88), 0.12)
+			# The photo is rusty brown, which reads as ore: keep only its detail.
+			m = rock("rock_face", Color(3.7, 3.6, 3.4), 0.12)
+			m.set_shader_parameter("saturation", 0.0)
 		"dep_bronze_ore":
-			m = rock("rock_boulder_dry", Color(0.75, 0.68, 0.6), 0.3, Color(0.25, 0.62, 0.48), 0.85, 0.5)
+			# Verdigris with copper veins, like its teal dot on the map.
+			m = rock("rock_boulder_dry", Color(0.12, 0.72, 0.52), 0.3, Color(0.95, 0.36, 0.06), 1.0, 0.35)
+			m.set_shader_parameter("saturation", 0.0)
 		"dep_coal":
 			m = rock("rock_boulder_dry", Color(0.28, 0.27, 0.27), 0.3, Color(0.04, 0.04, 0.05), 0.9, 0.0)
 		"dep_iron_ore":
@@ -121,6 +125,11 @@ func get_mat(name: String) -> Material:
 			sm.albedo_color = Color(0.55, 0.05, 0.08)
 			sm.roughness = 0.35
 			m = sm
+		"bush_berries":
+			var fruit := StandardMaterial3D.new()
+			fruit.albedo_color = Color(0.9, 0.08, 0.16)
+			fruit.roughness = 0.3
+			m = fruit
 		"arrow":
 			var sm2 := StandardMaterial3D.new()
 			sm2.albedo_color = Color(0.45, 0.33, 0.2)

@@ -10,7 +10,7 @@ func setup(opts: Dictionary) -> void:
 	var seed_in := int(opts.get("seed", 1))
 	rng.seed = seed_in * 7919 + 13
 	var tr := Terrain.new()
-	tr.generate(seed_in)
+	tr.generate(seed_in, str(opts.get("map", Defs.MAP_LARGEST)))
 	_init_world(tr)
 	factions.clear()
 	for i in 2:
@@ -23,9 +23,9 @@ func setup(opts: Dictionary) -> void:
 		f.start = tr.starts[i]
 		for r in Defs.RESOURCES:
 			f.stock[r] = 0.0
-		f.knowledge.resize(KRES * KRES)
+		f.knowledge.resize(kres * kres)
 		f.knowledge.fill(-1.0)
-		f.visible.resize(KRES * KRES)
+		f.visible.resize(kres * kres)
 		factions.append(f)
 	for f: Faction in factions:
 		var other: Vector2 = factions[1 - f.id].start
@@ -127,7 +127,7 @@ func _update_commander(u: Unit, dt: float) -> void:
 			threat += o.pos
 	if foes >= 3 and foes > friends + 1:
 		var away := (u.pos - threat / foes).normalized()
-		u.goal = (u.pos + away * 45.0).clamp(Vector2(20, 20), Vector2(Defs.MAP_SIZE - 20, Defs.MAP_SIZE - 20))
+		u.goal = (u.pos + away * 45.0).clamp(Vector2(20, 20), Vector2(map_size - 20, map_size - 20))
 		u.flee_t = 5.0
 		return
 	if combat_update(u, dt, 20.0):

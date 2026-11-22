@@ -2,7 +2,7 @@
 
 A medieval strategy game played entirely in first person. You are the commander of a small band of settlers. There's no overhead view; you walk among your people and **talk to them**. Type an order, and your villagers gather, build, arm themselves, scout and fight. Grow a campfire into a walled town with bronze, iron and finally cannons, and defeat Commander Rook before he defeats you.
 
-- 1 km × 1 km valley, a fresh map every match; the two camps start at least 620 m apart.
+- A fresh valley every match in three sizes: Small (512 m, camps at least 320 m apart), Medium (768 m, 460 m apart; the default) and Large (1 km, 620 m apart).
 - 1v1 against an AI rival with five openings (rush, boom, turtle, cavalry, cannons) and three difficulties.
 - Kill the crowned enemy commander to win. If you fall, the match is lost.
 - Optional **Terra**: connect your ChatGPT plan or enter your own OpenAI API key to give orders in plain language ("get thirty wood, then put up a hut by the berries").
@@ -120,7 +120,7 @@ powershell -ExecutionPolicy Bypass -File tools\build.ps1
 
 ## Status
 
-Version 0.3.2 adds click and Shift+click selection of villagers. Version 0.3.1 let Terra fill in order details and submit orders immediately, with manual placement for construction. Version 0.3.0 added individual crew orders, slash-command previews, and animated villager models. Version 0.2.0 added ChatGPT plan sign-in and model selection for Terra. Version 0.1.0 introduced the full lean tech tree, chat and slash commands, Terra, scouting, combat, horses, cannons, the AI rival, the intro and the tutorial. Next up: saving and resuming, an art pass on horses, formations and morale tuning, voice orders, and online play for up to 8 players.
+Version 0.4.0 adds three map sizes, grid build and craft menus, named stone and ore landmarks, and clearer berry bushes and ore, and slows births slightly. Version 0.3.2 added click and Shift+click selection of villagers. Version 0.3.1 let Terra fill in order details and submit orders immediately, with manual placement for construction. Version 0.3.0 added individual crew orders, slash-command previews, and animated villager models. Version 0.2.0 added ChatGPT plan sign-in and model selection for Terra. Version 0.1.0 introduced the full lean tech tree, chat and slash commands, Terra, scouting, combat, horses, cannons, the AI rival, the intro and the tutorial. Next up: saving and resuming, an art pass on horses, formations and morale tuning, voice orders, and online play for up to 8 players.
 
 ## Credits
 

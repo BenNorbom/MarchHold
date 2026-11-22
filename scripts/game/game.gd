@@ -19,6 +19,7 @@ const Tutorial = preload("res://scripts/game/tutorial.gd")
 const Intro = preload("res://scripts/game/intro.gd")
 const Hints = preload("res://scripts/game/hints.gd")
 
+const MENU_COLUMNS := 3
 const SLASH_ALIASES := {
 	"build": "b", "craft": "c", "make": "c", "ledger": "l",
 	"people": "p", "crews": "p", "scouts": "s", "reports": "s",
@@ -87,7 +88,8 @@ func start(options: Dictionary) -> void:
 	opts["seed"] = seed_in
 	var is_tutorial: bool = opts.get("tutorial", false)
 	m = Match.new()
-	m.setup({"seed": seed_in})
+	var map_id: String = Defs.MAP_LARGEST if is_tutorial else str(opts.get("map", Defs.MAP_LARGEST))
+	m.setup({"seed": seed_in, "map": map_id})
 	ai = Rival.new()
 	ai.setup(m, {"faction": 1, "difficulty": 0 if is_tutorial else int(opts.get("difficulty", 1)),
 		"strategy": "boom" if is_tutorial else str(opts.get("strategy", "random")), "seed": seed_in,
@@ -674,35 +676,35 @@ func _on_chat_changed(text: String) -> void:
 	chat_hint_items = []
 	var hint: Array = CHAT_HINTS[command]
 	var body: String = hint[1]
-	var rows: Array[String] = []
+	var choices := ""
 	match command:
 		"b":
-			rows = _chat_hint_rows(m.build_menu(0))
+			choices = _chat_hint_grid(m.build_menu(0))
 		"c":
 			var has_armory: bool = m.armory_tier(0) >= 0
 			var recipes: Array = m.craft_menu(0)
 			if not has_armory:
 				body = "Build an armory with [b]/b armory[/b] to unlock these recipes."
 				recipes = recipes.filter(func(e): return Defs.ITEMS[e["id"]]["tier"] == 0)
-			rows = _chat_hint_rows(recipes, has_armory)
+			choices = _chat_hint_grid(recipes, has_armory)
 		"t":
 			body += "\n" + m.next_age_text(0)
-	hud.show_chat_hint(hint[0], body, rows)
+	hud.show_chat_hint(hint[0], body, choices)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
-func _chat_hint_rows(entries: Array, show_lock_reason: bool = true) -> Array[String]:
-	chat_hint_items = entries.filter(func(e): return e["locked"] == "")
-	chat_hint_items.sort_custom(func(a, b): return a["missing"].size() < b["missing"].size())
-	var rows: Array[String] = []
+func _chat_hint_grid(entries: Array, show_lock_reason: bool = true) -> String:
+	chat_hint_items = _by_shortfall(entries.filter(func(e): return e["locked"] == ""))
+	var cells: Array[String] = []
 	for i in chat_hint_items.size():
 		var e: Dictionary = chat_hint_items[i]
-		rows.append("[url=%d][color=#ffd870]%s[/color][/url]  ·  %s" % [i, e["name"], _cost_bb(e["cost"], e["missing"])])
-	for e in entries:
-		if e["locked"] != "":
-			var detail: String = e["locked"] if show_lock_reason else _cost_bb(e["cost"], {})
-			rows.append("[color=#b8b0a0]%s  ·  %s[/color]" % [e["name"], detail])
-	return rows
+		cells.append("[url=%d][color=#ffd870]%s[/color]  %s[/url]" % [i, e["name"], _cost_bb(e["cost"], e["missing"])])
+	var locked := entries.filter(func(e): return e["locked"] != "")
+	if show_lock_reason:
+		return _grid_bb(cells, 1) + _locked_bb(locked)
+	for e in locked:
+		cells.append("[color=#b8b0a0]%s[/color]  %s" % [e["name"], _cost_bb(e["cost"], {})])
+	return _grid_bb(cells, 1)
 
 
 func _on_chat_choice(index: int) -> void:
@@ -1081,9 +1083,9 @@ func _slash(text: String) -> void:
 			hud.log_line("Unknown command /%s. Type /h for the list." % c, "warn")
 
 
-func _open_menu(kind: String, title: String, body: String, footer: String = "Number keys or click to choose · Esc to close") -> void:
+func _open_menu(kind: String, title: String, body: String, footer: String = "Number keys or click to choose · Esc to close", grid: bool = false) -> void:
 	menu_kind = kind
-	hud.show_menu(title, body, footer)
+	hud.show_menu(title, body, footer, grid)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	cmd.look_enabled = false
 	cmd.move_enabled = false
@@ -1107,23 +1109,54 @@ func _cost_bb(cost: Dictionary, miss: Dictionary) -> String:
 	return ", ".join(parts)
 
 
+## Affordable first. sort_custom isn't stable, so ties are broken by catalog order.
+func _by_shortfall(entries: Array) -> Array:
+	var order := range(entries.size())
+	order.sort_custom(func(a, b):
+		var short_a: int = entries[a]["missing"].size()
+		var short_b: int = entries[b]["missing"].size()
+		return short_a < short_b or (short_a == short_b and a < b))
+	return order.map(func(i): return entries[i])
+
+
+func _grid_bb(cells: Array[String], gap: int) -> String:
+	if cells.is_empty():
+		return ""
+	var out := "[table=%d]" % MENU_COLUMNS
+	# Pad the last row, so short lists keep the same column widths.
+	for i in ceili(cells.size() / float(MENU_COLUMNS)) * MENU_COLUMNS:
+		out += "[cell expand=1 shrink=false padding=0,%d,18,%d]%s[/cell]" % [gap, gap, cells[i] if i < cells.size() else " "]
+	return out + "[/table]"
+
+
+## Locked entries share a few reasons, so name each reason once.
+func _locked_bb(locked: Array) -> String:
+	var groups := {}
+	for e in locked:
+		var label: String = e["name"]
+		if e["kind"] == "craft":
+			label = Defs.item_name(e["id"], 2)
+		groups.get_or_add(e["locked"], []).append(label)
+	var out := ""
+	for reason: String in groups:
+		var sentence := reason.left(1).to_upper() + reason.substr(1)
+		out += "\n[font_size=16][color=#c0a878]%s[/color]  [color=#948c7e]%s[/color][/font_size]" % [sentence, ", ".join(groups[reason])]
+	return out
+
+
 func _menu_build() -> void:
 	var all: Array = m.build_menu(0)
-	var ready := all.filter(func(e): return e["locked"] == "")
+	var ready := _by_shortfall(all.filter(func(e): return e["locked"] == ""))
 	var locked := all.filter(func(e): return e["locked"] != "")
-	ready.sort_custom(func(a, b): return a["missing"].size() < b["missing"].size())
 	menu_items = ready
-	var lines: Array[String] = []
+	var cells: Array[String] = []
 	for i in ready.size():
 		var e: Dictionary = ready[i]
 		var key := str(i + 1) if i < 9 else ("0" if i == 9 else "·")
-		lines.append("[url=%d][b][color=#ffd870]%s[/color]  %s[/b][/url]  —  %s\n      [color=#b8b0a0]%s[/color]" % [i + 1, key, e["name"], _cost_bb(e["cost"], e["missing"]), e["desc"]])
-	if not locked.is_empty():
-		lines.append("\n[color=#9a9080]Not yet:[/color]")
-		for e in locked:
-			lines.append("[color=#8a8070]   %s — %s[/color]" % [e["name"], e["locked"]])
+		cells.append("[url=%d][b][color=#ffd870]%s  %s[/color][/b]  %s\n[font_size=15][color=#b8b0a0]%s[/color][/font_size][/url]" % [i + 1, key, e["name"], _cost_bb(e["cost"], e["missing"]), e["desc"]])
 	var who := ("for " + address_label) if not addressee.is_empty() else "(the nearest free villagers will build)"
-	_open_menu("build", "Build  " + who, "\n".join(lines))
+	_open_menu("build", "Build  " + who, _grid_bb(cells, 4) + _locked_bb(locked),
+		"Number keys or click to choose · red means you're short · Esc to close", true)
 
 
 func _menu_craft() -> void:
@@ -1134,16 +1167,13 @@ func _menu_craft() -> void:
 	var ready := all.filter(func(e): return e["locked"] == "")
 	var locked := all.filter(func(e): return e["locked"] != "")
 	menu_items = ready
-	var lines: Array[String] = []
+	var cells: Array[String] = []
 	for i in ready.size():
 		var e: Dictionary = ready[i]
 		var key := str(i + 1) if i < 9 else ("0" if i == 9 else "·")
-		lines.append("[url=%d][b][color=#ffd870]%s[/color]  %s[/b][/url]  —  %s   [color=#b8b0a0](in armory: %d)[/color]" % [i + 1, key, e["name"], _cost_bb(e["cost"], e["missing"]), e["stock"]])
-	if not locked.is_empty():
-		lines.append("\n[color=#9a9080]Not yet:[/color]")
-		for e in locked:
-			lines.append("[color=#8a8070]   %s — %s[/color]" % [Defs.item_name(e["id"], 2).capitalize(), e["locked"]])
-	_open_menu("craft", "Armory (%s)" % ["wood", "bronze", "iron"][maxi(0, m.armory_tier(0))], "\n".join(lines), "Number keys or click: one batch · type '/c arrows 3' for three batches · Esc to close")
+		cells.append("[url=%d][b][color=#ffd870]%s  %s[/color][/b]\n[font_size=16]%s  [color=#b8b0a0]· %d in armory[/color][/font_size][/url]" % [i + 1, key, e["name"], _cost_bb(e["cost"], e["missing"]), e["stock"]])
+	_open_menu("craft", "Armory (%s)" % ["wood", "bronze", "iron"][maxi(0, m.armory_tier(0))], _grid_bb(cells, 4) + _locked_bb(locked),
+		"Number keys or click: one batch · type '/c arrows 3' for three batches · Esc to close", true)
 
 
 func _menu_select(i: int) -> void:

@@ -13,6 +13,8 @@ var match_panel: PanelContainer
 var credits_panel: PanelContainer
 var terra_status: Label
 var difficulty: OptionButton
+var map_pick: OptionButton
+var map_note: Label
 var strategy: OptionButton
 var seed_edit: LineEdit
 var calm: CheckBox
@@ -40,14 +42,6 @@ func _ready() -> void:
 	title.size = Vector2(1000, 120)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	add_child(title)
-	var sub := Label.new()
-	sub.text = "Command your people by talking to them"
-	sub.theme_type_variation = "CaptionSub"
-	sub.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	sub.position = Vector2(-500, 205)
-	sub.size = Vector2(1000, 40)
-	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	add_child(sub)
 	main_box = VBoxContainer.new()
 	main_box.set_anchors_preset(Control.PRESET_CENTER)
 	main_box.position = Vector2(-170, -40)
@@ -139,6 +133,22 @@ func _build_match_panel() -> void:
 		difficulty.add_item(d)
 	difficulty.selected = int(Settings.get_val("difficulty", 1))
 	g.add_child(difficulty)
+	var map_label := Label.new()
+	map_label.text = "Map size"
+	g.add_child(map_label)
+	map_pick = OptionButton.new()
+	var saved_map := str(Settings.get_val("map", Defs.MAP_DEFAULT))
+	if not Defs.MAP_SIZES.has(saved_map):
+		saved_map = Defs.MAP_DEFAULT
+	for id in Defs.MAP_SIZES:
+		var info: Dictionary = Defs.MAP_SIZES[id]
+		var side: String = "1 km × 1 km" if info["size"] >= 1000 else "%d × %d m" % [info["size"], info["size"]]
+		map_pick.add_item("%s (%s)" % [info["name"], side])
+		map_pick.set_item_metadata(map_pick.item_count - 1, id)
+		if id == saved_map:
+			map_pick.select(map_pick.item_count - 1)
+	map_pick.item_selected.connect(func(_i: int): _update_map_note())
+	g.add_child(map_pick)
 	var l2 := Label.new()
 	l2.text = "Rook's opening"
 	g.add_child(l2)
@@ -159,11 +169,11 @@ func _build_match_panel() -> void:
 	calm.text = "Calm start: Rook won't attack for 10 minutes"
 	calm.button_pressed = bool(Settings.get_val("calm_start", false))
 	g.add_child(calm)
-	var note := Label.new()
-	note.theme_type_variation = "Small"
-	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	note.text = "About 1 km × 1 km. The camps start at least 620 m apart. Kill the crowned commander to win."
-	v.add_child(note)
+	map_note = Label.new()
+	map_note.theme_type_variation = "Small"
+	map_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	v.add_child(map_note)
+	_update_map_note()
 	var h := HBoxContainer.new()
 	h.alignment = BoxContainer.ALIGNMENT_END
 	h.add_theme_constant_override("separation", 12)
@@ -181,6 +191,11 @@ func _build_match_panel() -> void:
 	v.add_child(h)
 
 
+func _update_map_note() -> void:
+	var info: Dictionary = Defs.MAP_SIZES[map_pick.get_selected_metadata()]
+	map_note.text = "The camps start at least %d m apart. Kill the crowned commander to win." % info["min_start"]
+
+
 func _show_match() -> void:
 	main_box.visible = false
 	match_panel.visible = true
@@ -188,11 +203,12 @@ func _show_match() -> void:
 
 func _start() -> void:
 	Settings.data["difficulty"] = difficulty.selected
+	Settings.data["map"] = map_pick.get_selected_metadata()
 	Settings.data["calm_start"] = calm.button_pressed
 	Settings.save_all()
 	var s := seed_edit.text.strip_edges()
 	var seed_val := int(s) if s.is_valid_int() else (hash(s) % 900000 + 1000 if s != "" else 0)
-	start_match.emit({"difficulty": difficulty.selected, "strategy": strategy.get_item_text(strategy.selected).to_lower(),
+	start_match.emit({"difficulty": difficulty.selected, "map": map_pick.get_selected_metadata(), "strategy": strategy.get_item_text(strategy.selected).to_lower(),
 		"seed": absi(seed_val), "calm_start": calm.button_pressed})
 
 

@@ -10,6 +10,7 @@ uniform vec3 vein_color : source_color = vec3(1.0);
 uniform float vein_amount = 0.0;
 uniform float vein_metal = 0.0;
 uniform float scale = 0.35;
+uniform float saturation = 1.0; // 0 drops the photo's own hue so the tint sets the colour
 uniform vec3 moss_color : source_color = vec3(0.32, 0.38, 0.18);
 
 varying vec3 wp;
@@ -25,7 +26,7 @@ void fragment() {
 	tw /= (tw.x + tw.y + tw.z);
 	vec3 alb = texture(albedo_tex, wp.zy * scale).rgb * tw.x + texture(albedo_tex, wp.xz * scale).rgb * tw.y + texture(albedo_tex, wp.xy * scale).rgb * tw.z;
 	vec3 arm = texture(arm_tex, wp.zy * scale).rgb * tw.x + texture(arm_tex, wp.xz * scale).rgb * tw.y + texture(arm_tex, wp.xy * scale).rgb * tw.z;
-	alb *= tint;
+	alb = mix(vec3(dot(alb, vec3(0.2126, 0.7152, 0.0722))), alb, saturation) * tint;
 	// Moss on top surfaces.
 	float moss = smoothstep(0.6, 0.95, wn.y) * smoothstep(0.35, 0.7, texture(noise_tex, wp.xz * 0.3).r);
 	alb = mix(alb, moss_color * (0.7 + 0.5 * alb), moss * 0.7);

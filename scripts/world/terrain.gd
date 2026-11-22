@@ -1,12 +1,12 @@
 extends RefCounted
-## Procedural 1 km x 1 km map: heightmap, camp positions and resource nodes.
+## Procedural square map in one of Defs.MAP_SIZES: heightmap, camp positions and resource nodes.
 ## Pure data, shared by the simulation (headless) and the renderer.
 
 const Defs = preload("res://scripts/data/defs.gd")
 
-const RES := 513                  # height samples per side
-const STEP := Defs.MAP_SIZE / (RES - 1)   # 2 m between samples
-const FOREST_RES := 128           # forest density grid (8 m cells)
+const STEP := 2.0                 # metres between height samples
+const FOREST_CELL := 8.0          # forest density grid
+const RIM_MIN := 80.0             # a narrower rim of hills would be too steep to walk
 
 
 class RNode:
@@ -18,8 +18,23 @@ class RNode:
 	var scale := 1.0
 	var rot := 0.0
 
+	## The name shown in the world and on the map, or "" for unnamed nodes.
+	func landmark_name() -> String:
+		if kind == "rock" and sub == "outcrop":
+			return "Stone outcrop"
+		if kind == "deposit":
+			var res: String = Defs.RESOURCE_NAMES[sub]
+			return res.left(1).to_upper() + res.substr(1)
+		return ""
+
 
 var seed_value := 0
+var map_id := ""
+var config := {}
+var size := 0.0                   # metres per side
+var size_scale := 1.0             # side length relative to the largest map
+var height_res := 0           # height samples per side
+var forest_res := 0
 var heights := PackedFloat32Array()
 var forest := PackedFloat32Array()
 var starts: Array[Vector2] = []
@@ -28,7 +43,13 @@ var herds: Array = []           # {kind, pos, count}
 var rng := RandomNumberGenerator.new()
 
 
-func generate(seed_in: int) -> void:
+func generate(seed_in: int, map_in: String = Defs.MAP_LARGEST) -> void:
+	map_id = map_in if Defs.MAP_SIZES.has(map_in) else Defs.MAP_DEFAULT
+	config = Defs.MAP_SIZES[map_id]
+	size = float(config["size"])
+	size_scale = size / float(Defs.MAP_SIZES[Defs.MAP_LARGEST]["size"])
+	height_res = int(size / STEP) + 1
+	forest_res = int(size / FOREST_CELL)
 	seed_value = seed_in
 	rng.seed = seed_in
 	_heights()
@@ -62,19 +83,20 @@ func _heights() -> void:
 	fine.seed = seed_value + 37
 	fine.frequency = 0.02
 	fine.fractal_octaves = 3
-	heights.resize(RES * RES)
-	var half := Defs.MAP_SIZE * 0.5
-	for j in RES:
+	heights.resize(height_res * height_res)
+	var half := size * 0.5
+	var rim := 1.0 - maxf(0.2, RIM_MIN / half)
+	for j in height_res:
 		var z := j * STEP
-		for i in RES:
+		for i in height_res:
 			var x := i * STEP
 			var h := 22.0 + 15.0 * hills.get_noise_2d(x, z)
 			var m := clampf(mask.get_noise_2d(x, z) * 1.6 + 0.1, 0.0, 1.0)
 			h += 18.0 * m * maxf(0.0, ridges.get_noise_2d(x, z) + 0.15)
 			h += 1.6 * fine.get_noise_2d(x, z)
 			var edge := maxf(absf(x - half), absf(z - half)) / half
-			h += 34.0 * smoothstep(0.8, 1.0, edge)
-			heights[j * RES + i] = h
+			h += 34.0 * smoothstep(rim, 1.0, edge)
+			heights[j * height_res + i] = h
 
 
 func _flatten(c: Vector2, inner: float, outer: float) -> void:
@@ -89,38 +111,40 @@ func _flatten(c: Vector2, inner: float, outer: float) -> void:
 	var r := int(ceil(outer / STEP)) + 1
 	var ci := int(round(c.x / STEP))
 	var cj := int(round(c.y / STEP))
-	for j in range(maxi(0, cj - r), mini(RES, cj + r + 1)):
-		for i in range(maxi(0, ci - r), mini(RES, ci + r + 1)):
+	for j in range(maxi(0, cj - r), mini(height_res, cj + r + 1)):
+		for i in range(maxi(0, ci - r), mini(height_res, ci + r + 1)):
 			var d := Vector2(i * STEP, j * STEP).distance_to(c)
 			if d > outer:
 				continue
 			var w := 1.0 - smoothstep(inner, outer, d)
-			var k := j * RES + i
+			var k := j * height_res + i
 			heights[k] = lerpf(heights[k], target, w)
 
 
 func _pick_starts() -> void:
-	var c := Vector2(Defs.MAP_SIZE, Defs.MAP_SIZE) * 0.5
-	var lo := Defs.EDGE_MARGIN
-	var hi := Defs.MAP_SIZE - Defs.EDGE_MARGIN
+	var c := Vector2(size, size) * 0.5
+	var lo: float = config["margin"]
+	var hi := size - lo
+	var min_d: float = config["min_start"]
+	var jitter := 40.0 * size_scale
 	var best: Array[Vector2] = []
 	var best_score := -INF
 	for attempt in 80:
 		var dir := Vector2.from_angle(rng.randf() * TAU)
 		var side := Vector2(-dir.y, dir.x)
-		var r := rng.randf_range(Defs.MIN_START_DISTANCE * 0.5 + 8.0, 430.0)
-		var a := c + dir * r + side * rng.randf_range(-40.0, 40.0)
-		var b := c - dir * r + side * rng.randf_range(-40.0, 40.0)
+		var r := rng.randf_range(min_d * 0.5 + 8.0, 430.0 * size_scale)
+		var a := c + dir * r + side * rng.randf_range(-jitter, jitter)
+		var b := c - dir * r + side * rng.randf_range(-jitter, jitter)
 		if a.x < lo or a.x > hi or a.y < lo or a.y > hi or b.x < lo or b.x > hi or b.y < lo or b.y > hi:
 			continue
-		if a.distance_to(b) < Defs.MIN_START_DISTANCE:
+		if a.distance_to(b) < min_d:
 			continue
 		var score := -(_roughness(a) + _roughness(b)) + rng.randf() * 2.0
 		if score > best_score:
 			best_score = score
 			best = [a, b]
 	if best.is_empty():
-		best = [Vector2(220, 800), Vector2(800, 220)]
+		best = [Vector2(220, 800) * size_scale, Vector2(800, 220) * size_scale]
 	starts = best
 
 
@@ -133,17 +157,17 @@ func _roughness(p: Vector2) -> float:
 
 
 func height_at(x: float, z: float) -> float:
-	var fx := clampf(x / STEP, 0.0, RES - 1.001)
-	var fz := clampf(z / STEP, 0.0, RES - 1.001)
+	var fx := clampf(x / STEP, 0.0, height_res - 1.001)
+	var fz := clampf(z / STEP, 0.0, height_res - 1.001)
 	var i := int(fx)
 	var j := int(fz)
 	var tx := fx - i
 	var tz := fz - j
-	var k := j * RES + i
+	var k := j * height_res + i
 	var h00 := heights[k]
 	var h10 := heights[k + 1]
-	var h01 := heights[k + RES]
-	var h11 := heights[k + RES + 1]
+	var h01 := heights[k + height_res]
+	var h11 := heights[k + height_res + 1]
 	return lerpf(lerpf(h00, h10, tx), lerpf(h01, h11, tx), tz)
 
 
@@ -161,7 +185,7 @@ func slope_deg(x: float, z: float) -> float:
 
 
 func in_bounds(p: Vector2, margin: float = 4.0) -> bool:
-	return p.x >= margin and p.y >= margin and p.x <= Defs.MAP_SIZE - margin and p.y <= Defs.MAP_SIZE - margin
+	return p.x >= margin and p.y >= margin and p.x <= size - margin and p.y <= size - margin
 
 
 func pos3(p: Vector2, lift: float = 0.0) -> Vector3:
@@ -197,11 +221,10 @@ func _forest_map() -> void:
 	fn.seed = seed_value + 51
 	fn.frequency = 0.0065
 	fn.fractal_octaves = 3
-	forest.resize(FOREST_RES * FOREST_RES)
-	var cell := Defs.MAP_SIZE / FOREST_RES
-	for j in FOREST_RES:
-		for i in FOREST_RES:
-			var p := Vector2((i + 0.5) * cell, (j + 0.5) * cell)
+	forest.resize(forest_res * forest_res)
+	for j in forest_res:
+		for i in forest_res:
+			var p := Vector2((i + 0.5) * FOREST_CELL, (j + 0.5) * FOREST_CELL)
 			var d := smoothstep(0.02, 0.32, fn.get_noise_2d(p.x, p.y))
 			for s in starts:
 				var dist := p.distance_to(s)
@@ -211,14 +234,13 @@ func _forest_map() -> void:
 					d *= 0.35
 			if slope_deg(p.x, p.y) > 32.0:
 				d *= 0.3
-			forest[j * FOREST_RES + i] = d
+			forest[j * forest_res + i] = d
 
 
 func forest_at(x: float, z: float) -> float:
-	var cell := Defs.MAP_SIZE / FOREST_RES
-	var i := clampi(int(x / cell), 0, FOREST_RES - 1)
-	var j := clampi(int(z / cell), 0, FOREST_RES - 1)
-	return forest[j * FOREST_RES + i]
+	var i := clampi(int(x / FOREST_CELL), 0, forest_res - 1)
+	var j := clampi(int(z / FOREST_CELL), 0, forest_res - 1)
+	return forest[j * forest_res + i]
 
 
 func _add(kind: String, sub: String, p: Vector2, amount: float, scale: float = 1.0) -> RNode:
@@ -264,7 +286,9 @@ func _too_close_to_nodes(p: Vector2, r: float) -> bool:
 func _place_nodes() -> void:
 	nodes.clear()
 	herds.clear()
-	var size := Defs.MAP_SIZE
+	var k_size := size_scale
+	var k_area := k_size * k_size
+	var kit: Vector2 = config["kit"]
 	# Camp essentials first, so both sides get the same kit at similar distances.
 	for s in starts:
 		for c in 3:
@@ -281,7 +305,7 @@ func _place_nodes() -> void:
 		for dep in Defs.DEPOSITS:
 			var dp := Vector2.ZERO
 			for attempt in 20:
-				dp = _free_spot(s, 120.0, 200.0, 30.0)
+				dp = _free_spot(s, kit.x, kit.y, 30.0)
 				var ok := true
 				for u in used:
 					if u.distance_to(dp) < 45.0:
@@ -296,37 +320,38 @@ func _place_nodes() -> void:
 			for k in 40:
 				var tp := gp + Vector2.from_angle(rng.randf() * TAU) * sqrt(rng.randf()) * 22.0
 				_add("tree", "oak" if rng.randf() < 0.6 else "pine", tp, 40.0, rng.randf_range(0.8, 1.25))
-		herds.append({"kind": "deer", "pos": _free_spot(s, 130.0, 200.0, 5.0), "count": 5})
+		herds.append({"kind": "deer", "pos": _free_spot(s, kit.x + 10.0, kit.y, 5.0), "count": 5})
 	# Contested deposits in the middle band between the camps.
 	var mid := (starts[0] + starts[1]) * 0.5
 	for dep in Defs.DEPOSITS:
 		for k in 2:
-			_add("deposit", dep, _free_spot(mid, 40.0, 200.0, 40.0), -1.0)
-	for k in 6:
-		var p := _free_spot(Vector2(rng.randf_range(120, size - 120), rng.randf_range(120, size - 120)), 0.0, 10.0, 30.0)
-		if not _near_start(p, 180.0):
+			_add("deposit", dep, _free_spot(mid, 40.0 * k_size, 200.0 * k_size, 40.0), -1.0)
+	var inset := 120.0 * k_size
+	for k in roundi(6 * k_area):
+		var p := _free_spot(Vector2(rng.randf_range(inset, size - inset), rng.randf_range(inset, size - inset)), 0.0, 10.0, 30.0)
+		if not _near_start(p, 180.0 * k_size):
 			_add("rock", "outcrop", p, -1.0, rng.randf_range(1.0, 1.4))
-	for k in 45:
+	for k in roundi(45 * k_area):
 		var p := Vector2(rng.randf_range(40, size - 40), rng.randf_range(40, size - 40))
-		if _near_start(p, 120.0):
+		if _near_start(p, 120.0 * k_size):
 			continue
 		for b in rng.randi_range(2, 5):
 			_add("rock", "boulder", p + Vector2(rng.randf_range(-7, 7), rng.randf_range(-7, 7)), 120.0, rng.randf_range(0.7, 1.6))
-	for k in 30:
+	for k in roundi(30 * k_area):
 		var p := Vector2(rng.randf_range(60, size - 60), rng.randf_range(60, size - 60))
-		if _near_start(p, 140.0):
+		if _near_start(p, 140.0 * k_size):
 			continue
 		for b in rng.randi_range(3, 5):
 			_add("berry", "bush", p + Vector2(rng.randf_range(-6, 6), rng.randf_range(-6, 6)), 80.0, rng.randf_range(0.8, 1.2))
 	# Wild horses roam the middle of the map; deer are everywhere.
-	for k in 4:
-		var p := _free_spot(mid, 60.0, 300.0, 5.0)
-		if _near_start(p, 230.0):
-			p = mid + Vector2.from_angle(rng.randf() * TAU) * 80.0
+	for k in roundi(4 * k_size):
+		var p := _free_spot(mid, 60.0 * k_size, 300.0 * k_size, 5.0)
+		if _near_start(p, 230.0 * k_size):
+			p = mid + Vector2.from_angle(rng.randf() * TAU) * 80.0 * k_size
 		herds.append({"kind": "horse", "pos": p, "count": 6})
-	for k in 6:
+	for k in roundi(6 * k_area):
 		var p := Vector2(rng.randf_range(100, size - 100), rng.randf_range(100, size - 100))
-		if not _near_start(p, 160.0):
+		if not _near_start(p, 160.0 * k_size):
 			herds.append({"kind": "deer", "pos": p, "count": 5})
 	# Forests.
 	var tree_noise := FastNoiseLite.new()

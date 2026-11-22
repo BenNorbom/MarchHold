@@ -349,7 +349,7 @@ The first goal was to see how far built-in tools, procedural generation and free
 **In v0.1.0 (all free):**
 
 - **Lighting and atmosphere:** a procedural sky shader with drifting clouds, a sun with soft 4-split shadows, AgX tone mapping, aerial-perspective fog, glow, and SSAO (Medium) or SSIL and volumetric fog (High).
-- **Terrain:** a 1 km heightmap per seed, chunked with levels of detail. A splat-mapped shader blends grass, forest floor, dirt and triplanar rock by slope, height and noise, using CC0 **Poly Haven** photo textures. The ground wears to dirt around buildings.
+- **Terrain:** a heightmap per seed (512 m, 768 m or 1 km across), chunked with levels of detail. A splat-mapped shader blends grass, forest floor, dirt and triplanar rock by slope, height and noise, using CC0 **Poly Haven** photo textures. The ground wears to dirt around buildings.
 - **Vegetation:** about 10,000 procedurally modelled oaks and pines (alpha-cut leaf and needle cards, wind sway, two levels of detail), instanced grass around the commander, and berry bushes.
 - **Buildings and walls:** all 17 structures modelled in code from parts (timber frames, planks, thatch, dressed stone, plaster), with PBR textures. Construction is shown as the building rising course by course. Armory and smelter tiers look different.
 - **People and animals:** procedural mannequins and quadrupeds, animated on the GPU (walking, running, chopping, hammering, fighting, shooting, riding, grazing), with tools, weapons, shields, armour, carried loads, and the commander's crown and cloak.
@@ -415,7 +415,7 @@ Rewritten in GDScript for Godot 4, keeping the design:
 
 ## 16. Decisions (formerly open questions)
 
-1. **Map:** 1 km × 1 km, a random seed every match, and the two camps are never closer than 620 m (and at least 150 m from the edge).
+1. **Map:** a random seed every match, in three sizes. Small is 512 m (camps at least 320 m apart, 100 m from the edge), Medium is 768 m (460 m, 125 m) and is the default, Large is 1 km (620 m, 150 m) and is the biggest for 1v1. The tutorial always uses Large.
 2. **Commander death:** ends the match. Both commanders wear a **crown**, so you can find and kill Rook.
 3. **Rivers:** none at first. Worth adding later as obstacles with fords and bridges.
 4. **Tin:** dropped. Copper and tin are merged into a single **bronze ore**.

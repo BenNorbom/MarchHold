@@ -5,14 +5,10 @@ extends RefCounted
 const Defs = preload("res://scripts/data/defs.gd")
 const Terrain = preload("res://scripts/world/terrain.gd")
 
-const GRID := 512                    # path grid cells per side
-const CELL := Defs.MAP_SIZE / GRID   # 2 m
-const KRES := 128                    # knowledge grid cells per side
-const KCELL := Defs.MAP_SIZE / KRES  # 8 m
+const CELL := 2.0                    # path grid cell in metres
+const KCELL := 8.0                   # knowledge grid cell in metres
 const BUCKET := 16.0
-const NB := 64
 const NODE_BUCKET := 32.0
-const NNB := 32
 const STEEP := 38.0
 const MAX_PATHS_PER_TICK := 14
 
@@ -186,6 +182,12 @@ class Shot:
 
 
 var terrain: Terrain
+var map_size := 0.0
+# Cells per side of each grid, set from the map size.
+var grid_n := 0                      # pathing
+var kres := 0                        # knowledge
+var bucket_n := 0                    # unit hash
+var node_bucket_n := 0               # resource node hash
 var t := 0.0
 var ticks := 0
 var rng := RandomNumberGenerator.new()
@@ -216,43 +218,48 @@ var node_buckets: Array = []
 
 func _init_world(tr: Terrain) -> void:
 	terrain = tr
-	terrain_solid.resize(GRID * GRID)
-	for j in GRID:
-		for i in GRID:
+	map_size = tr.size
+	grid_n = int(map_size / CELL)
+	kres = int(map_size / KCELL)
+	bucket_n = int(map_size / BUCKET)
+	node_bucket_n = int(map_size / NODE_BUCKET)
+	terrain_solid.resize(grid_n * grid_n)
+	for j in grid_n:
+		for i in grid_n:
 			var p := Vector2((i + 0.5) * CELL, (j + 0.5) * CELL)
 			var solid := terrain.slope_deg(p.x, p.y) > STEEP or not terrain.in_bounds(p, 3.0)
-			terrain_solid[j * GRID + i] = 1 if solid else 0
+			terrain_solid[j * grid_n + i] = 1 if solid else 0
 	grids.clear()
 	for f in 2:
 		var g := AStarGrid2D.new()
-		g.region = Rect2i(0, 0, GRID, GRID)
+		g.region = Rect2i(0, 0, grid_n, grid_n)
 		g.cell_size = Vector2(1, 1)
 		g.diagonal_mode = AStarGrid2D.DIAGONAL_MODE_ONLY_IF_NO_OBSTACLES
 		g.default_compute_heuristic = AStarGrid2D.HEURISTIC_OCTILE
 		g.default_estimate_heuristic = AStarGrid2D.HEURISTIC_OCTILE
 		g.jumping_enabled = true
 		g.update()
-		for j in GRID:
-			for i in GRID:
-				if terrain_solid[j * GRID + i] == 1:
+		for j in grid_n:
+			for i in grid_n:
+				if terrain_solid[j * grid_n + i] == 1:
 					g.set_point_solid(Vector2i(i, j), true)
 		grids.append(g)
 	node_buckets.clear()
-	node_buckets.resize(NNB * NNB)
-	for k in NNB * NNB:
+	node_buckets.resize(node_bucket_n * node_bucket_n)
+	for k in node_bucket_n * node_bucket_n:
 		node_buckets[k] = PackedInt32Array()
 	for n in terrain.nodes:
 		_bucket_node(n)
-	uhead.resize(NB * NB)
+	uhead.resize(bucket_n * bucket_n)
 	uhead.fill(-1)
 
 
 func _bucket_node(n) -> void:
-	var bi := clampi(int(n.pos.x / NODE_BUCKET), 0, NNB - 1)
-	var bj := clampi(int(n.pos.y / NODE_BUCKET), 0, NNB - 1)
-	var arr: PackedInt32Array = node_buckets[bj * NNB + bi]
+	var bi := clampi(int(n.pos.x / NODE_BUCKET), 0, node_bucket_n - 1)
+	var bj := clampi(int(n.pos.y / NODE_BUCKET), 0, node_bucket_n - 1)
+	var arr: PackedInt32Array = node_buckets[bj * node_bucket_n + bi]
 	arr.append(n.id)
-	node_buckets[bj * NNB + bi] = arr
+	node_buckets[bj * node_bucket_n + bi] = arr
 
 
 func new_id() -> int:
@@ -436,7 +443,7 @@ func nearest_dropoff(faction: int, p: Vector2, res: String) -> Building:
 # --- Grid and pathing ----------------------------------------------------------------
 
 func cell_of(p: Vector2) -> Vector2i:
-	return Vector2i(clampi(int(p.x / CELL), 0, GRID - 1), clampi(int(p.y / CELL), 0, GRID - 1))
+	return Vector2i(clampi(int(p.x / CELL), 0, grid_n - 1), clampi(int(p.y / CELL), 0, grid_n - 1))
 
 
 func cell_center(c: Vector2i) -> Vector2:
@@ -444,10 +451,10 @@ func cell_center(c: Vector2i) -> Vector2:
 
 
 func solid_for(faction: int, c: Vector2i) -> bool:
-	if c.x < 0 or c.y < 0 or c.x >= GRID or c.y >= GRID:
+	if c.x < 0 or c.y < 0 or c.x >= grid_n or c.y >= grid_n:
 		return true
 	if faction < 0 or faction > 1:
-		return terrain_solid[c.y * GRID + c.x] == 1 or grids[0].is_point_solid(c)
+		return terrain_solid[c.y * grid_n + c.x] == 1 or grids[0].is_point_solid(c)
 	return grids[faction].is_point_solid(c)
 
 
@@ -527,7 +534,7 @@ func _cells_of(b: Building) -> PackedInt32Array:
 		for i in range(c0.x, c1.x + 1):
 			var d := cell_center(Vector2i(i, j)) - b.pos
 			if absf(d.dot(ax)) <= half.x and absf(d.dot(az)) <= half.y:
-				out.append(j * GRID + i)
+				out.append(j * grid_n + i)
 	return out
 
 
@@ -541,7 +548,7 @@ func _block(b: Building) -> void:
 	b.blocking = true
 	var gate: bool = d.get("gate", false)
 	for k in b.cells:
-		var c := Vector2i(k % GRID, k / GRID)
+		var c := Vector2i(k % grid_n, k / grid_n)
 		for f in 2:
 			if gate and f == b.faction:
 				continue
@@ -551,7 +558,7 @@ func _block(b: Building) -> void:
 		if u.dead:
 			continue
 		var cu := cell_of(u.pos)
-		if b.cells.has(cu.y * GRID + cu.x):
+		if b.cells.has(cu.y * grid_n + cu.x):
 			var f := clampi(u.faction, 0, 1)
 			u.pos = cell_center(nearest_free_cell(f, cu))
 			u.prev = u.pos
@@ -563,7 +570,7 @@ func _unblock(b: Building) -> void:
 		return
 	b.blocking = false
 	for k in b.cells:
-		var c := Vector2i(k % GRID, k / GRID)
+		var c := Vector2i(k % grid_n, k / grid_n)
 		if terrain_solid[k] == 1:
 			continue
 		var still := false
@@ -587,9 +594,9 @@ func rebuild_unit_hash() -> void:
 	unext.resize(ulist.size())
 	for i in ulist.size():
 		var p: Vector2 = ulist[i].pos
-		var bi := clampi(int(p.x / BUCKET), 0, NB - 1)
-		var bj := clampi(int(p.y / BUCKET), 0, NB - 1)
-		var k := bj * NB + bi
+		var bi := clampi(int(p.x / BUCKET), 0, bucket_n - 1)
+		var bj := clampi(int(p.y / BUCKET), 0, bucket_n - 1)
+		var k := bj * bucket_n + bi
 		unext[i] = uhead[k]
 		uhead[k] = i
 
@@ -598,11 +605,11 @@ func rebuild_unit_hash() -> void:
 func units_near(p: Vector2, r: float, faction_mode: int = -2, of: int = -1) -> Array:
 	var out := []
 	var r2 := r * r
-	var b0 := Vector2i(clampi(int((p.x - r) / BUCKET), 0, NB - 1), clampi(int((p.y - r) / BUCKET), 0, NB - 1))
-	var b1 := Vector2i(clampi(int((p.x + r) / BUCKET), 0, NB - 1), clampi(int((p.y + r) / BUCKET), 0, NB - 1))
+	var b0 := Vector2i(clampi(int((p.x - r) / BUCKET), 0, bucket_n - 1), clampi(int((p.y - r) / BUCKET), 0, bucket_n - 1))
+	var b1 := Vector2i(clampi(int((p.x + r) / BUCKET), 0, bucket_n - 1), clampi(int((p.y + r) / BUCKET), 0, bucket_n - 1))
 	for bj in range(b0.y, b1.y + 1):
 		for bi in range(b0.x, b1.x + 1):
-			var i := uhead[bj * NB + bi]
+			var i := uhead[bj * bucket_n + bi]
 			while i != -1:
 				var u: Unit = ulist[i]
 				i = unext[i]
@@ -636,7 +643,7 @@ func nearest_node(kind: String, p: Vector2, maxr: float, filter: Callable = Call
 	var best = null
 	var bd := maxr * maxr
 	var ring := int(ceil(maxr / NODE_BUCKET))
-	var bc := Vector2i(clampi(int(p.x / NODE_BUCKET), 0, NNB - 1), clampi(int(p.y / NODE_BUCKET), 0, NNB - 1))
+	var bc := Vector2i(clampi(int(p.x / NODE_BUCKET), 0, node_bucket_n - 1), clampi(int(p.y / NODE_BUCKET), 0, node_bucket_n - 1))
 	for r in ring + 1:
 		# Stop early once a ring can't hold anything nearer than the best so far.
 		if best != null and (r - 1) * NODE_BUCKET > sqrt(bd):
@@ -647,9 +654,9 @@ func nearest_node(kind: String, p: Vector2, maxr: float, filter: Callable = Call
 					continue
 				var bi := bc.x + dx
 				var bj := bc.y + dy
-				if bi < 0 or bj < 0 or bi >= NNB or bj >= NNB:
+				if bi < 0 or bj < 0 or bi >= node_bucket_n or bj >= node_bucket_n:
 					continue
-				for nid in node_buckets[bj * NNB + bi]:
+				for nid in node_buckets[bj * node_bucket_n + bi]:
 					var n = terrain.nodes[nid]
 					if n.kind != kind or n.amount == 0.0:
 						continue
@@ -690,23 +697,23 @@ func take_from_node(n, want: float) -> float:
 # --- Knowledge -----------------------------------------------------------------------
 
 func kcell(p: Vector2) -> int:
-	var i := clampi(int(p.x / KCELL), 0, KRES - 1)
-	var j := clampi(int(p.y / KCELL), 0, KRES - 1)
-	return j * KRES + i
+	var i := clampi(int(p.x / KCELL), 0, kres - 1)
+	var j := clampi(int(p.y / KCELL), 0, kres - 1)
+	return j * kres + i
 
 
 func kcells_in(p: Vector2, r: float) -> PackedInt32Array:
 	var out := PackedInt32Array()
-	var i0 := clampi(int((p.x - r) / KCELL), 0, KRES - 1)
-	var i1 := clampi(int((p.x + r) / KCELL), 0, KRES - 1)
-	var j0 := clampi(int((p.y - r) / KCELL), 0, KRES - 1)
-	var j1 := clampi(int((p.y + r) / KCELL), 0, KRES - 1)
+	var i0 := clampi(int((p.x - r) / KCELL), 0, kres - 1)
+	var i1 := clampi(int((p.x + r) / KCELL), 0, kres - 1)
+	var j0 := clampi(int((p.y - r) / KCELL), 0, kres - 1)
+	var j1 := clampi(int((p.y + r) / KCELL), 0, kres - 1)
 	var r2 := r * r
 	for j in range(j0, j1 + 1):
 		for i in range(i0, i1 + 1):
 			var c := Vector2((i + 0.5) * KCELL, (j + 0.5) * KCELL)
 			if c.distance_squared_to(p) <= r2:
-				out.append(j * KRES + i)
+				out.append(j * kres + i)
 	return out
 
 

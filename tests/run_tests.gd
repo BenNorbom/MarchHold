@@ -22,7 +22,7 @@ func _initialize() -> void:
 
 func _run_tests() -> void:
 	var only := OS.get_environment("MH_TEST")
-	var tests := ["defs", "validation", "terrain", "economy", "crews", "selection", "walls", "combat", "parser", "schema", "chatgpt", "terra_orders", "duel"]
+	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "crews", "selection", "walls", "combat", "parser", "schema", "chatgpt", "terra_orders", "duel"]
 	var t0 := Time.get_ticks_msec()
 	for name in tests:
 		if only != "" and only != name:
@@ -123,14 +123,21 @@ func test_validation() -> void:
 
 
 func test_terrain() -> void:
+	for id in Defs.MAP_SIZES:
+		_check_terrain(id)
+
+
+func _check_terrain(id: String) -> void:
+	var info: Dictionary = Defs.MAP_SIZES[id]
+	var margin: float = info["margin"]
 	for s in range(1, 13):
 		var tr = Terrain.new()
-		tr.generate(s * 977)
+		tr.generate(s * 977, id)
 		var a: Vector2 = tr.starts[0]
 		var b: Vector2 = tr.starts[1]
-		check(a.distance_to(b) >= Defs.MIN_START_DISTANCE, "seed %d camps %.0f m apart" % [s, a.distance_to(b)])
+		check(a.distance_to(b) >= info["min_start"], "%s seed %d camps %.0f m apart" % [id, s, a.distance_to(b)])
 		for p in [a, b]:
-			check(p.x >= Defs.EDGE_MARGIN - 1 and p.y >= Defs.EDGE_MARGIN - 1 and p.x <= Defs.MAP_SIZE - Defs.EDGE_MARGIN + 1 and p.y <= Defs.MAP_SIZE - Defs.EDGE_MARGIN + 1, "seed %d camp inside margins" % s)
+			check(tr.in_bounds(p, margin - 1), "%s seed %d camp inside margins" % [id, s])
 			var kinds := {}
 			for n in tr.nodes:
 				var d: float = n.pos.distance_to(p)
@@ -143,9 +150,9 @@ func test_terrain() -> void:
 				if n.kind == "rock" and n.sub == "outcrop" and d < 160.0:
 					kinds["outcrop"] = true
 			for k in ["berry", "tree", "bronze_ore", "coal", "iron_ore", "outcrop"]:
-				check(kinds.has(k), "seed %d: %s near camp" % [s, k])
+				check(kinds.has(k), "%s seed %d: %s near camp" % [id, s, k])
 		if s == 1:
-			print("  trees: %d, nodes: %d" % [tr.count_nodes("tree"), tr.nodes.size()])
+			print("  %s: trees %d, nodes %d" % [id, tr.count_nodes("tree"), tr.nodes.size()])
 
 
 func test_economy() -> void:
@@ -423,6 +430,20 @@ func test_terra_orders() -> void:
 	var huts: Array = m.buildings_of(0, "hut", false)
 	check(not game.placing and worker.task == "build" and huts.size() == 1 and huts[0].pos == game.place_pos, "the chosen site becomes the addressed villager's construction job")
 	game.free()
+
+
+func test_map_sizes() -> void:
+	for id in Defs.MAP_SIZES:
+		var m = Match.new()
+		m.setup({"seed": 4242, "map": id})
+		var size: float = Defs.MAP_SIZES[id]["size"]
+		var far := Vector2(size - 1, size - 1)
+		check(m.map_size == size, "%s match is %d m across" % [id, size])
+		check(m.fac(0).knowledge.size() == m.kres * m.kres and m.kcell(far) == m.kres * m.kres - 1, "%s knowledge covers the map" % id)
+		check(m.cell_of(far) == Vector2i(m.grid_n - 1, m.grid_n - 1), "%s path grid covers the map" % id)
+		var a: Vector2i = m.nearest_free_cell(0, m.cell_of(m.home_pos(0)))
+		var b: Vector2i = m.nearest_free_cell(0, m.cell_of(m.home_pos(1)))
+		check(not m.grids[0].get_id_path(a, b).is_empty(), "%s camps can reach each other" % id)
 
 
 func test_duel() -> void:

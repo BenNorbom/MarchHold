@@ -20,7 +20,7 @@ func _ready() -> void:
 func setup(match_ref, map_img: Image) -> void:
 	m = match_ref
 	base_tex = ImageTexture.create_from_image(map_img)
-	fog_img = Image.create(128, 128, false, Image.FORMAT_RGBA8)
+	fog_img = Image.create(m.kres, m.kres, false, Image.FORMAT_RGBA8)
 	fog_tex = ImageTexture.create_from_image(fog_img)
 	font = get_theme_default_font()
 
@@ -30,9 +30,10 @@ func refresh() -> void:
 		return
 	var f = m.fac(0)
 	var now: float = m.t
-	for j in 128:
-		for i in 128:
-			var seen: float = f.knowledge[j * 128 + i]
+	var n: int = m.kres
+	for j in n:
+		for i in n:
+			var seen: float = f.knowledge[j * n + i]
 			var col: Color
 			if seen < 0.0:
 				col = Color(0.86, 0.79, 0.62, 1.0)
@@ -50,7 +51,7 @@ func _rect() -> Rect2:
 
 
 func _to_screen(r: Rect2, p: Vector2) -> Vector2:
-	return r.position + p / Defs.MAP_SIZE * r.size
+	return r.position + p / m.map_size * r.size
 
 
 func _ago(t: float) -> String:
@@ -70,20 +71,21 @@ func _draw() -> void:
 	var f = m.fac(0)
 	var ink := Color(0.22, 0.15, 0.08)
 	# Known terrain features.
+	var show_names := bool(Settings.get_val("resource_labels", true))
 	for n in m.terrain.nodes:
-		if n.kind != "deposit" and not (n.kind == "rock" and n.sub == "outcrop"):
+		var title: String = n.landmark_name()
+		if title == "":
 			continue
 		var k: int = m.kcell(n.pos)
 		if f.knowledge[k] < 0.0:
 			continue
 		var p := _to_screen(r, n.pos)
 		var col := Color(0.35, 0.33, 0.3)
-		var label := "rock"
 		if n.kind == "deposit":
 			col = {"bronze_ore": Color(0.2, 0.55, 0.45), "coal": Color(0.08, 0.08, 0.08), "iron_ore": Color(0.6, 0.25, 0.15)}[n.sub]
-			label = Defs.RESOURCE_NAMES[n.sub]
 		draw_circle(p, 4.5, col)
-		draw_string(font, p + Vector2(6, 4), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(ink, 0.8))
+		if show_names:
+			draw_string(font, p + Vector2(6, 4), title, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, ink)
 	# Your buildings.
 	for b in m.buildings:
 		if b.dead or b.faction != 0:
@@ -132,7 +134,7 @@ func _draw() -> void:
 	draw_line(cr + Vector2(0, -22), cr + Vector2(0, 22), ink, 2.0)
 	draw_line(cr + Vector2(-22, 0), cr + Vector2(22, 0), ink, 1.0)
 	draw_string(font, cr + Vector2(-6, -26), "N", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, ink)
-	var px100 := 100.0 / Defs.MAP_SIZE * r.size.x
+	var px100: float = 100.0 / m.map_size * r.size.x
 	var sb := r.position + Vector2(24, r.size.y - 26)
 	draw_line(sb, sb + Vector2(px100, 0), ink, 3.0)
 	draw_string(font, sb + Vector2(0, -6), "100 m", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, ink)

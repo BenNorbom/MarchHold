@@ -3,19 +3,27 @@ extends RefCounted
 ## schema sent to Terra, the slash menus, the ledger, the tech tree and the AI
 ## rival's options are all generated from these tables.
 
-const VERSION := "0.3.2"
+const VERSION := "0.4.0"
 
 # --- World -------------------------------------------------------------------
-const MAP_SIZE := 1024.0          # metres per side (about 1 km x 1 km)
+# size: metres per side, a multiple of 256 so every grid and terrain chunk divides evenly.
+# min_start: the camps are never closer than this. margin: camps keep this far from the edge.
+# kit: how far each camp's own deposits and deer are. Kept under half of min_start,
+# so they always lie on that camp's side of the map.
+const MAP_SIZES := {
+	"small": {"name": "Small", "size": 512, "min_start": 320.0, "margin": 100.0, "kit": Vector2(90, 150)},
+	"medium": {"name": "Medium", "size": 768, "min_start": 460.0, "margin": 125.0, "kit": Vector2(120, 200)},
+	"large": {"name": "Large", "size": 1024, "min_start": 620.0, "margin": 150.0, "kit": Vector2(120, 200)},
+}
+const MAP_DEFAULT := "medium"     # preselected for a new match
+const MAP_LARGEST := "large"      # the reference size; also used by the tutorial
 const TICK := 0.1                 # simulation step in seconds (10 Hz)
-const MIN_START_DISTANCE := 620.0 # the two camps are never closer than this
-const EDGE_MARGIN := 150.0        # camps keep this far from the map edge
 
 # --- Population --------------------------------------------------------------
 const START_VILLAGERS := 6
 const POP_HARD_CAP := 200
 const MATURE_TIME := 90.0         # seconds for a child to grow up
-const BIRTH_SECONDS_PER_ADULT := 240.0  # one birth per adult every 240 s -> 1 per 4 adults per minute
+const BIRTH_SECONDS_PER_ADULT := 300.0  # one birth per adult every 300 s -> 1 per 5 adults per minute
 const RATION_ADULT := 0.025       # food per second
 const RATION_CHILD := 0.0125
 const WELL_FED_STOCK := 3.0       # food in store per person to count as well fed

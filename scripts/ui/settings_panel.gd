@@ -28,6 +28,7 @@ var limit: SpinBox
 var invert: CheckBox
 var full: CheckBox
 var hints: CheckBox
+var resource_labels: CheckBox
 
 
 func _ready() -> void:
@@ -90,6 +91,11 @@ func _ready() -> void:
 	hints.button_pressed = bool(Settings.get_val("hints", true))
 	checks.add_child(hints)
 	grid.add_child(checks)
+	_label(grid, "")
+	resource_labels = CheckBox.new()
+	resource_labels.text = "Name stone and ore in the world and on the map"
+	resource_labels.button_pressed = bool(Settings.get_val("resource_labels", true))
+	grid.add_child(resource_labels)
 	var note := Label.new()
 	note.theme_type_variation = "Small"
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -337,6 +343,7 @@ func _save() -> void:
 	Settings.data["invert_y"] = invert.button_pressed
 	Settings.data["fullscreen"] = full.button_pressed
 	Settings.data["hints"] = hints.button_pressed
+	Settings.data["resource_labels"] = resource_labels.button_pressed
 	Settings.save_all()
 	Settings.apply()
 	_close()
