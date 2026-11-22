@@ -1755,6 +1755,18 @@ func _complete(b: Building) -> void:
 		if n:
 			b.node = n.id
 			b.deposit = n.sub
+	if d.has("becomes"):
+		# A field-built siege engine: the site is replaced by the engine itself.
+		var e := spawn_unit(b.faction, d["becomes"], b.pos)
+		e.facing = b.rot
+		e.ammo = 0
+		remove_building(b, "became")
+		emit({"type": "unit", "id": e.id})
+		sound("complete", e.pos, b.faction)
+		_refresh_counts(fac(b.faction))
+		if b.faction == 0:
+			post(0, "The %s is finished. It needs a crew: 'man the %s'." % [d["name"].to_lower(), d["becomes"]], "done")
+		return
 	emit({"type": "building", "id": b.id})
 	sound("complete", b.pos, b.faction)
 	if b.type == "armory":

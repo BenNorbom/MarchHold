@@ -1138,6 +1138,8 @@ func unlock_problem(faction: int, type: String) -> String:
 		return "Needs the %s age: %s" % [Defs.AGES[d["age"]], Defs.AGE_HOW[d["age"]].to_lower()]
 	if type == "university" and not has_building(faction, "smelter"):
 		return "Needs a smelter."
+	if d.has("needs") and not f.researched.has(d["needs"]):
+		return "Needs the %s. Research it with /r." % Defs.RESEARCH[d["needs"]]["name"].to_lower()
 	return ""
 
 

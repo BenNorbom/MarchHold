@@ -63,7 +63,7 @@ static func _whole_number(value, maximum: int) -> bool:
 static func action_guide() -> String:
 	var lines: Array[String] = []
 	lines.append("gather: subject wood, stone, berries, hunt (deer near a stockpile or the campfire), farm (needs a farm), bronze_ore/coal/iron_ore (need a mine on that deposit). amount = units to deliver, 0 = keep going (last step only). Leave where empty unless a place is named: villagers then pick resources with the shortest haul to a drop-off.")
-	lines.append("build: subject is a structure id; the player places each site. One step builds one structure, or one whole wall line for palisade/stone_wall.")
+	lines.append("build: subject is a structure id; the player places each site. One step builds one structure, or one whole wall line for palisade/stone_wall. Subject ram has villagers build a battering ram in the field (needs the bronze armory research); craft ram makes one at the armory instead.")
 	lines.append("resume: carry on construction that is already placed (see unfinished), with no placement. subject is that structure id, or empty for whatever was left. Use it to continue, resume, finish or help with construction.")
 	lines.append("upgrade: subject smelter (smelter->iron furnace). Armories are not upgraded by hand: research armory_bronze, then armory_iron, and every armory improves.")
 	lines.append("craft: subject an item id; amount = how many items (0 = one batch). Siege items (cannon, ram) are made one per batch.")

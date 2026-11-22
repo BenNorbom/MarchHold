@@ -103,6 +103,12 @@ const BUILDINGS := {
 		"workers": 5, "near": "deposit", "near_dist": 22.0, "desc": "Placed on a bronze ore, coal or iron ore deposit."},
 	"smelter": {"name": "Smelter", "age": 1, "cost": {"stone": 125, "wood": 50}, "work": 100, "hp": 320,
 		"size": Vector2(6, 6), "workers": 3, "desc": "Bronze ore + coal -> bronze. Upgrades to an iron furnace."},
+	# Built in the field by villagers. When finished the site turns into a free battering ram (needs a crew, see "man").
+	# needs: research required first. becomes: the engine it turns into.
+	# keeps_arms: builders do NOT have to put their weapons down for this. See MERGE_NOTES.md: the stow-gear branch must honour it.
+	"ram": {"name": "Battering ram", "age": 2, "needs": "armory_bronze", "cost": {"wood": 40, "bronze": 5}, "work": 60,
+		"hp": 150, "size": Vector2(3, 6.5), "becomes": "ram", "keeps_arms": true,
+		"desc": "Villagers build a ram in the field. Needs the bronze armory."},
 	"university": {"name": "University", "age": 3, "cost": {"stone": 300, "wood": 200, "iron": 50}, "work": 200,
 		"hp": 650, "size": Vector2(12, 9), "desc": "Researches gunpowder."},
 }
@@ -242,7 +248,7 @@ const HOTKEYS := {
 			"p": "build:palisade", "g": "build:palisade_gate", "w": "build:watch_post", "q": "build:quarry"}},
 		"v": {"name": "Advanced structures", "keys": {
 			"w": "build:stone_wall", "g": "build:stone_gate", "t": "build:tower", "h": "build:stable", "m": "build:mine",
-			"s": "build:smelter", "u": "build:university",
+			"s": "build:smelter", "u": "build:university", "b": "build:ram",
 			"f": "upgrade:smelter", "r": "research:gunpowder"}},
 	},
 	"c": {

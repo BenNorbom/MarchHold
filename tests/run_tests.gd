@@ -1198,6 +1198,7 @@ func test_research() -> void:
 	f2.stock["stone"] = 500.0
 	f2.stock["iron"] = 500.0
 	check(m2.start_research(0, "armory_iron") != "", "iron armory needs the bronze armory first")
+	check(m2.unlock_problem(0, "ram").contains("bronze armory"), "a field ram needs the bronze armory")
 	var idle_before: int = m2.idle_adults(0, m2.home_pos(0)).size()
 	var res: Dictionary = m2.command(0, {"steps": [{"action": "research", "subject": "armory_bronze", "count": 0, "amount": 0, "where": ""}]})
 	check(res.get("ok", false), "the research order is accepted: %s" % res.get("error", ""))
@@ -1212,6 +1213,17 @@ func test_research() -> void:
 	m2._complete(a3)
 	check(a3.tier == 1, "an armory built later starts at the researched tier")
 	check(m2.armory_tier(0) == 1 and m2.craft_problem(0, "bronze_spear") == "", "bronze gear can be made")
+	# Villagers build a ram in the field; the finished site becomes a ram unit.
+	check(m2.unlock_problem(0, "ram") == "", "the bronze armory opens the field ram")
+	var rams_before: int = m2.units.filter(func(u): return u.kind == "ram" and not u.dead).size()
+	var rsite: Dictionary = m2.place_site(0, "ram", m2.home_pos(0) + Vector2(0, -45), 0.0)
+	check(rsite.get("ok", false), "a ram site can be placed: %s" % rsite.get("error", ""))
+	var rb: Dictionary = m2.command(0, {"all": true, "steps": [{"action": "build", "subject": "ram", "count": 0, "amount": 0, "where": "", "sites": [rsite["id"]]}]})
+	check(rb.get("ok", false), "villagers are told to build the ram: %s" % rb.get("error", ""))
+	run(m2, 120.0)
+	var gone = m2.bld(rsite["id"])
+	check(gone == null or gone.dead, "the finished ram site is gone")
+	check(m2.units.filter(func(u): return u.kind == "ram" and not u.dead).size() == rams_before + 1, "the site became a ram")
 	check(m2.start_research(0, "armory_iron") != "", "iron armory is still locked before the Iron age")
 	f2.age = 3
 	check(m2.start_research(0, "armory_iron") == "", "iron armory research starts in the Iron age")

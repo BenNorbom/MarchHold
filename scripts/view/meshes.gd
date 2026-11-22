@@ -77,6 +77,9 @@ func building(type: String, tier: int = 0, length: float = 4.0) -> ArrayMesh:
 			h = _smelter(g, size, tier)
 		"university":
 			h = _university(g, size)
+		"ram":
+			_ram(g)
+			h = 2.8
 	var mesh := g.finish()
 	cache[key] = mesh
 	heights[key] = h
@@ -982,6 +985,13 @@ func ram() -> ArrayMesh:
 	if cache.has("ram"):
 		return cache["ram"]
 	var g := _g(6)
+	_ram(g)
+	var mesh := g.finish()
+	cache["ram"] = mesh
+	return mesh
+
+
+func _ram(g) -> void:
 	g.slot("logs", m("roughwood"))
 	g.cylinder(Vector3(0, 1.0, -2.0), Vector3(0, 1.0, 2.4), 0.26, 0.24, 8, true)
 	for sx in [-1.0, 1.0]:
@@ -996,9 +1006,6 @@ func ram() -> ArrayMesh:
 	for sx in [-1.0, 1.0]:
 		for z in [-1.6, 1.6]:
 			g.cylinder(Vector3(sx * 0.95, 0.4, z), Vector3(sx * 1.05, 0.4, z), 0.4, 0.4, 10, true)
-	var mesh := g.finish()
-	cache["ram"] = mesh
-	return mesh
 
 
 func arrow() -> ArrayMesh:
