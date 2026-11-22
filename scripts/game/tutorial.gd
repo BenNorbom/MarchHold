@@ -9,7 +9,7 @@ const STEPS := [
 		"Welcome, commander. I'm Terra, your steward. Your six villagers are waiting by the fire. Walk over to one of them."],
 	["Your first order", "Look at a villager, press [b]Enter[/b], and type [b]gather wood[/b].",
 		"People do what you tell them. Look at someone, press Enter and type 'gather wood'."],
-	["A roof", "Type [b]/b[/b] (or press B) and build a [b]hut[/b]. It needs 20 wood, so let them chop first.",
+	["A roof", "Type [b]/b[/b] (or press B) and build a [b]hut[/b]. It needs {hut}, so let them chop first.",
 		"Only 8 people fit around a campfire. A hut houses 5 more. Open the build menu with /b and pick Hut, then click the ground to place it."],
 	["Well fed", "Feed the village: say [b]pick berries[/b], then build a [b]farm[/b] (/b). Wait for a birth.",
 		"Children are born only when the village is well fed and there is room. Berries are quick; a farm feeds people for good."],
@@ -49,7 +49,8 @@ func begin() -> void:
 
 func _show() -> void:
 	var s: Array = STEPS[step]
-	g.hud.set_objective("[color=#ffd870][b]The Founding[/b][/color]  ·  step %d of %d\n[b]%s[/b]\n%s" % [step + 1, STEPS.size(), s[0], s[1]])
+	var task: String = s[1].replace("{hut}", Defs.cost_text(Defs.BUILDINGS["hut"]["cost"]))
+	g.hud.set_objective("[color=#ffd870][b]The Founding[/b][/color]  ·  step %d of %d\n[b]%s[/b]\n%s" % [step + 1, STEPS.size(), s[0], task])
 	g.hud.log_line(s[2], "terra", "Terra")
 	step_t = 0.0
 	births0 = g.m.fac(0).births
@@ -139,7 +140,7 @@ func _raid_logic() -> void:
 	for k in 4:
 		var e = m.spawn_unit(1, "villager", start + Vector2(k * 1.6, (k % 2) * 1.5))
 		e.name = "Raider"
-		e.weapon = "club"
+		e.weapon = "wood_spear"
 		raid.append(e)
 	var c = m.make_crew(1, raid)
 	m.set_mark(1, home)

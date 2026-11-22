@@ -182,7 +182,7 @@ func _demo_buildings() -> void:
 	for k in 6:
 		var u = m.spawn_unit(0, "villager", home + Vector2(4 + k, 6))
 		u.name = "Demo"
-		u.weapon = ["wood_spear", "bronze_sword", "iron_pike", "", "club", "bronze_spear"][k]
+		u.weapon = ["wood_spear", "bronze_sword", "iron_pike", "", "wood_spear", "bronze_spear"][k]
 		u.shield = "bronze_shield" if k == 1 else ""
 		u.armor = "bronze_armor" if k == 1 else ""
 		u.bow = k == 3

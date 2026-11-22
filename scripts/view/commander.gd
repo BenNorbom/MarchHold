@@ -269,9 +269,6 @@ func _vm_weapon_mesh(weapon: String) -> Mesh:
 	var bronze := _flat(Color(0.72, 0.48, 0.24), 0.35, 0.9)
 	var tip := metal if weapon.begins_with("iron") else (bronze if weapon.begins_with("bronze") else wood)
 	match weapon:
-		"club":
-			g.slot("wood", wood)
-			g.cylinder(Vector3(0, -0.06, 0.05), Vector3(0, 0.5, -0.05), 0.022, 0.045, 7, true, 4.0)
 		"wood_spear", "bronze_spear", "iron_spear", "bronze_pike", "iron_pike":
 			g.slot("wood", wood)
 			g.cylinder(Vector3(0, -0.2, 0.5), Vector3(0, 0.3, -1.6), 0.022, 0.02, 6)

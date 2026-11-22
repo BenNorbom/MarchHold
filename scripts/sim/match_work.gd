@@ -1267,7 +1267,7 @@ func refill_quiver(u: Unit, f: Faction) -> void:
 
 
 func _equip_best(u: Unit, f: Faction) -> void:
-	var weapons := ["iron_sword", "iron_spear", "bronze_sword", "bronze_spear", "wood_spear", "club"]
+	var weapons := ["iron_sword", "iron_spear", "bronze_sword", "bronze_spear", "wood_spear"]
 	if u.mounted:
 		weapons = ["iron_lance", "bronze_lance"] + weapons
 	for w in weapons:

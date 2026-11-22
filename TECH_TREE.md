@@ -24,7 +24,7 @@ flowchart TB
     armory1(["Armory · wood"]):::key
     palisade(["Palisade + gate"]):::bld
     post(["Watch post"]):::bld
-    w_items["Club · wooden spear · wooden shield<br/>bow · stone-tipped arrows · militia"]:::item
+    w_items["Wooden spear · wooden shield<br/>bow · stone-tipped arrows · militia"]:::item
   end
 
   subgraph STONE["Stone age · ~3–5 min"]

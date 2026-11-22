@@ -321,7 +321,7 @@ func spawn_unit(faction: int, kind: String, p: Vector2) -> Unit:
 			u.female = rng.randf() < 0.5
 		"commander":
 			u.max_hp = Defs.COMMANDER["hp"]
-			u.weapon = "club"
+			u.weapon = "wood_spear"
 		"horse":
 			u.max_hp = 60.0
 			u.female = rng.randf() < 0.5

@@ -751,9 +751,6 @@ func item(name: String) -> ArrayMesh:
 	var hand_r := Vector3(-0.24, 0.77, 0.07)
 	var hand_l := Vector3(0.24, 0.77, 0.07)
 	match name:
-		"club":
-			_p(g, 3, 5)
-			g.cylinder(hand_r + Vector3(0, -0.05, -0.05), hand_r + Vector3(0, 0.05, 0.65), 0.03, 0.07, 6)
 		"wood_spear", "bronze_spear", "iron_spear":
 			_p(g, 3, 5)
 			g.cylinder(hand_r + Vector3(0, -0.6, 0), hand_r + Vector3(0, 1.45, 0.05), 0.022, 0.022, 5)

@@ -160,10 +160,11 @@ func test_economy() -> void:
 	var f = m.fac(0)
 	check(f.pop == Defs.START_VILLAGERS, "start with six villagers")
 	check(f.housing == 8, "campfire houses 8")
-	var r: Dictionary = m.command(0, {"steps": [step("gather", "wood", 30, "", 6)]})
+	var hut_wood := float(Defs.BUILDINGS["hut"]["cost"]["wood"])
+	var r: Dictionary = m.command(0, {"steps": [step("gather", "wood", int(hut_wood) + 30, "", 6)]})
 	check(r.get("ok", false), "gather order accepted: %s" % r.get("error", ""))
-	run(m, 70.0)
-	check(float(f.stock["wood"]) >= 20.0, "wood gathered (%.0f)" % float(f.stock["wood"]))
+	run(m, 150.0)
+	check(float(f.stock["wood"]) >= hut_wood, "wood gathered for a hut (%.0f of %.0f)" % [float(f.stock["wood"]), hut_wood])
 	var home: Vector2 = m.home_pos(0)
 	var site := {}
 	for k in 24:
@@ -313,7 +314,7 @@ func test_combat() -> void:
 	for k in 4:
 		var e = m.spawn_unit(1, "villager", home + Vector2(60, 0) + Vector2(k * 1.5, 0))
 		e.name = "Raider"
-		e.weapon = "club"
+		e.weapon = "wood_spear"
 		raiders.append(e)
 	var rc = m.make_crew(1, raiders)
 	rc.steps = [step("attack", "", 0, "")]
