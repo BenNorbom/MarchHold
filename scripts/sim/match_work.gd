@@ -689,7 +689,7 @@ func move_to(u: Unit, goal: Vector2, dt: float, arrive: float = 1.0, run: bool =
 		u.path = PackedVector2Array()
 		return true
 	if u.path.is_empty() or u.path_goal.distance_squared_to(goal) > 4.0:
-		u.path = find_path(u.faction, u.pos, goal)
+		u.path = route_for(u, goal)
 		u.path_i = 0
 		u.path_goal = goal
 		if u.path.is_empty():

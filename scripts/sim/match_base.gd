@@ -79,6 +79,8 @@ class Unit:
 	var last_pos := Vector2.ZERO
 	var reload := 0.0
 	var in_tower := -1
+	var path_queued := false
+	var path_turn := -1         # the tick this unit's turn to find a route came up
 
 
 class Building:
@@ -214,6 +216,11 @@ var options := {}
 var blocking: Blocking
 var terrain_solid := PackedByteArray()
 var paths_this_tick := 0
+# With three or more settlements each has its own share of the routes and its own queue.
+var fair_paths := false
+var path_queues: Array = []          # faction -> unit ids waiting, longest first
+var paths_left := PackedInt32Array()
+var path_granted := false
 var ulist: Array = []
 var uhead := PackedInt32Array()
 var unext := PackedInt32Array()
@@ -254,9 +261,14 @@ func _init_world(tr: Terrain, faction_count: int) -> void:
 	uside.resize(bucket_n * bucket_n)
 	uside.fill(0)
 	bld_buckets.clear()
+	fair_paths = faction_count > 2
+	path_queues.clear()
+	paths_left.resize(faction_count)
+	paths_left.fill(MAX_PATHS_PER_TICK / faction_count)
 	own_blds.clear()
 	own_by_type.clear()
 	for f in faction_count:
+		path_queues.append([])
 		own_blds.append([])
 		own_by_type.append({})
 
@@ -551,7 +563,12 @@ func find_path(faction: int, a: Vector2, b: Vector2) -> PackedVector2Array:
 	var pf := maxi(faction, 0)
 	if line_clear(pf, a, b):
 		return PackedVector2Array([b])
-	if paths_this_tick >= MAX_PATHS_PER_TICK:
+	if fair_paths:
+		if not path_granted:
+			if paths_left[pf] <= 0:
+				return PackedVector2Array()
+			paths_left[pf] -= 1
+	elif paths_this_tick >= MAX_PATHS_PER_TICK:
 		return PackedVector2Array()
 	paths_this_tick += 1
 	var ca := nearest_free_cell(pf, cell_of(a))
@@ -576,6 +593,51 @@ func find_path(faction: int, a: Vector2, b: Vector2) -> PackedVector2Array:
 	if out.is_empty() or out[out.size() - 1].distance_to(b) > CELL * 1.5:
 		if not solid_for(pf, cell_of(b)):
 			out.append(b)
+	return out
+
+
+## Deals out the tick's routes: an equal share for each living settlement, the remainder
+## taking turns, and within a settlement whoever has waited longest goes first.
+func share_paths() -> void:
+	var alive := []
+	for f: Faction in factions:
+		paths_left[f.id] = 0
+		if f.alive:
+			alive.append(f.id)
+		else:
+			path_queues[f.id].clear()
+	var n := alive.size()
+	if n == 0:
+		return
+	for i in n:
+		var id: int = alive[i]
+		var share := MAX_PATHS_PER_TICK / n + (1 if (i + ticks) % n < MAX_PATHS_PER_TICK % n else 0)
+		var queue: Array = path_queues[id]
+		while share > 0 and not queue.is_empty():
+			var u := unit(queue.pop_front())
+			if u == null:
+				continue
+			u.path_queued = false
+			if u.dead:
+				continue
+			u.path_turn = ticks
+			share -= 1
+		paths_left[id] = share
+
+
+## A route for a unit, or nothing while it waits its turn.
+func route_for(u: Unit, goal: Vector2) -> PackedVector2Array:
+	if not fair_paths:
+		return find_path(u.faction, u.pos, goal)
+	if u.path_queued:
+		return PackedVector2Array()
+	path_granted = u.path_turn == ticks
+	u.path_turn = -1
+	var out := find_path(u.faction, u.pos, goal)
+	path_granted = false
+	if out.is_empty() and u.faction >= 0:
+		u.path_queued = true
+		path_queues[u.faction].append(u.id)
 	return out
 
 

@@ -22,7 +22,7 @@ func _initialize() -> void:
 
 func _run_tests() -> void:
 	var only := OS.get_environment("MH_TEST")
-	var tests := ["defs", "validation", "terrain", "map_sizes", "rings", "settlements", "economy", "crews", "selection", "walls", "combat", "parser", "schema", "chatgpt", "terra_orders", "duel"]
+	var tests := ["defs", "validation", "terrain", "map_sizes", "rings", "settlements", "path_queue", "economy", "crews", "selection", "walls", "combat", "parser", "schema", "chatgpt", "terra_orders", "duel"]
 	var t0 := Time.get_ticks_msec()
 	for name in tests:
 		if only != "" and only != name:
@@ -539,6 +539,45 @@ func test_settlements() -> void:
 	lost.setup({"seed": 7, "map": "medium", "settlements": 3})
 	lost.kill_unit(lost.commander(0))
 	check(lost.over and lost.winner != 0, "the player's death ends the match")
+
+
+func test_path_queue() -> void:
+	var m = Match.new()
+	m.setup({"seed": 4242, "settlements": 4, "map": "medium"})
+	var askers := []
+	for f in m.factions:
+		var home: Vector2 = m.home_pos(f.id)
+		# A wall between everyone and where they're going, so each needs a real route.
+		for i in 7:
+			m.add_building(f.id, "stone_wall", home + Vector2(30, (i - 3) * 4.0), PI * 0.5, true)
+		for k in 6:
+			askers.append(m.spawn_unit(f.id, "villager", home + Vector2(22, k - 3)))
+	var served := {}
+	var order: Array = []
+	for tick in 12:
+		m.ticks += 1
+		m.paths_this_tick = 0
+		m.share_paths()
+		for u in askers:
+			if served.has(u.id):
+				continue
+			if not m.route_for(u, m.home_pos(u.faction) + Vector2(40, 0)).is_empty():
+				served[u.id] = tick
+				order.append(u)
+		check(m.paths_this_tick <= m.MAX_PATHS_PER_TICK, "no more routes than the budget in tick %d" % tick)
+		if tick == 0:
+			var got := [0, 0, 0, 0]
+			for u in order:
+				got[u.faction] += 1
+			check(got.min() >= 1 and got.max() - got.min() <= 1, "every settlement gets an equal share at once (%s)" % str(got))
+	check(served.size() == askers.size(), "everyone waiting gets a route (%d of %d)" % [served.size(), askers.size()])
+	var last := {}
+	var in_order := true
+	for u in order:
+		if last.get(u.faction, -1) > u.id:
+			in_order = false
+		last[u.faction] = u.id
+	check(in_order, "whoever waited longest goes first")
 
 
 func test_duel() -> void:

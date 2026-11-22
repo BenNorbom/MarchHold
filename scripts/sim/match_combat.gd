@@ -450,7 +450,7 @@ func _engine_move(e: Unit, goal: Vector2, dt: float, speed: float, arrive: float
 		e.anim = Anim.IDLE
 		return
 	if e.path.is_empty() or e.path_goal.distance_squared_to(goal) > 9.0:
-		e.path = find_path(e.faction, e.pos, goal)
+		e.path = route_for(e, goal)
 		e.path_i = 0
 		e.path_goal = goal
 		if e.path.is_empty():

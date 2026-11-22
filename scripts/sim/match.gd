@@ -68,6 +68,8 @@ func tick(dt: float = Defs.TICK) -> void:
 	t += dt
 	ticks += 1
 	paths_this_tick = 0
+	if fair_paths:
+		share_paths()
 	rebuild_unit_hash()
 	upkeep_t += dt
 	if upkeep_t >= 1.0:
