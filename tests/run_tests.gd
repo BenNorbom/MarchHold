@@ -32,7 +32,7 @@ func _initialize() -> void:
 
 func _run_tests() -> void:
 	var only := OS.get_environment("MH_TEST")
-	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "births", "crews", "selection", "walls", "combat", "research", "shield", "parser", "schema", "chatgpt", "terra_orders", "hotkeys", "removed_buildings", "rings", "settlements", "path_queue", "rivals", "menu", "gathering", "construction", "back_to_work", "delegation", "posts", "post_orders", "places", "mandate_building", "threats", "post_review", "towers", "duel"]
+	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "births", "crews", "selection", "walls", "combat", "research", "shield", "parser", "schema", "chatgpt", "terra_orders", "hotkeys", "removed_buildings", "rings", "settlements", "path_queue", "rivals", "menu", "gathering", "construction", "back_to_work", "delegation", "posts", "post_orders", "places", "mandate_building", "threats", "post_review", "towers", "stables_militia", "duel"]
 	if only == "absence":
 		tests.append(only)
 	var t0 := Time.get_ticks_msec()
@@ -1697,6 +1697,60 @@ func test_removed_buildings() -> void:
 	full._refresh_counts(f)
 	check(f.housing == Defs.POP_HARD_CAP, "the rival has room for huts to house 200 (%d)" % f.housing)
 	check(f.food_cap >= Defs.POP_HARD_CAP * Defs.WELL_FED_STOCK, "the rival has room to store food for 200 (%d)" % f.food_cap)
+
+
+func test_stables_militia() -> void:
+	# Two stables: once the first is full, driven-in horses fill the second.
+	var m = new_match(977)
+	var home: Vector2 = m.home_pos(0)
+	var cap := int(Defs.BUILDINGS["stable"]["horse_cap"])
+	m.fac(0).age = 1
+	var s1 = m.add_building(0, "stable", open_site(m, "stable", home, 10.0), 0.0, true)
+	var s2 = m.add_building(0, "stable", open_site(m, "stable", home, 24.0), 0.0, true)
+	for i in cap:
+		var h = m.spawn_unit(0, "horse", s1.pos)
+		h.stable = s1.id
+	for i in 3:
+		var w = m.spawn_unit(-1, "horse", home + Vector2(20 + i * 3, 10))
+		w.child = false
+	var herders: Array = m.idle_adults(0, home).slice(0, 2)
+	m.command(0, {"units": herders.map(func(u): return u.id), "steps": [step("tame", "horses", 3)]})
+	run(m, 150.0)
+	check(m._stable_count(s1) == cap, "the full stable stays at its cap")
+	check(m._stable_count(s2) >= 3, "the second stable takes the overflow (%d)" % m._stable_count(s2))
+	# Workers on a resource are counted for the HUD.
+	var m2 = new_match(977)
+	var crew: Array = m2.idle_adults(0, m2.home_pos(0)).slice(0, 3)
+	m2.command(0, {"units": crew.map(func(u): return u.id), "steps": [step("gather", "wood")]})
+	run(m2, 5.0)
+	check(int(m2.workers_by_resource(0).get("wood", 0)) == 3, "three woodcutters are counted")
+	# A call to arms mounts spearmen but keeps archers on foot until mounted archery is known.
+	for researched in [false, true]:
+		var m3 = new_match(977)
+		var h3: Vector2 = m3.home_pos(0)
+		m3.fac(0).age = 1
+		m3.add_building(0, "armory", open_site(m3, "armory", h3, 8.0), 0.0, true)
+		var st = m3.add_building(0, "stable", open_site(m3, "stable", h3, 24.0), 0.0, true)
+		for i in 2:
+			var horse = m3.spawn_unit(0, "horse", st.pos)
+			horse.stable = st.id
+			horse.child = false
+		m3.fac(0).gear["wood_spear"] = 1
+		m3.fac(0).gear["bow"] = 1
+		m3.fac(0).gear["arrows"] = 20
+		if researched:
+			m3.fac(0).researched["mounted_archery"] = true
+		var pair: Array = m3.idle_adults(0, h3).slice(0, 2)
+		m3.command(0, {"units": pair.map(func(u): return u.id), "steps": [step("arm")]})
+		run(m3, 60.0)
+		var riders := 0
+		for u in pair:
+			if u.mounted:
+				riders += 1
+				check(u.weapon != "" or u.bow, "only the armed ride")
+			elif u.bow:
+				check(not researched, "archers ride once mounted archery is known")
+		check(riders == (2 if researched else 1), "militia riders with research=%s: %d" % [researched, riders])
 
 
 func open_site(m, type: String, near: Vector2, from: float = 6.0) -> Vector2:

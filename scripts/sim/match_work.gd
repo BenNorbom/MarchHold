@@ -1156,7 +1156,7 @@ func _step_done(c: Crew, s: Dictionary) -> bool:
 			return true     # set going when the step began, and it runs without the crew
 		"tame":
 			var amt := int(s.get("amount", 0))
-			return amt > 0 and c.state["delivered"] >= amt
+			return c.state.get("full", false) or (amt > 0 and c.state["delivered"] >= amt)
 		"arm", "mount", "man", "scout", "recall":
 			for id in c.members:
 				var u := unit(id)
@@ -1367,6 +1367,26 @@ func face(u: Unit, p: Vector2) -> void:
 
 func work_mult(faction: int) -> float:
 	return Defs.FOOD_WORK[fac(faction).food_state]
+
+
+## How many of a faction's people are working on each resource right now (gathering or smelting).
+func workers_by_resource(faction: int) -> Dictionary:
+	var out := {}
+	for u: Unit in units:
+		if u.dead or u.faction != faction or u.kind != "villager" or u.task not in ["gather", "smelt"]:
+			continue
+		var c := crew_of(u)
+		if c == null or c.idx >= c.steps.size():
+			continue
+		var subj: String = c.steps[c.idx].get("subject", "")
+		var res := ""
+		if u.task == "gather" and Defs.GATHER.has(subj):
+			res = Defs.GATHER[subj]["resource"]
+		elif u.task == "smelt":
+			res = subj
+		if res != "":
+			out[res] = int(out.get(res, 0)) + 1
+	return out
 
 
 func update_worker(u: Unit, dt: float) -> void:
@@ -1894,18 +1914,49 @@ func _do_arm(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
 	if b == null or b.dead:
 		u.phase = "done"
 		return
-	if not go_to_building(u, b, dt):
-		return
 	var f := fac(u.faction)
 	var subj: String = s["subject"]
+	if u.phase == "ride":
+		_ride_after_arming(u, c, dt)
+		return
+	if not go_to_building(u, b, dt):
+		return
 	if subj == "":
 		_equip_best(u, f)
 	else:
 		_equip(u, f, subj)
 	u.phase = "done"
+	# A general call to arms puts fit riders on horses, if a stable has any spare.
+	if subj == "" and _rides_sensibly(u, f) and _stable_with_horse(u.faction, u.pos) != null:
+		u.phase = "ride"
+		return
 	if u.faction == 0 and u.weapon == "" and not u.bow and not c.state.get("warned", false):
 		c.state["warned"] = true
 		post(0, "%s: the armory ran out of gear for everyone." % crew_label(c), "warn")
+
+
+## Spearmen and lancers gain from a horse; pikemen don't, and bowmen need mounted archery first.
+func _rides_sensibly(u: Unit, f: Faction) -> bool:
+	if u.mounted or u.child or u.kind != "villager":
+		return false
+	if u.bow:
+		return f.researched.has("mounted_archery")
+	return u.weapon != "" and not u.weapon.ends_with("pike")
+
+
+func _ride_after_arming(u: Unit, c: Crew, dt: float) -> void:
+	var st := _stable_with_horse(u.faction, u.pos)
+	if st == null:
+		u.phase = "done"
+		return
+	if not go_to_building(u, st, dt):
+		return
+	if _take_horse(u.faction, st):
+		u.mounted = true
+		u.max_hp += Defs.MOUNTED["hp_bonus"]
+		u.hp += Defs.MOUNTED["hp_bonus"]
+		_equip_best(u, fac(u.faction))   # a lance beats a spear on horseback
+	u.phase = "done"
 
 
 func _equip(u: Unit, f: Faction, item: String) -> bool:
@@ -2068,6 +2119,9 @@ func _do_tame(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
 	match u.phase:
 		"", "find":
 			var origin: Vector2 = c.state.get("origin", home_pos(u.faction))
+			if _stable_with_room(u.faction, u.pos) == null:
+				_tame_full(u, c)
+				return
 			var best: Unit = null
 			var bd := 320.0 * 320.0
 			for h: Unit in units:
@@ -2098,18 +2152,14 @@ func _do_tame(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
 			if h == null or h.dead:
 				u.phase = "find"
 				return
-			var st := nearest_building(u.faction, u.pos, ["stable"])
+			var st := _stable_with_room(u.faction, u.pos)
 			if st == null:
 				h.driver = -1
-				u.phase = "find"
+				_tame_full(u, c)
 				return
 			if go_to_building(u, st, dt):
 				if _stable_count(st) >= int(Defs.BUILDINGS["stable"]["horse_cap"]):
-					h.driver = -1
-					if u.faction == 0:
-						post(0, "The stable is full (%d horses)." % Defs.BUILDINGS["stable"]["horse_cap"], "warn")
-					u.phase = "find"
-					return
+					return   # filled up meanwhile; next tick picks another stable
 				h.faction = u.faction
 				h.stable = st.id
 				h.driver = -1
@@ -2118,6 +2168,26 @@ func _do_tame(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
 				if u.faction == 0:
 					post(0, "%s brought a wild %s into the stable." % [u.name, "mare" if h.female else "stallion"], "done")
 				u.phase = "find"
+
+
+## Nearest stable that still has a free stall, so a second stable fills once the first is full.
+func _stable_with_room(faction: int, p: Vector2) -> Building:
+	var best: Building = null
+	var bd := INF
+	var cap := int(Defs.BUILDINGS["stable"]["horse_cap"])
+	for st: Building in buildings_of(faction, "stable"):
+		var d := st.pos.distance_squared_to(p)
+		if d < bd and _stable_count(st) < cap:
+			bd = d
+			best = st
+	return best
+
+
+func _tame_full(u: Unit, c: Crew) -> void:
+	if not c.state.get("full", false) and u.faction == 0:
+		post(0, "%s: every stable is full. Build another stable to keep more horses." % crew_label(c), "warn")
+	c.state["full"] = true
+	u.phase = "find"
 
 
 func _stable_count(st: Building) -> int:
