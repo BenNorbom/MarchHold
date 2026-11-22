@@ -16,6 +16,8 @@ Write-Host "MarchHold $version"
 if (-not $SkipTests) {
     & $Godot --headless --path . -s res://tests/run_tests.gd
     if ($LASTEXITCODE -ne 0) { throw "Tests failed." }
+    & $Godot --headless --path . -s res://tests/test_battle.gd
+    if ($LASTEXITCODE -ne 0) { throw "Battle tests failed." }
 }
 New-Item -ItemType Directory -Force build, dist | Out-Null
 foreach ($d in "build", "dist") { if (-not (Test-Path "$d/.gdignore")) { New-Item -ItemType File "$d/.gdignore" | Out-Null } }

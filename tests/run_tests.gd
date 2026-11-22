@@ -1187,23 +1187,27 @@ func test_shield() -> void:
 	foe.weapon = "wood_spear"
 	m.units.assign([me, foe]) # no bystanders in the line of fire
 	var base: float = m.melee_damage(foe, me)
-	m.set_commander(0, me.pos, 0.0, 0, true)
-	check(not me.shield_up, "nothing to raise without a shield")
+	m.set_commander(0, me.pos, 0.0, 0)
 	for id in ["wood_shield", "bronze_shield", "iron_shield"]:
 		var d: Dictionary = Defs.ITEMS[id]
 		me.shield = id
-		m.set_commander(0, me.pos, 0.0, 0, false)
+		m.commander_block(0, false, m.t)
 		foe.pos = me.pos + Vector2(0, 1.5)
 		check(is_equal_approx(m.melee_damage(foe, me), base * (1.0 - d["block_melee"])), "%s carried keeps its usual protection" % id)
-		m.set_commander(0, me.pos, 0.0, 0, true)
+		m.commander_block(0, true, m.t)
+		m.t += 1.0
 		for deg in [0.0, 65.0, -65.0, 75.0, -75.0, 180.0]:
 			foe.pos = me.pos + Vector2(sin(deg_to_rad(deg)), cos(deg_to_rad(deg))) * 1.5
 			var key := "up_melee" if absf(deg) < 70.0 else "block_melee"
-			check(is_equal_approx(m.melee_damage(foe, me), base * (1.0 - d[key])), "%s raised, blow from %d degrees" % [id, deg])
+			me.hp = me.max_hp
+			me.stamina = 1.0
+			m.deal_damage(me, m.melee_damage(foe, me), foe, "melee")
+			check(is_equal_approx(me.max_hp - me.hp, base * (1.0 - d[key])), "%s raised, blow from %d degrees" % [id, deg])
 		for side in [1.0, -1.0]:
 			for free in [false, true]:
 				m.shots.clear()
 				me.hp = me.max_hp
+				me.stamina = 1.0
 				me.prev = me.pos
 				var s = m.Shot.new()
 				s.kind = "arrow"

@@ -26,8 +26,8 @@ Start with **The Founding** (tutorial) from the main menu. Terra, your steward, 
 | WASD, mouse | Move, look |
 | Shift / Space | Sprint / jump |
 | Enter or T | Talk to your selected villagers, or the crew or villager you're looking at (or to your people) |
-| Left mouse | Select the villager you're looking at (Shift+click adds or drops more); otherwise strike, or with a bow hold to draw and release to shoot |
-| Right mouse | Hold to raise your shield. While placing: finish a wall or cancel |
+| Left mouse | Select the villager you're looking at (Shift+click adds or drops more); otherwise strike, or with a bow hold to draw and release to shoot. With enemies close, a click always strikes |
+| Right mouse or V (hold) | Block from the front, which costs stamina. Raise it just as a blow lands, when the marker turns blue, to parry. While placing, right-click finishes a wall or cancels |
 | Q | Switch between bow and weapon (rotates a building while placing) |
 | E / G | Talk to the person you look at; take gear at the armory |
 | F | Take or leave a horse at your stable |
@@ -109,6 +109,8 @@ Requirements: [Godot 4.7.2](https://godotengine.org/download) with the Windows e
 ```powershell
 # Run the headless tests (simulation, orders parser, schema, AI duel)
 godot --headless --path . -s res://tests/run_tests.gd
+# Battle tests (bodies, blows, the commander's fighting, matchups)
+godot --headless --path . -s res://tests/test_battle.gd
 
 # Redraw the popup's pictures after changing a model
 godot --headless --path . -s res://tools/make_icons.gd
@@ -134,6 +136,7 @@ powershell -ExecutionPolicy Bypass -File tools\build.ps1
 | `scripts/ui/`, `scripts/game/` | HUD, menus, hotkeys, field map, intro, tutorial, hints |
 | `shaders/` | Terrain, foliage, grass, people, rocks, sky |
 | `tests/run_tests.gd` | Headless test suite, including AI-vs-AI duels |
+| `tests/test_battle.gd` | Battle tests on a flat test field |
 
 ## Status
 

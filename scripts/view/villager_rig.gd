@@ -2,6 +2,8 @@ extends Node3D
 ## Close-range human. Simulation movement drives the imported gait; grip targets
 ## and props share actor-local coordinates (+Z forward, metres).
 const Anim = preload("res://scripts/sim/match_base.gd").Anim
+const BattlePose = preload("res://scripts/view/battle_pose.gd")
+const ARM := Vector3(0.03, -0.5, 0.06)    # shoulder to wrist, hanging
 const MODELS = [preload("res://assets/people/villager.glb"), preload("res://assets/people/farmer.glb"), preload("res://assets/people/child.glb")]
 const HAND_R := Vector3(-0.24, 0.77, 0.07)
 const HAND_L := Vector3(0.24, 0.77, 0.07)
@@ -20,6 +22,7 @@ var motion := 0.0
 var cargo := ""
 var load_height := 0.0
 var tool_angle := 0.0
+var battle := {}              # the fighting pose to hold, from BattlePose
 var head_turn := 0.0
 var face_shape := Vector3.ONE
 var rig_space: Transform3D
@@ -149,14 +152,26 @@ func pose(anim: int, phase: float, speed: float, resource: String, delta: float,
 		skeleton.set_bone_pose_position(hips, p)
 	var beat := sin(phase)
 	var swing := 0.5 + 0.5 * beat
-	var working := anim in [Anim.CHOP, Anim.HAMMER, Anim.DIG, Anim.PICK, Anim.LOAD, Anim.MELEE]
+	var fighting := not battle.is_empty() and cargo == ""
+	var working := not fighting and anim in [Anim.CHOP, Anim.HAMMER, Anim.DIG, Anim.PICK, Anim.LOAD, Anim.MELEE]
 	var lean := 0.012 * sin(phase * 0.6)
 	if working:
 		lean = 0.12 + 0.23 * swing
 	if cargo != "":
 		lean = 0.10 + 0.32 * (1.0 - load_height)
+	var twist := 0.0
+	if fighting:
+		lean = battle["lean"]
+		twist = battle["twist"]
 	var spine: int = bones["Spine02"]
-	skeleton.set_bone_pose_rotation(spine, skeleton.get_bone_pose_rotation(spine) * Quaternion(Vector3.RIGHT, lean))
+	skeleton.set_bone_pose_rotation(spine, skeleton.get_bone_pose_rotation(spine) * Quaternion(Vector3.UP, twist) * Quaternion(Vector3.RIGHT, lean))
+	var riding: bool = anim == Anim.RIDE or (fighting and battle["ride"])
+	if riding:
+		for side in ["Left", "Right"]:
+			var leg: int = bones[side+"UpLeg"]
+			skeleton.set_bone_pose_rotation(leg, skeleton.get_bone_pose_rotation(leg)*Quaternion(Vector3.RIGHT, 1.05))
+			var knee: int = bones[side+"Leg"]
+			skeleton.set_bone_pose_rotation(knee, skeleton.get_bone_pose_rotation(knee)*Quaternion(Vector3.RIGHT, -1.3))
 	var glance := clampf(atan2(eye.x, eye.z), -0.45, 0.45) if anim == Anim.IDLE and eye.z > 0 and eye.length() < 5.0 and not dead else 0.0
 	head_turn = lerpf(head_turn, glance, minf(delta*4.0, 1.0))
 	var head: int = bones["Head"]
@@ -180,6 +195,14 @@ func pose(anim: int, phase: float, speed: float, resource: String, delta: float,
 			grip_origin = shoulders + Vector3(0, -0.28+lift, 0.28)*body_scale
 			right = grip_origin + Vector3(-0.14, -0.04, -0.05)*body_scale
 			left = grip_origin + Vector3(0.14, -0.04, -0.05)*body_scale
+	elif fighting:
+		var turn := Basis(Vector3.UP, twist)
+		right = joint("RightArm") + turn * Basis(Vector3.RIGHT, lean + float(battle["arm_r"])) * (ARM * Vector3(-1, 1, 1)) * body_scale
+		left = joint("LeftArm") + turn * Basis(Vector3.RIGHT, lean + float(battle["arm_l"])) * ARM * body_scale
+		if battle["bow"]:
+			# The string hand comes back from the bow to the cheek.
+			var cheek := shoulders + turn * Vector3(-0.1, 0.12, 0.1) * body_scale
+			right = left.lerp(cheek, 0.35 + 0.65 * float(battle["draw"]))
 	elif working:
 		if anim == Anim.PICK:
 			right = shoulders + Vector3(-0.20, -0.31, 0.21)*body_scale
@@ -193,16 +216,11 @@ func pose(anim: int, phase: float, speed: float, resource: String, delta: float,
 		left = shoulders + Vector3(0.12, 0.02, 0.40)*body_scale
 		right = shoulders + Vector3(-0.11, 0.09, 0.08)*body_scale
 	elif anim == Anim.RIDE:
-		for side in ["Left", "Right"]:
-			var leg: int = bones[side+"UpLeg"]
-			skeleton.set_bone_pose_rotation(leg, skeleton.get_bone_pose_rotation(leg)*Quaternion(Vector3.RIGHT, 1.05))
-			var knee: int = bones[side+"Leg"]
-			skeleton.set_bone_pose_rotation(knee, skeleton.get_bone_pose_rotation(knee)*Quaternion(Vector3.RIGHT, -1.3))
 		right = shoulders + Vector3(-0.19, -0.27, 0.29)*body_scale
 		left = shoulders + Vector3(0.19, -0.27, 0.29)*body_scale
 	if last_arm_targets.is_empty():
 		last_arm_targets = [right, left]
-	var weight := 1.0-exp(-delta*24.0)
+	var weight := 1.0-exp(-delta*(48.0 if fighting else 24.0))
 	last_arm_targets[0] = last_arm_targets[0].lerp(right, weight)
 	last_arm_targets[1] = last_arm_targets[1].lerp(left, weight)
 	var right_dir := Vector3.ZERO
@@ -242,5 +260,8 @@ func item_pose(item: String) -> Transform3D:
 	elif item.ends_with("armor") or item == "cloak":
 		src = Vector3(0, 1.42, 0)
 		target = (joint("LeftArm")+joint("RightArm"))*0.5
+	if not battle.is_empty() and cargo == "":
+		if item.ends_with("shield") or item == "bow" or src == HAND_R:
+			return transform * BattlePose.prop(battle, item, target, body_scale)
 	var basis := Basis(Vector3.RIGHT, angle).scaled(Vector3.ONE*body_scale)
 	return transform * Transform3D(basis, target-basis*src)

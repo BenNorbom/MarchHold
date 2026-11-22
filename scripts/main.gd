@@ -14,6 +14,7 @@ var shot_path := ""
 var shot_seconds := 6.0
 var shot_view := ""
 var shot_demo := false
+var shot_battle := 0
 var smoke := false
 var shot_menu := false
 var shot_ui := ""
@@ -33,6 +34,10 @@ func _ready() -> void:
 			shot_view = a.substr(12)
 		elif a == "--shot-demo":
 			shot_demo = true
+		elif a == "--shot-battle":
+			shot_battle = 12
+		elif a.begins_with("--shot-battle="):
+			shot_battle = int(a.substr(14))
 		elif a == "--smoke":
 			smoke = true
 		elif a == "--shot-menu":
@@ -82,6 +87,8 @@ func _ready() -> void:
 		_start({"seed": 4242, "difficulty": 1, "opponents": dev_rivals})
 		if shot_demo:
 			_demo_buildings()
+		if shot_battle > 0:
+			_demo_battle(shot_battle)
 		_take_shot()
 		return
 	_show_menu()
@@ -191,6 +198,34 @@ func _demo_buildings() -> void:
 		u.bow = k == 3
 	var cn = m.spawn_unit(0, "cannon", home + Vector2(10, -8))
 	var h = m.spawn_unit(-1, "horse", home + Vector2(-6, 9))
+
+
+## Developer flag --shot-battle[=N]: two lines of N meet in front of the commander.
+func _demo_battle(n: int) -> void:
+	var m = game.m
+	var me = m.commander(0)
+	var ahead := Vector2(sin(me.facing), cos(me.facing))
+	var middle: Vector2 = me.pos + ahead * 16.0
+	var kits := ["club", "wood_spear", "bronze_sword", "bow", "iron_pike", "wood_spear"]
+	for side in 2:
+		var men := []
+		for k in n:
+			var back := 7.0 + (k / 12) * 1.8
+			var at: Vector2 = middle + ahead * (back if side else -back) + ahead.orthogonal() * (k % 12 - 5.5) * 1.6
+			var u = m.spawn_unit(side, "villager", at)
+			u.name = "Demo"
+			u.bow = kits[k % kits.size()] == "bow"
+			u.arrows = 16 if u.bow else 0
+			u.weapon = "" if u.bow else kits[k % kits.size()]
+			u.shield = "wood_shield" if k % 3 == 2 else ""
+			men.append(u)
+		var c = m.make_crew(side, men)
+		c.steps = [{"action": "attack", "subject": "", "count": 0, "amount": 0, "where": ""}]
+		c.state = {"target": middle}
+		c.start_size = men.size()
+		for u in men:
+			m._set_task(u, "attack")
+		m._assign_slots(c)
 
 
 ## Developer smoke test: drives the real game through its main paths.
