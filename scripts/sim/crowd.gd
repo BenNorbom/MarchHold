@@ -55,7 +55,7 @@ func index(units: Array, map_size: float) -> void:
 	head.fill(-1)
 	bodies.clear()
 	for u in units:
-		if not u.dead and u.stable < 0:
+		if not u.dead and u.stable < 0 and u.in_tower < 0:
 			bodies.append(u)
 	var size := bodies.size()
 	next.resize(size)

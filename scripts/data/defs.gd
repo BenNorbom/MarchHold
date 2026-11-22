@@ -95,8 +95,8 @@ const BUILDINGS := {
 	"stone_gate": {"name": "Stone gate", "age": 1, "cost": {"stone": 25, "wood": 10}, "work": 60, "hp": 520,
 		"wall": true, "gate": true, "length": 4.0, "thick": 2.0, "height": 5.0, "desc": "A gate in a stone wall."},
 	"tower": {"name": "Stone tower", "age": 1, "cost": {"stone": 125, "wood": 25}, "work": 120, "hp": 900,
-		"size": Vector2(5, 5), "sight": 95, "alarm": true, "archers": 4,
-		"desc": "Alarm and archer position. Archers posted here shoot farther."},
+		"size": Vector2(5, 5), "sight": 95, "alarm": true, "archers": 3,
+		"desc": "Alarm tower with three sheltered archer posts. Approach the door and press E to climb."},
 	"stable": {"name": "Stable", "age": 1, "cost": {"wood": 125, "stone": 25}, "work": 90, "hp": 260,
 		"size": Vector2(10, 7), "horse_cap": 12, "desc": "Holds horses driven in from the wild and breeds them. Researches mounted archery."},
 	"mine": {"name": "Mine", "age": 1, "cost": {"wood": 100, "stone": 50}, "work": 90, "hp": 300, "size": Vector2(6, 6),
@@ -188,7 +188,15 @@ const BLOCK_STAMINA := 0.08
 const FISTS := {"dmg": 3.0, "reach": 1.5, "rate": 1.0}
 const ARROW_DMG := [8.0, 11.0, 14.0]
 const BOW_RANGE := 55.0
-const TOWER_BOW_RANGE := 75.0
+const TOWER_DECK_HEIGHT := 9.6
+const TOWER_DECK_RADIUS := 2.55
+const TOWER_PARAPET_RADIUS := 2.3
+const TOWER_PARAPET_HEIGHT := 1.0
+const TOWER_PARAPET_WIDTH := 1.25
+const TOWER_PARAPET_THICKNESS := 0.32
+const TOWER_MERLON_HEIGHT := 0.5
+const TOWER_PARAPET_SIDES := 12
+const TOWER_DOOR_REACH := 1.4
 
 const CANNON := {"range": 170.0, "reload": 15.0, "dmg_building": 230.0, "dmg_unit": 70.0, "splash": 3.5,
 	"scatter": 0.03, "speed_hand": 1.2, "speed_team": 3.6, "hp": 160.0}

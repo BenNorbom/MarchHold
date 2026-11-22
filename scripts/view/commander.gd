@@ -341,7 +341,7 @@ func _push_out_of_people(u) -> void:
 	var mine: float = Crowd.radius(u)
 	var push := Vector2.ZERO
 	for o in m.units_near(here, 2.0, -2):
-		if o.id == u.id or o.stable >= 0:
+		if o.id == u.id or o.stable >= 0 or o.in_tower != u.in_tower:
 			continue
 		var away: Vector2 = here - o.pos
 		var d := away.length()

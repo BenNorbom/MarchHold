@@ -116,6 +116,9 @@ func tick(dt: float = Defs.TICK) -> void:
 
 
 func _update_villager(u: Unit, dt: float) -> void:
+	if u.in_tower >= 0:
+		_update_tower_archer(u, dt)
+		return
 	if u.task == "scout" and u.scout_leg < 3:
 		update_worker(u, dt)
 		return
@@ -1221,6 +1224,9 @@ func set_commander(faction: int, p: Vector2, facing: float, anim: int) -> void:
 	var u := unit(fac(faction).commander)
 	if u == null or u.dead:
 		return
+	var tower := bld(u.in_tower)
+	if tower and tower.pos.distance_squared_to(p) > Defs.TOWER_DECK_RADIUS * Defs.TOWER_DECK_RADIUS:
+		u.in_tower = -1
 	u.pos = p
 	u.facing = facing
 	u.anim = anim
@@ -1233,6 +1239,17 @@ func set_commander(faction: int, p: Vector2, facing: float, anim: int) -> void:
 
 func commander(faction: int) -> Unit:
 	return unit(fac(faction).commander)
+
+
+func tower_at_door(faction: int, p: Vector2) -> Building:
+	var nearest: Building = null
+	var best := Defs.TOWER_DOOR_REACH * Defs.TOWER_DOOR_REACH
+	for tower: Building in buildings_of(faction, "tower"):
+		var d := p.distance_squared_to(tower_door(tower))
+		if d <= best:
+			best = d
+			nearest = tower
+	return nearest
 
 
 func commander_shoot(faction: int, origin: Vector3, dir: Vector3, power: float, now: float = -1.0) -> bool:
@@ -1252,6 +1269,8 @@ func commander_take_gear(faction: int) -> String:
 	var u := commander(faction)
 	if u == null:
 		return ""
+	if u.in_tower >= 0:
+		return "Descend the tower to take gear from the armory."
 	var arm := nearest_building(faction, u.pos, ["armory"])
 	if arm == null or arm.pos.distance_to(u.pos) > arm.size.length() * 0.5 + 4.0:
 		return "Stand next to your armory to take gear."
@@ -1280,6 +1299,8 @@ func commander_mount(faction: int) -> String:
 	var u := commander(faction)
 	if u == null:
 		return ""
+	if u.in_tower >= 0:
+		return "Descend the tower before mounting."
 	var st := nearest_building(faction, u.pos, ["stable"])
 	var near := st != null and st.pos.distance_to(u.pos) < st.size.length() * 0.5 + 5.0
 	if u.mounted:

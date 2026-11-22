@@ -150,6 +150,8 @@ func _set_leader(c: Crew, id: int) -> void:
 
 func leave_crew(u: Unit) -> void:
 	var c := crew_of(u)
+	if u.in_tower >= 0:
+		leave_tower(u)
 	u.crew = -1
 	_release_claim(u)
 	if c == null:
@@ -199,7 +201,6 @@ func release_member(u: Unit) -> void:
 		u.siege = -1
 	u.tgt_unit = -1
 	u.enemy_bld = -1
-	u.in_tower = -1
 	_set_task(u, "idle")
 
 
@@ -445,6 +446,8 @@ func cancel_plan(c: Crew) -> void:
 
 
 func _set_task(u: Unit, task: String) -> void:
+	if u.in_tower >= 0:
+		leave_tower(u)
 	_release_claim(u)
 	u.task = task
 	u.phase = ""
@@ -2242,6 +2245,9 @@ func kill_unit(u: Unit, why: String = "") -> void:
 	var line := crew_of(u)
 	if line:
 		_assign_slots(line)   # close the gap; the dead get no slot
+	var tower := bld(u.in_tower)
+	if tower:
+		_release_tower_post(u, tower)
 	_release_claim(u)
 	var f := fac(u.faction)
 	if u.kind == "villager" and f:

@@ -113,11 +113,13 @@ func _may_fight(u: Unit, o: Unit, area: Array, radius: float) -> bool:
 	if not is_hostile(u.faction, o) or (o.id == u.avoid_id and t < u.avoid_t):
 		return false
 	var d := u.pos.distance_to(o.pos)
+	if o.in_tower >= 0 and (not can_shoot_bow(u) or u.arrows <= 0 or d > bow_range(u, o)):
+		return false
 	var hit_me := o.id == u.attacker and t - u.hit_t < 4.0
 	if d > maxf(radius + 8.0, float(area[2]) if hit_me else 0.0):
 		return false
 	# An archer needn't leave the post to shoot.
-	if can_shoot_bow(u) and u.arrows > 0 and u.weapon == "" and d <= bow_range(u):
+	if can_shoot_bow(u) and u.arrows > 0 and u.weapon == "" and d <= bow_range(u, o):
 		return true
 	return o.pos.distance_to(area[0]) <= float(area[2] if hit_me else area[1])
 
@@ -196,8 +198,14 @@ func can_shoot_bow(u: Unit) -> bool:
 	return u.bow and (not u.mounted or fac(u.faction).researched.has("mounted_archery"))
 
 
-func bow_range(u: Unit) -> float:
-	return Defs.TOWER_BOW_RANGE if u.in_tower >= 0 else Defs.BOW_RANGE
+func bow_range(shooter: Unit, target: Unit = null) -> float:
+	if target == null:
+		return Defs.BOW_RANGE + (Defs.TOWER_DECK_HEIGHT * 2.0 if shooter.in_tower >= 0 else 0.0)
+	if shooter.in_tower < 0 and target.in_tower < 0:
+		return Defs.BOW_RANGE
+	# At equal height the range is v²/g. Lower ground extends the ballistic range.
+	var drop := unit_floor_y(shooter) - unit_floor_y(target)
+	return sqrt(maxf(0.0, Defs.BOW_RANGE * (Defs.BOW_RANGE + 2.0 * drop)))
 
 
 ## The way to the foe is shut: attack what shuts it, or find someone else.
@@ -355,7 +363,7 @@ func commander_targets(u: Unit) -> Array:
 	var fwd := Vector2(sin(u.facing), cos(u.facing))
 	var scored := []
 	for o: Unit in units_near(u.pos, reach + 1.5, -2):
-		if o.id == u.id or o.faction == u.faction or o.stable >= 0:
+		if o.id == u.id or o.faction == u.faction or o.stable >= 0 or o.in_tower != u.in_tower:
 			continue
 		var to := o.pos - u.pos
 		var d := to.length()
@@ -380,6 +388,8 @@ func commander_targets(u: Unit) -> Array:
 
 
 func _commander_building(u: Unit) -> Building:
+	if u.in_tower >= 0:
+		return null
 	var reach: float = float(weapon_def(u)["reach"]) + 0.8
 	var hit := first_building(u.pos, u.pos + Vector2(sin(u.facing), cos(u.facing)) * reach)
 	if hit.is_empty() or hit[0].faction == u.faction:
@@ -463,6 +473,12 @@ func cover_height(b: Building) -> float:
 	return float(d["height"]) if d.has("height") else float(LOW_COVER.get(b.type, 3.5))
 
 
+func cover_top(b: Building) -> float:
+	if b.type == "tower":
+		return building_base_height(b) + Defs.TOWER_DECK_HEIGHT + Defs.TOWER_PARAPET_HEIGHT
+	return _height(b.pos) + cover_height(b)
+
+
 ## Where a segment enters a building's footprint (0..1), or -1.
 func footprint_entry(b: Building, from: Vector2, to: Vector2) -> float:
 	var a := (from - b.pos).rotated(-b.rot)
@@ -520,20 +536,20 @@ func melee_cover(u: Unit, foe: Unit) -> Building:
 
 
 func _muzzle(shooter: Unit) -> Vector3:
-	var lift := 5.5 if shooter.in_tower >= 0 else (2.2 if shooter.mounted else 1.5)
-	return Vector3(shooter.pos.x, _height(shooter.pos) + lift, shooter.pos.y)
+	var lift := 2.2 if shooter.mounted else 1.5
+	return Vector3(shooter.pos.x, unit_floor_y(shooter) + lift, shooter.pos.y)
 
 
 ## The flattest arc that clears what's in between, or -1 when the target is in cover.
 func arrow_arc(shooter: Unit, target: Unit) -> float:
 	var from := _muzzle(shooter)
-	var to := Vector3(target.pos.x, _height(target.pos) + 1.1, target.pos.y)
+	var to := Vector3(target.pos.x, unit_floor_y(target) + (1.5 if target.in_tower >= 0 else 1.1), target.pos.y)
 	var span := from.distance_to(to)
 	var in_path := []
 	var mid := (shooter.pos + target.pos) * 0.5
 	var half := shooter.pos.distance_to(target.pos) * 0.5
 	for b: Building in buildings:
-		if b.dead or not b.blocking:
+		if b.dead or not b.blocking or b.id == target.in_tower:
 			continue
 		var r := half + b.size.length() * 0.5
 		if b.pos.distance_squared_to(mid) > r * r:
@@ -543,7 +559,7 @@ func arrow_arc(shooter: Unit, target: Unit) -> float:
 			continue
 		var k := footprint_entry(b, shooter.pos, target.pos)
 		if k >= 0.0:
-			in_path.append([from.lerp(to, k).y, 4.0 * k * (1.0 - k) * span, _height(b.pos) + cover_height(b)])
+			in_path.append([from.lerp(to, k).y, 4.0 * k * (1.0 - k) * span, cover_top(b)])
 	for arc: float in [ARROW_FLAT, ARROW_LOB]:
 		var clear := true
 		for e in in_path:

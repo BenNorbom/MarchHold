@@ -560,8 +560,7 @@ func _sync_building(b) -> void:
 	if info.is_empty() or info["tier"] != b.tier:
 		_remove_building(b.id)
 		var root := Node3D.new()
-		var tr: Terrain = m.terrain
-		var base_y := _base_height(b)
+		var base_y: float = m.building_base_height(b)
 		root.position = Vector3(b.pos.x, base_y, b.pos.y)
 		root.rotation.y = -b.rot
 		var mi := MeshInstance3D.new()
@@ -572,14 +571,17 @@ func _sync_building(b) -> void:
 		root.add_child(mi)
 		add_child(root)
 		var body := StaticBody3D.new()
-		var cs := CollisionShape3D.new()
-		var box := BoxShape3D.new()
 		var h: float = meshes.building_height(b.type, b.tier, length)
-		var col_h := h if not d.get("walkable", false) else 0.2
-		box.size = Vector3(b.size.x, col_h, b.size.y)
-		cs.shape = box
-		cs.position = Vector3(0, col_h * 0.5, 0)
-		body.add_child(cs)
+		if b.type == "tower":
+			_add_tower_collision(body)
+		else:
+			var cs := CollisionShape3D.new()
+			var box := BoxShape3D.new()
+			var col_h := h if not d.get("walkable", false) else 0.2
+			box.size = Vector3(b.size.x, col_h, b.size.y)
+			cs.shape = box
+			cs.position = Vector3(0, col_h * 0.5, 0)
+			body.add_child(cs)
 		root.add_child(body)
 		if d.get("walkable", false):
 			body.collision_layer = 0
@@ -628,15 +630,21 @@ func _add_banner(parent: Node3D, faction: int, spot: Array) -> void:
 	parent.add_child(pole)
 
 
-func _base_height(b) -> float:
-	var tr: Terrain = m.terrain
-	var lo := INF
-	var ax: Vector2 = Vector2.from_angle(b.rot) * b.size.x * 0.5
-	var az: Vector2 = Vector2.from_angle(b.rot + PI * 0.5) * b.size.y * 0.5
-	for p in [b.pos, b.pos + ax + az, b.pos + ax - az, b.pos - ax + az, b.pos - ax - az]:
-		lo = minf(lo, tr.height_at(p.x, p.y))
-	var mid := tr.height_at(b.pos.x, b.pos.y)
-	return lerpf(lo, mid, 0.35)
+func _add_tower_collision(body: StaticBody3D) -> void:
+	var base := CollisionShape3D.new()
+	var cylinder := CylinderShape3D.new()
+	cylinder.radius = Defs.TOWER_DECK_RADIUS
+	cylinder.height = Defs.TOWER_DECK_HEIGHT
+	base.shape = cylinder
+	base.position.y = cylinder.height * 0.5
+	body.add_child(base)
+	for piece in meshes.tower_parapet():
+		var cs := CollisionShape3D.new()
+		var box := BoxShape3D.new()
+		box.size = piece[1]
+		cs.shape = box
+		cs.transform = piece[0]
+		body.add_child(cs)
 
 
 func _paint_for(b) -> void:
@@ -997,7 +1005,8 @@ func pick_unit(from: Vector3, dir: Vector3, max_d: float = 40.0, faction: int = 
 			continue
 		if faction != -99 and u.faction != faction:
 			continue
-		var p: Vector3 = m.terrain.pos3(u.pos, 1.2 if not u.mounted else 1.9)
+		var torso := 1.9 if u.mounted else (1.5 if u.in_tower >= 0 else 1.2)
+		var p := Vector3(u.pos.x, m.unit_floor_y(u) + torso, u.pos.y)
 		var to := p - from
 		var along := to.dot(dir)
 		if along < 0.5 or along > max_d:

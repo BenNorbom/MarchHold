@@ -260,7 +260,8 @@ func update_frame(delta: float, alpha: float, cam: Vector3, hidden: int) -> void
 		if u.dead and (u.dead_t < 0.0 or t - u.dead_t > 18.0):
 			continue
 		var p2: Vector2 = u.prev.lerp(u.pos, alpha)
-		var pos := Vector3(p2.x, tr.height_at(p2.x, p2.y), p2.y)
+		var y: float = m.unit_floor_y(u) if u.in_tower >= 0 else tr.height_at(p2.x, p2.y)
+		var pos := Vector3(p2.x, y, p2.y)
 		if pos.distance_squared_to(cam) > vd2:
 			continue
 		seen[u.id] = true
