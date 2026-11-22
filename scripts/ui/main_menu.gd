@@ -142,7 +142,8 @@ func _build_match_panel() -> void:
 		saved_map = Defs.MAP_DEFAULT
 	for id in Defs.MAP_SIZES:
 		var info: Dictionary = Defs.MAP_SIZES[id]
-		var side: String = "1 km × 1 km" if info["size"] >= 1000 else "%d × %d m" % [info["size"], info["size"]]
+		var km: float = snappedf(info["size"] / 1024.0, 0.5)
+		var side: String = "%s km × %s km" % [km, km] if info["size"] >= 1000 else "%d × %d m" % [info["size"], info["size"]]
 		map_pick.add_item("%s (%s)" % [info["name"], side])
 		map_pick.set_item_metadata(map_pick.item_count - 1, id)
 		if id == saved_map:

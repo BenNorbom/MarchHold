@@ -88,7 +88,7 @@ func start(options: Dictionary) -> void:
 	opts["seed"] = seed_in
 	var is_tutorial: bool = opts.get("tutorial", false)
 	m = Match.new()
-	var map_id: String = Defs.MAP_LARGEST if is_tutorial else str(opts.get("map", Defs.MAP_LARGEST))
+	var map_id: String = Defs.MAP_REFERENCE if is_tutorial else str(opts.get("map", Defs.MAP_REFERENCE))
 	m.setup({"seed": seed_in, "map": map_id})
 	ai = Rival.new()
 	ai.setup(m, {"faction": 1, "difficulty": 0 if is_tutorial else int(opts.get("difficulty", 1)),
@@ -298,10 +298,11 @@ func _describe_unit(u) -> String:
 		return ""
 	if u.faction == -1:
 		return "Wild horse" if u.kind == "horse" else ("Deer" if u.kind == "deer" else "")
-	if u.faction == 1:
+	if u.faction > 0:
+		var side = m.fac(u.faction)
 		if u.kind == "commander":
-			return "Commander Rook — kill him to win"
-		return "Enemy " + m.describe_person(u) + (" (wounded)" if u.hp < u.max_hp * 0.5 else "")
+			return side.commander_name + " — kill to win"
+		return "%s's " % side.short_name + m.describe_person(u) + (" (wounded)" if u.hp < u.max_hp * 0.5 else "")
 	if u.kind == "horse":
 		return "Your horse in the stable"
 	if u.kind in ["cannon", "ram"]:
@@ -338,8 +339,8 @@ func _describe_building(b) -> String:
 		name += " (%s)" % ["wood", "bronze", "iron"][b.tier]
 	if b.type == "smelter" and b.tier >= 1:
 		name = "Iron furnace"
-	if b.faction == 1:
-		return "Enemy " + name.to_lower()
+	if b.faction > 0:
+		return "%s's %s" % [m.fac(b.faction).short_name, name.to_lower()]
 	if not b.complete:
 		if not b.paid:
 			return "%s — site, waiting for builders (%s)" % [name, Defs.cost_text(Defs.BUILDINGS[b.type]["cost"])]

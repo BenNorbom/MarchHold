@@ -4,6 +4,7 @@ extends RefCounted
 
 const Defs = preload("res://scripts/data/defs.gd")
 const Terrain = preload("res://scripts/world/terrain.gd")
+const Blocking = preload("res://scripts/sim/blocking.gd")
 
 const CELL := 2.0                    # path grid cell in metres
 const KCELL := 8.0                   # knowledge grid cell in metres
@@ -130,6 +131,9 @@ class Faction:
 	var id := 0
 	var name := ""
 	var commander_name := ""
+	var short_name := ""
+	var alive := true
+	var out_t := -1.0
 	var color := Color.WHITE
 	var stock := {}
 	var gear := {}
@@ -205,7 +209,7 @@ var over := false
 var winner := -1
 var end_reason := ""
 var options := {}
-var grids: Array = []
+var blocking: Blocking
 var terrain_solid := PackedByteArray()
 var paths_this_tick := 0
 var ulist: Array = []
@@ -216,7 +220,7 @@ var node_buckets: Array = []
 
 # --- Setup ------------------------------------------------------------------------
 
-func _init_world(tr: Terrain) -> void:
+func _init_world(tr: Terrain, faction_count: int) -> void:
 	terrain = tr
 	map_size = tr.size
 	grid_n = int(map_size / CELL)
@@ -229,21 +233,8 @@ func _init_world(tr: Terrain) -> void:
 			var p := Vector2((i + 0.5) * CELL, (j + 0.5) * CELL)
 			var solid := terrain.slope_deg(p.x, p.y) > STEEP or not terrain.in_bounds(p, 3.0)
 			terrain_solid[j * grid_n + i] = 1 if solid else 0
-	grids.clear()
-	for f in 2:
-		var g := AStarGrid2D.new()
-		g.region = Rect2i(0, 0, grid_n, grid_n)
-		g.cell_size = Vector2(1, 1)
-		g.diagonal_mode = AStarGrid2D.DIAGONAL_MODE_ONLY_IF_NO_OBSTACLES
-		g.default_compute_heuristic = AStarGrid2D.HEURISTIC_OCTILE
-		g.default_estimate_heuristic = AStarGrid2D.HEURISTIC_OCTILE
-		g.jumping_enabled = true
-		g.update()
-		for j in grid_n:
-			for i in grid_n:
-				if terrain_solid[j * grid_n + i] == 1:
-					g.set_point_solid(Vector2i(i, j), true)
-		grids.append(g)
+	blocking = Blocking.new()
+	blocking.setup(grid_n, terrain_solid, faction_count)
 	node_buckets.clear()
 	node_buckets.resize(node_bucket_n * node_bucket_n)
 	for k in node_bucket_n * node_bucket_n:
@@ -451,11 +442,7 @@ func cell_center(c: Vector2i) -> Vector2:
 
 
 func solid_for(faction: int, c: Vector2i) -> bool:
-	if c.x < 0 or c.y < 0 or c.x >= grid_n or c.y >= grid_n:
-		return true
-	if faction < 0 or faction > 1:
-		return terrain_solid[c.y * grid_n + c.x] == 1 or grids[0].is_point_solid(c)
-	return grids[faction].is_point_solid(c)
+	return blocking.is_solid(faction, c)
 
 
 func line_clear(faction: int, a: Vector2, b: Vector2) -> bool:
@@ -491,7 +478,7 @@ func nearest_free_cell(faction: int, c: Vector2i, maxr: int = 12) -> Vector2i:
 
 ## Returns waypoints from a to b. Straight line when nothing is in the way.
 func find_path(faction: int, a: Vector2, b: Vector2) -> PackedVector2Array:
-	var pf := clampi(faction, 0, 1)
+	var pf := maxi(faction, 0)
 	if line_clear(pf, a, b):
 		return PackedVector2Array([b])
 	if paths_this_tick >= MAX_PATHS_PER_TICK:
@@ -499,7 +486,7 @@ func find_path(faction: int, a: Vector2, b: Vector2) -> PackedVector2Array:
 	paths_this_tick += 1
 	var ca := nearest_free_cell(pf, cell_of(a))
 	var cb := nearest_free_cell(pf, cell_of(b), 20)
-	var ids: Array[Vector2i] = grids[pf].get_id_path(ca, cb, true)
+	var ids: Array[Vector2i] = blocking.route(pf, ca, cb)
 	var out := PackedVector2Array()
 	if ids.is_empty():
 		return PackedVector2Array([b])
@@ -546,20 +533,14 @@ func _block(b: Building) -> void:
 		return
 	b.cells = _cells_of(b)
 	b.blocking = true
-	var gate: bool = d.get("gate", false)
-	for k in b.cells:
-		var c := Vector2i(k % grid_n, k / grid_n)
-		for f in 2:
-			if gate and f == b.faction:
-				continue
-			grids[f].set_point_solid(c, true)
+	blocking.add(b.cells, _gate_owner(b))
 	# Anyone standing inside steps out.
 	for u: Unit in units:
 		if u.dead:
 			continue
 		var cu := cell_of(u.pos)
 		if b.cells.has(cu.y * grid_n + cu.x):
-			var f := clampi(u.faction, 0, 1)
+			var f := maxi(u.faction, 0)
 			u.pos = cell_center(nearest_free_cell(f, cu))
 			u.prev = u.pos
 			u.path = PackedVector2Array()
@@ -569,18 +550,11 @@ func _unblock(b: Building) -> void:
 	if not b.blocking:
 		return
 	b.blocking = false
-	for k in b.cells:
-		var c := Vector2i(k % grid_n, k / grid_n)
-		if terrain_solid[k] == 1:
-			continue
-		var still := false
-		for o: Building in buildings:
-			if o != b and o.blocking and not o.dead and o.cells.has(k):
-				still = true
-				break
-		if not still:
-			for f in 2:
-				grids[f].set_point_solid(c, false)
+	blocking.remove(b.cells, _gate_owner(b))
+
+
+func _gate_owner(b: Building) -> int:
+	return b.faction if Defs.BUILDINGS[b.type].get("gate", false) else Blocking.NOT_A_GATE
 
 
 # --- Spatial queries ------------------------------------------------------------------

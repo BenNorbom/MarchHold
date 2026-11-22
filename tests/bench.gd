@@ -82,7 +82,7 @@ func _map_for(settlements: int) -> String:
 	for id in Defs.MAP_SIZES:
 		if settlements <= int(Defs.MAP_SIZES[id].get("settlements", 2)) and int(Defs.MAP_SIZES[id]["size"]) >= 768:
 			return id
-	return Defs.MAP_LARGEST
+	return Defs.MAP_REFERENCE
 
 
 func _case(settlements: int, pop: int, scenario: String) -> void:

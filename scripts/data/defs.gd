@@ -8,16 +8,33 @@ const VERSION := "0.4.0"
 # --- World -------------------------------------------------------------------
 # size: metres per side, a multiple of 256 so every grid and terrain chunk divides evenly.
 # min_start: the camps are never closer than this. margin: camps keep this far from the edge.
+# settlements: the most camps the map holds. With three or more they stand on a ring, RING_SPACING or more apart.
 # kit: how far each camp's own deposits and deer are. Kept under half of min_start,
 # so they always lie on that camp's side of the map.
 const MAP_SIZES := {
-	"small": {"name": "Small", "size": 512, "min_start": 320.0, "margin": 100.0, "kit": Vector2(90, 150)},
-	"medium": {"name": "Medium", "size": 768, "min_start": 460.0, "margin": 125.0, "kit": Vector2(120, 200)},
-	"large": {"name": "Large", "size": 1024, "min_start": 620.0, "margin": 150.0, "kit": Vector2(120, 200)},
+	"small": {"name": "Small", "size": 512, "min_start": 320.0, "margin": 100.0, "kit": Vector2(90, 150), "settlements": 2},
+	"medium": {"name": "Medium", "size": 768, "min_start": 460.0, "margin": 125.0, "kit": Vector2(120, 200), "settlements": 4},
+	"large": {"name": "Large", "size": 1024, "min_start": 620.0, "margin": 150.0, "kit": Vector2(120, 200), "settlements": 6},
+	"huge": {"name": "Huge", "size": 1536, "min_start": 900.0, "margin": 150.0, "kit": Vector2(120, 200), "settlements": 8},
 }
 const MAP_DEFAULT := "medium"     # preselected for a new match
-const MAP_LARGEST := "large"      # the reference size; also used by the tutorial
+const MAP_REFERENCE := "large"    # what size_scale is relative to; also used by the tutorial
+const RING_SPACING := 320.0       # closest two neighbours may start with three or more camps
+const MAX_SETTLEMENTS := 8
 const TICK := 0.1                 # simulation step in seconds (10 Hz)
+
+# --- Commanders --------------------------------------------------------------
+# By faction. Colours are picked to differ in lightness as well as hue.
+const COMMANDERS := [
+	{"name": "", "color": Color(0.16, 0.28, 0.55)},   # the player
+	{"name": "Rook", "color": Color(0.62, 0.15, 0.11)},
+	{"name": "Varga", "color": Color(0.82, 0.66, 0.14)},
+	{"name": "Morrow", "color": Color(0.42, 0.20, 0.56)},
+	{"name": "Corvin", "color": Color(0.11, 0.11, 0.12)},
+	{"name": "Ashby", "color": Color(0.20, 0.46, 0.22)},
+	{"name": "Sorrel", "color": Color(0.86, 0.40, 0.10)},
+	{"name": "Kestrel", "color": Color(0.84, 0.84, 0.80)},
+]
 
 # --- Population --------------------------------------------------------------
 const START_VILLAGERS := 6
@@ -207,6 +224,17 @@ const NAMES := ["Hal", "Wren", "Ana", "Bram", "Cora", "Dunstan", "Edda", "Finn",
 	"Esme", "Faye", "Garth", "Hob", "Isolde", "Jago", "Kara", "Lud", "Mags", "Nils", "Orla", "Pip", "Ralf",
 	"Saer", "Tove", "Viv", "Wat", "Agnes", "Brun", "Cuth", "Dwyn", "Elsa", "Fritha", "Gunn", "Herne", "Ilse",
 	"Jem", "Kell", "Lark", "Mott", "Nan", "Oswin", "Perrin", "Rook", "Sten", "Teg", "Ulric", "Vera", "Wulf"]
+
+
+## The map to play on: the one asked for, or the smallest bigger one that holds that many camps.
+static func map_for(settlements: int, wanted: String) -> String:
+	var id := wanted if MAP_SIZES.has(wanted) else MAP_DEFAULT
+	if int(MAP_SIZES[id]["settlements"]) >= settlements:
+		return id
+	for other in MAP_SIZES:
+		if int(MAP_SIZES[other]["settlements"]) >= settlements:
+			return other
+	return id
 
 
 static func building_name(id: String) -> String:

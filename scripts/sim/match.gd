@@ -9,17 +9,22 @@ func setup(opts: Dictionary) -> void:
 	options = opts
 	var seed_in := int(opts.get("seed", 1))
 	rng.seed = seed_in * 7919 + 13
+	var count := clampi(int(opts.get("settlements", 2)), 2, Defs.MAX_SETTLEMENTS)
 	var tr := Terrain.new()
-	tr.generate(seed_in, str(opts.get("map", Defs.MAP_LARGEST)))
-	_init_world(tr)
+	tr.generate(seed_in, str(opts.get("map", Defs.MAP_REFERENCE)), count)
+	_init_world(tr, count)
+	birth_acc.resize(count)
+	birth_acc.fill(0.0)
 	factions.clear()
-	for i in 2:
+	for i in count:
 		var f := Faction.new()
 		f.id = i
-		f.name = "Your people" if i == 0 else "Rook's people"
-		f.commander_name = "Commander" if i == 0 else "Commander Rook"
-		f.color = Color(0.16, 0.28, 0.55) if i == 0 else Color(0.62, 0.15, 0.11)
-		f.is_ai = i == 1 or bool(opts.get("ai_both", false))
+		var who: Dictionary = Defs.COMMANDERS[i]
+		f.short_name = who["name"]
+		f.name = "Your people" if i == 0 else "%s's people" % who["name"]
+		f.commander_name = "Commander" if i == 0 else "Commander %s" % who["name"]
+		f.color = who["color"]
+		f.is_ai = i > 0 or bool(opts.get("ai_both", false))
 		f.start = tr.starts[i]
 		for r in Defs.RESOURCES:
 			f.stock[r] = 0.0
@@ -28,7 +33,7 @@ func setup(opts: Dictionary) -> void:
 		f.visible.resize(kres * kres)
 		factions.append(f)
 	for f: Faction in factions:
-		var other: Vector2 = factions[1 - f.id].start
+		var other: Vector2 = factions[1 - f.id].start if count == 2 else Vector2(map_size, map_size) * 0.5
 		var rot := atan2((other - f.start).y, (other - f.start).x)
 		add_building(f.id, "campfire", f.start, rot, true)
 		var cmd := spawn_unit(f.id, "commander", f.start + Vector2.from_angle(rot) * 7.0)
@@ -156,8 +161,8 @@ func _unstick(u: Unit, dt: float) -> void:
 			u.path = PackedVector2Array()
 			u.path_goal = Vector2(-999, -999)
 			var c := cell_of(u.pos)
-			if solid_for(clampi(u.faction, 0, 1), c):
-				u.pos = cell_center(nearest_free_cell(clampi(u.faction, 0, 1), c))
+			if solid_for(maxi(u.faction, 0), c):
+				u.pos = cell_center(nearest_free_cell(maxi(u.faction, 0), c))
 			else:
 				u.pos += Vector2.from_angle(rng.randf() * TAU) * 1.5
 	else:
@@ -187,10 +192,63 @@ func _cleanup() -> void:
 func on_commander_dead(u: Unit) -> void:
 	if over:
 		return
+	var f := fac(u.faction)
+	f.alive = false
+	f.out_t = t
+	var left := living()
+	if left.size() > 1 and not is_player_faction(f.id):
+		eliminate(f)
+		return
 	over = true
-	winner = 1 - u.faction
+	if left.size() == 1:
+		winner = left[0]
+	else:
+		# The player fell with rivals still standing: the killer's side takes the win.
+		var killer := unit(u.attacker)
+		winner = killer.faction if killer else -1
 	end_reason = "%s was killed." % u.name
 	emit({"type": "over", "winner": winner})
+
+
+func living() -> Array:
+	var out := []
+	for f: Faction in factions:
+		if f.alive:
+			out.append(f.id)
+	return out
+
+
+## A fallen commander's settlement breaks up: people scatter and buildings collapse.
+## This can run in the middle of a tick, so nothing is taken out of the arrays here.
+func eliminate(f: Faction) -> void:
+	for c: Crew in crews.values():
+		if c.faction == f.id:
+			dissolve(c)
+	for u: Unit in units:
+		if u.dead or u.faction != f.id:
+			continue
+		if u.kind == "horse":
+			u.faction = -1
+			u.stable = -1
+			u.herd = -1
+			u.goal = u.pos
+			continue
+		_release_claim(u)
+		u.dead = true
+		u.dead_t = -1.0     # gone, with no body left to draw
+	for b: Building in buildings:
+		if not b.dead and b.faction == f.id:
+			remove_building(b, "abandoned")
+	for other: Faction in factions:
+		for key in other.intel.keys():
+			if int(other.intel[key].get("faction", -1)) == f.id:
+				other.intel.erase(key)
+	for c: Crew in crews.values():
+		if c.idx < c.steps.size() and c.steps[c.idx]["action"] == "attack" and int(c.state.get("foe", -1)) == f.id:
+			# Nobody is left to fight there. The crew keeps together and marches home.
+			start_plan(c, [{"action": "guard", "subject": "", "count": 0, "amount": 0, "where": "home"}])
+	post(0, "Commander %s has fallen. %s scatter." % [f.short_name, f.name], "done")
+	emit({"type": "eliminated", "faction": f.id})
 
 
 # --- Orders --------------------------------------------------------------------

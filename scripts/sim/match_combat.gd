@@ -773,12 +773,18 @@ func _sight(f: Faction, p: Vector2, r: float, scout) -> Array:
 			continue
 		foes.append(o)
 	if not foes.is_empty():
-		var entry := _group_entry(foes)
-		var key := "army%d" % kcell(p)
-		if scout:
-			scout.sightings[key] = entry
-		else:
-			f.intel[key] = entry
+		var sides := {}
+		for o in foes:
+			if not sides.has(o.faction):
+				sides[o.faction] = []
+			sides[o.faction].append(o)
+		for side in sides:
+			var entry := _group_entry(sides[side])
+			var key := _army_key(side, p)
+			if scout:
+				scout.sightings[key] = entry
+			else:
+				f.intel[key] = entry
 	for b: Building in buildings:
 		if b.dead or b.faction == f.id or b.pos.distance_squared_to(p) > r * r:
 			continue
@@ -811,7 +817,11 @@ func _note_units(f: Faction, p: Vector2, foes: Array, when: float) -> void:
 		return
 	var e := _group_entry(foes)
 	e["t"] = when
-	f.intel["army%d" % kcell(p)] = e
+	f.intel[_army_key(e["faction"], p)] = e
+
+
+func _army_key(faction: int, p: Vector2) -> String:
+	return "army%d:%d" % [faction, kcell(p)]
 
 
 static func approx(n: int) -> String:
@@ -850,7 +860,7 @@ func deliver_report(u: Unit, c: Crew) -> void:
 		if float(u.seen[k]) > f.knowledge[k]:
 			f.knowledge[k] = u.seen[k]
 	var oldest := t
-	var camp = null
+	var camps := {}
 	var enemy_buildings := {}
 	var walls := 0
 	var armies := []
@@ -865,7 +875,7 @@ func deliver_report(u: Unit, c: Crew) -> void:
 		match e["kind"]:
 			"building":
 				if e["type"] == "campfire":
-					camp = e["pos"]
+					camps[e["faction"]] = e["pos"]
 				elif Defs.BUILDINGS[e["type"]].get("wall", false):
 					walls += 1
 				else:
@@ -880,9 +890,11 @@ func deliver_report(u: Unit, c: Crew) -> void:
 	var ago := int((t - oldest) / 60.0)
 	var when := "just now" if ago < 1 else ("%d minute%s ago" % [ago, "" if ago == 1 else "s"])
 	var parts: Array[String] = []
-	if camp != null:
-		var d := int(round((camp as Vector2).distance_to(home_pos(u.faction)) / 10.0) * 10.0)
-		parts.append("their camp is about %d m %s" % [d, Terrain.compass_name((camp as Vector2) - home_pos(u.faction))])
+	for who in camps:
+		var away: Vector2 = camps[who] - home_pos(u.faction)
+		var d := int(round(away.length() / 10.0) * 10.0)
+		var whose := "their" if factions.size() == 2 else "%s's" % factions[who].short_name
+		parts.append("%s camp is about %d m %s" % [whose, d, Terrain.compass_name(away)])
 	var total_men := 0
 	var counts := {}
 	for e in armies:
@@ -896,7 +908,7 @@ func deliver_report(u: Unit, c: Crew) -> void:
 		for k in enemy_buildings:
 			bl.append("%s %s" % [approx(enemy_buildings[k]), Defs.building_name(k).to_lower() + ("s" if enemy_buildings[k] > 1 else "")])
 		parts.append("buildings: " + ", ".join(bl))
-	if camp != null:
+	if not camps.is_empty():
 		parts.append("walls: %s" % ("none" if walls == 0 else ("%d sections" % walls)))
 	if herds > 0:
 		parts.append("wild horses graze out there")

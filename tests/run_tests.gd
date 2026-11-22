@@ -22,7 +22,7 @@ func _initialize() -> void:
 
 func _run_tests() -> void:
 	var only := OS.get_environment("MH_TEST")
-	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "crews", "selection", "walls", "combat", "parser", "schema", "chatgpt", "terra_orders", "duel"]
+	var tests := ["defs", "validation", "terrain", "map_sizes", "rings", "settlements", "economy", "crews", "selection", "walls", "combat", "parser", "schema", "chatgpt", "terra_orders", "duel"]
 	var t0 := Time.get_ticks_msec()
 	for name in tests:
 		if only != "" and only != name:
@@ -282,7 +282,7 @@ func test_walls() -> void:
 	var b0 = m.bld(ids[0])
 	if b0:
 		var c: Vector2i = m.cell_of(b0.pos)
-		check(m.grids[1].is_point_solid(c), "palisade blocks the enemy")
+		check(m.solid_for(1, c), "palisade blocks the enemy")
 
 
 func test_combat() -> void:
@@ -443,7 +443,102 @@ func test_map_sizes() -> void:
 		check(m.cell_of(far) == Vector2i(m.grid_n - 1, m.grid_n - 1), "%s path grid covers the map" % id)
 		var a: Vector2i = m.nearest_free_cell(0, m.cell_of(m.home_pos(0)))
 		var b: Vector2i = m.nearest_free_cell(0, m.cell_of(m.home_pos(1)))
-		check(not m.grids[0].get_id_path(a, b).is_empty(), "%s camps can reach each other" % id)
+		check(not m.blocking.grid.get_id_path(a, b).is_empty(), "%s camps can reach each other" % id)
+
+
+func test_rings() -> void:
+	var seeds := int(OS.get_environment("MH_MAP_SEEDS")) if OS.get_environment("MH_MAP_SEEDS") != "" else 1
+	for count in range(3, Defs.MAX_SETTLEMENTS + 1):
+		var id: String = Defs.map_for(count, "small")
+		for s in seeds:
+			var tr = Terrain.new()
+			tr.generate((s + 1) * 977, id, count)
+			var label := "%d camps on %s, seed %d" % [count, id, s + 1]
+			check(tr.starts.size() == count, label + ": every camp placed")
+			var closest := INF
+			for a in count:
+				check(tr.in_bounds(tr.starts[a], float(tr.config["margin"]) - 1.0), label + ": camp inside margins")
+				for b in range(a + 1, count):
+					closest = minf(closest, tr.starts[a].distance_to(tr.starts[b]))
+			check(closest >= Defs.RING_SPACING, "%s: neighbours %.0f m apart" % [label, closest])
+			check(tr.kit.y < closest * 0.5, label + ": each kit is on its own camp's side")
+			for p in tr.starts:
+				var kinds := {}
+				for n in tr.nodes:
+					if n.kind == "tree":
+						continue
+					var d: float = n.pos.distance_to(p)
+					if n.kind == "berry" and d < 90.0:
+						kinds["berry"] = true
+					elif n.kind == "deposit" and d < 230.0:
+						kinds[n.sub] = true
+					elif n.kind == "rock" and n.sub == "outcrop" and d < 160.0:
+						kinds["outcrop"] = true
+				for k in ["berry", "bronze_ore", "coal", "iron_ore", "outcrop"]:
+					check(kinds.has(k), "%s: %s near camp" % [label, k])
+
+
+func test_settlements() -> void:
+	var m = Match.new()
+	m.setup({"seed": 4242, "map": "small", "settlements": 8})
+	check(m.factions.size() == 8 and m.terrain.map_id == "huge", "eight settlements move up to the Huge map")
+	var names := {}
+	for f in m.factions:
+		names[f.commander_name] = true
+		check(m.commander(f.id) != null and m.home_of(f.id) != null, "faction %d has a commander and a camp" % f.id)
+	check(names.size() == 8, "every commander has their own name")
+	var from: Vector2i = m.nearest_free_cell(0, m.cell_of(m.home_pos(0)))
+	for id in range(1, 8):
+		var to: Vector2i = m.nearest_free_cell(id, m.cell_of(m.home_pos(id)))
+		var route: Array = m.blocking.route(0, from, to)
+		check(not route.is_empty() and route[-1] == to, "camp %d can be reached" % id)
+	# Gates open for their owner alone, for every faction.
+	for owner_id in 8:
+		var gate = m.add_building(owner_id, "palisade_gate", m.home_pos(owner_id) + Vector2(22, 0), 0.0, true)
+		var cell := Vector2i(gate.cells[0] % m.grid_n, gate.cells[0] / m.grid_n)
+		for who in 8:
+			check(m.solid_for(who, cell) == (who != owner_id), "faction %d at faction %d's gate" % [who, owner_id])
+		m.remove_building(gate)
+		check(not m.solid_for((owner_id + 1) % 8, cell), "faction %d's gate clears when removed" % owner_id)
+	var last = m.fac(7)
+	m.add_building(7, "hut", m.home_pos(7) + Vector2(0, 20), 0.0, true)
+	last.food_cap = 150
+	last.stock["food"] = 100.0
+	for i in 70:
+		m.upkeep(1.0)
+	check(last.births > 0, "the eighth settlement has births")
+	# Sightings keep rivals apart.
+	var spot: Vector2 = m.home_pos(0) + Vector2(30, 0)
+	m.spawn_unit(2, "villager", spot)
+	m.spawn_unit(5, "villager", spot + Vector2(2, 0))
+	m.rebuild_unit_hash()
+	m._sight(m.fac(0), spot, 10.0, null)
+	var sides := {}
+	for e in m.fac(0).intel.values():
+		if e["kind"] == "units":
+			sides[e["faction"]] = int(e["total"])
+	check(sides.size() == 2 and sides.get(2) == 1 and sides.get(5) == 1, "a mixed group is reported by side (%s)" % str(sides))
+	check(m.known_camps(0).is_empty(), "no rival camp is known before it has been seen")
+	# An army whose target falls comes home, still together.
+	var camp = m.home_of(3)
+	m.fac(0).intel["b%d" % camp.id] = {"kind": "building", "type": "campfire", "pos": camp.pos, "faction": 3, "t": 0.0}
+	var army = m.make_crew(0, m.idle_adults(0, m.home_pos(0)).slice(0, 3))
+	var order: Dictionary = m.command(0, {"crew": army.id, "steps": [step("attack", "", 0, "enemy")]})
+	check(order.get("ok", false) and army.state.get("foe", -1) == 3, "attacking their camp remembers whose it is")
+	m.kill_unit(m.commander(3))
+	check(not m.over and not m.fac(3).alive and m.living().size() == 7, "one fallen rival doesn't end the match")
+	check(m.buildings_of(3, "", false).is_empty() and m.units.all(func(u): return u.dead or u.faction != 3), "the fallen settlement breaks up")
+	check(army.members.size() == 3 and army.steps[0]["action"] == "guard", "the army comes home when its target falls")
+	check(m.known_camps(0).is_empty(), "a fallen rival's camp is no longer a target")
+	run(m, 1.0)
+	check(not m.over, "the match goes on after an elimination")
+	for id in [1, 2, 4, 5, 6, 7]:
+		m.kill_unit(m.commander(id))
+	check(m.over and m.winner == 0, "the last commander standing wins")
+	var lost = Match.new()
+	lost.setup({"seed": 7, "map": "medium", "settlements": 3})
+	lost.kill_unit(lost.commander(0))
+	check(lost.over and lost.winner != 0, "the player's death ends the match")
 
 
 func test_duel() -> void:
