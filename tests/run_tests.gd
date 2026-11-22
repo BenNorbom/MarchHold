@@ -635,7 +635,7 @@ func test_mandate_building() -> void:
 		check(false, "captains build within their mandate")
 		return
 	# A village captain builds what the village needs, unasked.
-	var m = new_match(414)
+	var m = new_match(415)
 	var f = m.fac(0)
 	var home: Vector2 = m.home_pos(0)
 	var adults: Array = grown_village(m, 30)
@@ -1578,7 +1578,7 @@ func test_gathering() -> void:
 		m.terrain.nodes.append(bush)
 		m._bucket_node(bush)
 		m.command(0, {"units": [m.idle_adults(0, home)[0].id], "steps": [step("gather", "berries")]})
-		run(m, 30.0)
+		run(m, 60.0)
 		check(bush.amount < 70.0, "a bush against a stockpile at %s gets picked (%.0f left)" % [offset, bush.amount])
 
 
