@@ -5,6 +5,7 @@ extends RefCounted
 
 const Defs = preload("res://scripts/data/defs.gd")
 const Terrain = preload("res://scripts/world/terrain.gd")
+const Planner = preload("res://scripts/ai/planner.gd")
 
 const STRATEGIES := ["rush", "boom", "turtle", "cavalry", "cannons"]
 
@@ -127,18 +128,16 @@ func _economy(f) -> void:
 	var adults: int = f.adults
 	if adults <= 0:
 		return
-	var food_need := int(ceil(f.pop * (0.36 if f.food_state <= 1 else 0.24))) + (2 if f.food_state <= 1 else 1)
-	var wood_need := int(ceil(adults * (0.34 if f.age == 0 else 0.22)))
+	var food_need := Planner.food_workers(f.pop, f.food_state)
+	var wood_need := Planner.wood_workers(adults, f.age)
 	var stone_need := 0
 	if f.age >= 1 or m.has_building(fid, "quarry"):
-		stone_need = int(ceil(adults * (0.18 if strategy == "turtle" else 0.12)))
+		stone_need = Planner.stone_workers(adults, 0.18 if strategy == "turtle" else 0.12)
 	elif _count("quarry", true) == 0 and m.t > 150.0:
 		stone_need = 1
 	# Food: berries first, then farms, then hunting.
 	var farms := _count("farm", false)
-	var food_src := "farm" if farms > 0 else "berries"
-	if food_src == "berries" and m.nearest_node("berry", _home(), 150.0) == null:
-		food_src = "hunt" if m.has_building(fid, "lodge") else "berries"
+	var food_src := Planner.food_source(m, fid, _home(), farms)
 	_keep_gathering("food", food_src, mini(food_need, farms * 2) if food_src == "farm" else food_need)
 	if food_src == "farm" and food_need > farms * 2:
 		var extra := "berries" if m.nearest_node("berry", _home(), 160.0) != null else ("hunt" if m.has_building(fid, "lodge") else "")
@@ -242,7 +241,7 @@ func _next_building(f) -> String:
 	var rush := strategy == "rush"
 	if _count("armory") == 0 and (rush or t > 100.0 or float(f.stock.get("wood", 0)) > 70.0):
 		return "armory"
-	var farms_want := int(ceil(pop * 0.24 / 2.0))
+	var farms_want := Planner.farms_wanted(pop)
 	if _count("farm") < farms_want and (t > 150.0 or m.nearest_node("berry", _home(), 150.0) == null):
 		return "farm"
 	if _count("watch_post") == 0 and t > 200.0:
@@ -306,21 +305,7 @@ func _mine_site_exists(dep: String) -> bool:
 
 func _find_deposit(dep: String):
 	_mine_dep = dep
-	var best = null
-	var bd := 330.0
-	for n in m.terrain.nodes:
-		if n.kind != "deposit" or n.sub != dep:
-			continue
-		var d: float = n.pos.distance_to(_home())
-		if d < bd:
-			var taken := false
-			for b in m.buildings:
-				if not b.dead and b.type == "mine" and b.node == n.id:
-					taken = true
-			if not taken:
-				bd = d
-				best = n
-	return best
+	return Planner.find_deposit(m, fid, dep, _home(), 330.0, false)
 
 
 func _site_pending(types: Array) -> bool:
@@ -331,56 +316,7 @@ func _site_pending(types: Array) -> bool:
 
 
 func _find_site(type: String):
-	var home := _home()
-	var dir := _toward_enemy()
-	var rot := atan2(dir.y, dir.x)
-	if type == "mine":
-		var n = _find_deposit(_mine_dep)
-		if n == null:
-			return null
-		for k in 16:
-			var p: Vector2 = n.pos + Vector2.from_angle(k * TAU / 16.0) * 7.0
-			if m.site_problem(fid, "mine", p, rot) == "":
-				return [p, rot]
-		return null
-	if type == "quarry":
-		var best = null
-		var bd := 400.0
-		for n in m.terrain.nodes:
-			if n.kind == "rock" and n.sub == "outcrop" and n.pos.distance_to(home) < bd:
-				bd = n.pos.distance_to(home)
-				best = n
-		if best == null:
-			return null
-		for k in 16:
-			var p: Vector2 = best.pos + Vector2.from_angle(k * TAU / 16.0) * 10.0
-			if m.site_problem(fid, "quarry", p, rot) == "":
-				return [p, rot]
-		return null
-	var r0 := 12.0
-	var r1 := 42.0
-	match type:
-		"farm":
-			r0 = 26.0
-			r1 = 70.0
-		"watch_post", "tower":
-			r0 = 45.0
-			r1 = 70.0
-		"stockpile":
-			r0 = 30.0
-			r1 = 60.0
-		"university", "stable", "smelter":
-			r0 = 22.0
-			r1 = 60.0
-	for attempt in 60:
-		var ang := rng.randf() * TAU
-		if type in ["watch_post", "tower"]:
-			ang = atan2(dir.y, dir.x) + rng.randf_range(-0.7, 0.7)
-		var p := home + Vector2.from_angle(ang) * rng.randf_range(r0, r1)
-		var rr := ang + PI * 0.5
-		if m.site_problem(fid, type, p, rr) == "":
-			return [p, rr]
-	return null
+	return Planner.find_site(m, fid, type, _home(), _toward_enemy(), rng, false, _mine_dep)
 
 
 func _build_wall(f, role: String, type: String) -> void:
@@ -527,12 +463,7 @@ func _military(f) -> void:
 
 func _defend(f) -> void:
 	# React to enemies seen near home in the last few seconds.
-	var home := _home()
-	var threat := 0
-	for k in f.intel:
-		var e: Dictionary = f.intel[k]
-		if e.get("kind", "") == "units" and m.t - float(e["t"]) < 6.0 and (e["pos"] as Vector2).distance_to(home) < 90.0:
-			threat += int(e["total"])
+	var threat := Planner.threat(m, fid, _home(), 90.0)
 	if threat == 0:
 		# Stand the militia down once things are quiet.
 		if _crew("militia") != null and m.t - last_alarm > 45.0:
@@ -547,7 +478,7 @@ func _defend(f) -> void:
 	# Militia: arm villagers only for a real raid, not a lone scout.
 	var guards: int = army.members.size() if army else 0
 	if threat >= 3 and guards < threat + 2:
-		_order("militia", [_step("arm"), _step("guard", "", 0, "home")], mini(f.adults - guards, threat * 2 + 2))
+		_order("militia", [_step("arm"), _step("guard", "", 0, "home")], Planner.militia_wanted(f.adults, guards, threat))
 
 
 func _scouting(f) -> void:
