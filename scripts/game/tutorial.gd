@@ -12,7 +12,7 @@ const STEPS := [
 	["A roof", "Type [b]/b b h[/b] (or press B, B, H) to build a [b]hut[/b]. It needs {hut}, so let them chop first.",
 		"Only 8 people fit around a campfire. A hut houses 6 more. Type /b b h: b for basic structures, h for hut. Then click the ground to place it."],
 	["Well fed", "Feed the village: say [b]pick berries[/b], then build a [b]farm[/b] ([b]/b b f[/b]). Wait for a birth.",
-		"Children are born only when the village is well fed and there is room. Berries are quick; a farm feeds people for good."],
+		"Children are born when the village is fed, faster when well fed, as long as there is room. Berries are quick; a farm feeds people for good."],
 	["The armory", "Build an [b]armory[/b] ([b]/b b a[/b]), make spears ([b]/c b w[/b]), then say [b]arm 4 with spears[/b].",
 		"Every soldier is a villager. The armory makes weapons; arming people takes them off work, so choose wisely."],
 	["Eyes and ears", "Send a scout: [b]send a scout[/b]. When the scout returns, read the report with [b]/s[/b].",

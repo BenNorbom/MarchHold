@@ -99,7 +99,7 @@ MarchHold keeps account credentials encrypted on your PC. When you submit a free
 
 ## How the game works
 
-- **Growth.** Villagers are born only when the village is *well fed* (3 food stored per person) and there's free housing. The campfire houses 8 and each hut 6, up to 200 people. The campfire stores 150 food and each stockpile 50 more.
+- **Growth.** Villagers are born when the village is *fed* (1 food stored per person, 75% of the birth rate) or *well fed* (3 food per person, full rate) and there's free housing. Births keep building up while housing is full (up to half a birth per adult), so a new hut or a death is filled at once. The campfire houses 8 and each hut 6, up to 200 people. The campfire stores 150 food and each stockpile 50 more.
 - **Ages.** Wood (start) → Stone (build a quarry by a rock outcrop) → Bronze (smelt bronze from bronze ore and coal) → Iron (upgrade the smelter to an iron furnace) → Gunpowder (university research). The armory upgrades in place from wood to bronze to iron.
 - **Scouting.** You only know what you've seen. Scouts report when they return, and if they die, what they saw dies with them. Watch posts and towers ring the alarm when enemies appear.
 - **Combat.** Pikes beat cavalry. Cavalry runs down archers. Shields and armor blunt arrows. Sword and shield beat pikes up close. A raised shield protects you from blows and arrows from the front. Blocking costs stamina, and a well-timed parry staggers the attacker. Cannons smash walls but scatter in the open, reload slowly and need a crew of three. Horses pull cannons faster.

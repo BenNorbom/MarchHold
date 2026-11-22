@@ -2142,7 +2142,7 @@ func upkeep(dt: float) -> void:
 			f.food_state = 3
 		if f.food_state != old and f.id == 0:
 			var msg: String = ["The village is starving! People will die without food.", "The village is hungry. Work slows down.",
-				"The village is fed, but not well enough to grow.", "The village is well fed. Expect births."][f.food_state]
+				"The village is fed. Births are slow; well fed is faster.", "The village is well fed. Expect births."][f.food_state]
 			post(0, msg, "warn" if f.food_state < 2 else "info")
 		if f.food_state == 0:
 			for u: Unit in units:
@@ -2150,14 +2150,21 @@ func upkeep(dt: float) -> void:
 					u.hp -= 0.5 * dt
 					if u.hp <= 0.0:
 						kill_unit(u, "starved")
-		# Births.
-		if f.food_state == 3 and f.pop < f.housing:
-			birth_acc[f.id] += f.adults * dt / Defs.BIRTH_SECONDS_PER_ADULT
-			if birth_acc[f.id] >= 1.0:
+		# Births. A fed village grows at FED_BIRTH_RATE, a well fed one at full rate.
+		# Progress banks even when housing is full (up to BIRTH_BANK_PER_ADULT per
+		# adult), so a freed place or a new hut is filled at once. Hungry or starving
+		# villages neither gain nor lose what they have banked.
+		if f.food_state >= 2:
+			var pace := 1.0 if f.food_state == 3 else Defs.FED_BIRTH_RATE
+			birth_acc[f.id] += f.adults * dt / Defs.BIRTH_SECONDS_PER_ADULT * pace
+			birth_acc[f.id] = minf(birth_acc[f.id], maxf(1.0, f.adults * Defs.BIRTH_BANK_PER_ADULT))
+			# f.pop is only refreshed once a tick, so count the births made here.
+			var room := f.housing - f.pop
+			var born := 0
+			while birth_acc[f.id] >= 1.0 and born < room:
 				birth_acc[f.id] -= 1.0
-				_birth(f)
-		else:
-			birth_acc[f.id] = minf(birth_acc[f.id], 0.5)
+				born += 1
+				_birth(f, f.pop + born)
 		# Growing up, healing at home.
 		for u: Unit in units:
 			if u.dead or u.faction != f.id:
@@ -2177,7 +2184,7 @@ func upkeep(dt: float) -> void:
 			_open_age(f, 1)
 
 
-func _birth(f: Faction) -> void:
+func _birth(f: Faction, people: int) -> void:
 	var home := home_pos(f.id)
 	var u := spawn_unit(f.id, "villager", home + Vector2.from_angle(rng.randf() * TAU) * rng.randf_range(3.0, 7.0))
 	u.child = true
@@ -2187,7 +2194,7 @@ func _birth(f: Faction) -> void:
 	f.births += 1
 	emit({"type": "unit", "id": u.id})
 	if f.id == 0:
-		post(0, "A child is born: %s. (%d people, housing %d)" % [u.name, f.pop + 1, f.housing], "birth")
+		post(0, "A child is born: %s. (%d people, housing %d)" % [u.name, people, f.housing], "birth")
 		sound("birth", home, 0)
 
 

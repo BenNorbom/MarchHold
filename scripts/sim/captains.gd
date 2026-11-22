@@ -94,7 +94,7 @@ static func _wanted(m, p, workers: Array) -> Array:
 	match p.mandate:
 		"village":
 			var f = m.fac(p.faction)
-			# Short of well fed means short of births, so staff food as if hungry.
+			# Short of well fed means slower births, so staff food as if hungry.
 			var food := Planner.food_workers(f.pop, 3 if f.food_state == 3 else 1)
 			for other in m.posts.values():
 				if other.faction == p.faction and other.mandate == "farming":
