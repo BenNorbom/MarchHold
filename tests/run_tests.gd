@@ -1413,7 +1413,8 @@ func test_hotkeys() -> void:
 		wanted["build:" + id] = true
 	for id in Defs.UPGRADES:
 		wanted["upgrade:" + Defs.UPGRADES[id]["building"]] = true
-	wanted["research:gunpowder"] = true
+	for id in Defs.RESEARCH:
+		wanted["research:" + id] = true
 	for id in Defs.ITEMS:
 		wanted["craft:" + id] = true
 	var keyed := {}
@@ -1446,8 +1447,29 @@ func test_hotkeys() -> void:
 	check(two["error"] == "" and two["batches"] == 2 and two["entry"]["id"] == "wood_spear", "/c b w 2 is two batches of spears")
 	for bad in ["b w 0", "b w x", "b w 100", "b w 2 2"]:
 		check(read.call("c", bad)["error"] != "", "bad batch count refused: " + bad)
-	check(Array(Hotkeys.split_keys(PackedStringArray(["bh"]))) == ["b", "h"], "quick keys need no space")
-	check(Array(Hotkeys.split_keys(PackedStringArray(["hut"]))) == ["hut"], "quick keys still allow names")
+	check(Array(Hotkeys.split_keys("b", PackedStringArray(["bh"]))) == ["b", "h"], "quick keys need no space")
+	check(Array(Hotkeys.split_keys("b", PackedStringArray(["hut"]))) == ["hut"], "quick keys still allow names")
+	check(Array(Hotkeys.split_keys("r", PackedStringArray(["g"]))) == ["g"], "research has no page to split off")
+	var count: Dictionary = read.call("c", "2 b w")
+	check(count["error"] == "" and count["batches"] == 2 and count["entry"]["id"] == "wood_spear", "/c 2 b w is two batches of spears")
+	check(read.call("c", "2")["batches"] == 2 and read.call("c", "2")["key"] == "", "a count alone waits for the page")
+	check(read.call("c", "0 b w")["error"] != "" and read.call("c", "100 b w")["error"] != "", "a count outside 1-99 is refused")
+	check(read.call("c", "2 bow").is_empty(), "a count before a name is left to the name lookup")
+
+	# /r is a single page: just the key, or a name.
+	check(read.call("r", "")["page"] == "r" and read.call("r", "")["key"] == "", "bare /r shows the research page")
+	check(read.call("r", "g")["entry"]["id"] == "gunpowder" and read.call("r", "M")["entry"]["id"] == "mounted_archery", "/r g and /r m pick research")
+	check(read.call("r", "gunpowder").is_empty() and read.call("r", "mounted archery").is_empty(), "research names are left to the name lookup")
+	check(read.call("r", "x")["error"] != "", "an unused research key is explained")
+	check(read.call("r", "g")["error"].contains("university"), "research without its building says what it needs")
+	check(read.call("r", "m")["error"].contains("stable"), "mounted archery needs a stable")
+	f.age = 1
+	m.add_building(0, "stable", m.home_pos(0) + Vector2(-20, 0), 0.0, true)
+	check(read.call("r", "m")["error"] == "", "mounted archery is open with a stable")
+	f.researched["mounted_archery"] = true
+	check(read.call("r", "m")["error"].contains("already"), "research already known is explained")
+	f.researched.erase("mounted_archery")
+	f.age = 0
 
 	var game = load("res://scripts/game/game.gd").new()
 	game.m = m
@@ -1455,10 +1477,46 @@ func test_hotkeys() -> void:
 	game.add_child(game.hud)
 	game.view = game.WorldView.new()
 	game.add_child(game.view)
+	game.cmd = FakeCommander.new()
 	root.add_child(game)
 	game._slash("/b b h")
 	check(game.placing and game.place_type == "hut", "/b b h places a hut")
 	game.placing = false
+	# Typed with "/" like any other line, a complete hotkey acts without Enter.
+	game.open_chat("/")
+	game._on_chat_changed("/b b")
+	check(game.hud.chat_open and not game.placing, "/b b waits for a key")
+	game._on_chat_changed("/b b h")
+	check(not game.hud.chat_open and game.placing and game.place_type == "hut", "typing /b b h places a hut without Enter")
+	game.placing = false
+	game.open_chat("/")
+	game._on_chat_changed("/b bronze")
+	check(game.hud.chat_open and not game.placing, "typing a name that starts with a page letter doesn't act")
+	game.hud.close_chat()
+	game._on_chat_closed()
+	game.open_chat("/")
+	game._on_chat_changed("/r")
+	check(game.hud.picker.visible and game.hud.chat_open, "/r opens its popup")
+	game._on_chat_changed("/r g")
+	check(game.hud.chat_open, "a locked research key stays open and explains itself")
+	game.hud.close_chat()
+	game._on_chat_closed()
+	game.open_chat("/")
+	f.stock["food"] = 500.0
+	f.stock["wood"] = 500.0
+	f.age = 1
+	game._on_chat_changed("/r m")
+	check(not game.hud.chat_open and m.crews_of(0).any(func(c): return c.steps.any(func(s): return s["action"] == "research" and s["subject"] == "mounted_archery")),
+		"typing /r m sets the research going without Enter")
+	f.age = 0
+	game.hud.history = ["/b b h"]
+	game.open_chat("/")
+	game.hud.history_i = 0
+	game._on_chat_changed("/b b h")
+	check(game.hud.chat_open and not game.placing, "an order recalled with Up still waits for Enter")
+	game.hud.close_chat()
+	game._on_chat_closed()
+	game.hud.history_i = -1
 	game._slash("/b v w")
 	check(not game.placing, "a locked structure can't be placed by key")
 	f.age = 1

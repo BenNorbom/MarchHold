@@ -6,11 +6,13 @@ signal key_picked(key: String)
 
 const UiTheme = preload("res://scripts/ui/ui_theme.gd")
 const Defs = preload("res://scripts/data/defs.gd")
+const Hotkeys = preload("res://scripts/game/hotkeys.gd")
 
 const ICON := "res://assets/icons/%s_%s.png"
 const CELL := Vector2(107, 123)
 const PAGE_TILE := Vector2(266, 128)
 const GAP := 4
+const TITLES := {"b": "Build", "c": "Craft", "r": "Research"}
 const DIMMED := Color(1, 1, 1, 0.6)
 
 var title: Label
@@ -41,19 +43,20 @@ func _ready() -> void:
 
 func show_pages(command: String) -> void:
 	_clear()
-	title.text = "Build · /b" if command == "b" else "Craft · /c"
-	grid.columns = Defs.HOTKEY_PAGES.size()
-	for page: String in Defs.HOTKEY_PAGES:
+	title.text = "%s · /%s" % [TITLES[command], command]
+	grid.columns = Defs.HOTKEYS[command].size()
+	for page: String in Defs.HOTKEYS[command]:
 		grid.add_child(_page_tile(command, page))
 	_set_width(PAGE_TILE.x)
-	var example := "[b]/b b h[/b] builds a hut" if command == "b" else "[b]/c b a 2[/b] makes two batches of arrows"
+	var example := "[b]/b b h[/b] builds a hut" if command == "b" else "[b]/c 2 b a[/b] makes two batches of arrows"
 	_set_detail("[b]B[/b] basic, [b]V[/b] advanced, then one key: %s." % example)
 
 
+## quick: a key acts the moment it's typed, so the popup never asks for Enter.
 func show_entries(command: String, pick: Dictionary, entries: Array, quick: bool) -> void:
 	_clear()
 	var page: String = pick["page"]
-	title.text = "%s · /%s %s" % [Defs.HOTKEYS[command][page]["name"], command, page]
+	title.text = "%s · %s" % [Defs.HOTKEYS[command][page]["name"], Hotkeys.draft(command, page).strip_edges()]
 	grid.columns = 4 if entries.size() <= 8 else (5 if entries.size() <= 10 else 6)
 	var chosen := {}
 	for e: Dictionary in entries:
@@ -71,7 +74,8 @@ func show_entries(command: String, pick: Dictionary, entries: Array, quick: bool
 	elif entries.all(func(e): return e["locked"] != ""):
 		_set_detail("[color=#f0c060]%s[/color]" % entries[0]["locked"])
 	else:
-		_set_detail("Press a key or click a picture." if quick else "Type a key and press Enter, or click a picture.")
+		var times := "×%d batches. " % pick["batches"] if pick["batches"] > 1 else ""
+		_set_detail(times + ("Press a key or click a picture." if quick else "Type a key and press Enter, or click a picture."))
 
 
 func _page_tile(command: String, page: String) -> Button:

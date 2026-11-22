@@ -58,7 +58,7 @@ Slash commands work instantly and never need Terra:
 | `/l` | Ledger: stores, people, food, housing, crews |
 | `/p` | People and crews |
 | `/s` | Scout reports, newest first |
-| `/r` | Research menu: mounted archery (stable) and gunpowder (university). `/r gunpowder` starts one directly |
+| `/r` | Research: **M** mounted archery (stable), **G** gunpowder (university). Picked like `/b` and `/c`; `/r gunpowder` works too |
 | `/m` | Field map |
 | `/t` | Tech tree |
 | `/h` | Help |
@@ -76,14 +76,15 @@ continue construction · finish the wall · gather wood here · back to work
 
 ### Hotkeys
 
-A typed hotkey runs when you press Enter. After pressing B or C, or entering a bare `/b` or `/c`, the key acts immediately. You can also click a picture.
+`/b`, `/c` and `/r` open a popup of pictures. A hotkey acts the moment it is complete, with no Enter: typing `/b b h` (or pressing B, B, H) lets you place a hut. You can also click a picture. An order recalled with the Up arrow still waits for Enter. Crafting takes its count first: `/c 2 b a` makes two batches of arrows.
 
 | | Keys |
 |---|---|
 | `/b b` Basic structures | **H** hut · **F** farm · **S** stockpile · **A** armory · **P** palisade · **G** palisade gate · **W** watch post · **Q** quarry |
-| `/b v` Advanced structures | **W** stone wall · **G** stone gate · **T** tower · **H** stable · **M** mine · **S** smelter · **U** university · **A** upgrade armory · **F** iron furnace · **R** gunpowder |
+| `/b v` Advanced structures | **W** stone wall · **G** stone gate · **T** tower · **H** stable · **M** mine · **S** smelter · **U** university · **A** upgrade armory · **F** iron furnace |
 | `/c b` Basic weapons | **W** wooden spear · **D** wooden shield · **B** bow · **A** arrows · **R** ram · bronze: **E** spear, **S** sword, **H** shield, **M** armor, **P** pike, **L** lance |
 | `/c v` Advanced weapons | iron: **E** spear, **S** sword, **H** shield, **M** armor, **P** pike, **L** lance · **C** cannon · **T** cannon shot |
+| `/r` Research | **M** mounted archery · **G** gunpowder |
 
 Walls are placed post to post: choose a palisade or stone wall, click each post, press Enter to finish.
 
