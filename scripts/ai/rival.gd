@@ -92,7 +92,10 @@ func _order(role: String, steps: Array, count: int) -> bool:
 		steps[0]["count"] = maxi(count, 1)
 	var res: Dictionary = m.command(fid, req)
 	if res.get("ok", false):
-		roles[role] = res["crews"][0]
+		# Weapons go straight into an armory's queue, so there may be no crew to remember.
+		var made: Array = res.get("crews", [])
+		if not made.is_empty():
+			roles[role] = made[0]
 		return true
 	return false
 

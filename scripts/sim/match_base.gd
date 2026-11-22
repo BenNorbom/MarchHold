@@ -140,6 +140,8 @@ class Building:
 	var up_paid := false
 	var research := ""
 	var research_t := 0.0
+	var queue: Array = []        # armory only: items waiting to be made, one entry per item
+	var make_t := 0.0            # armory only: seconds spent on the item at the head of the queue
 	var node := -1
 	var deposit := ""
 	var cells := PackedInt32Array()
