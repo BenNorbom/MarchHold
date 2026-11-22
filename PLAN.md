@@ -2,7 +2,7 @@
 
 MarchHold is a realistic medieval strategy game played entirely in first person. You are a commander on foot or horseback. You walk among your people, pick them out by looking and clicking, and talk to them through a chat line. An OpenAI-powered interpreter ("Terra") turns what you type into concrete orders, and the simulation validates and executes them. Slash commands like `/b` give instant menus for the common things. You start with nothing and grow a settlement from a campfire to a gunpowder army of up to 200.
 
-First target: **1v1, player vs AI, single machine.** Later: **online head-to-head, up to 8 players.**
+Current release: **one player against one to seven AI rivals on a single machine.** Later: **online head-to-head, up to 8 players.**
 
 This plan succeeds the prototype at `Documents/MCRTS` (Electron + Three.js voxel game). The prototype proved the command loop; MarchHold is the production game.
 
@@ -61,10 +61,10 @@ The content here is deliberately lean. More buildings, weapons, and abilities ca
 
 Rules that hold from day one:
 
-1. **Server-authoritative even in single player.** The 1v1 vs AI runs on a local server so online play is adding clients, not rewriting the game.
+1. **Server-authoritative even in single player.** Local AI matches use the authoritative simulation. Online clients and a dedicated server are future work.
 2. **The model never mutates state.** Terra only proposes. The server checks every step against unlocked tech, stockpiles, crew availability, and placement rules.
 3. **One source of truth for content.** Items, buildings, recipes, prerequisites, build times, unit stats live in data tables. The command schema sent to the model, the slash-command menus, the in-game ledger, and the AI rival's options are all generated from them.
-4. **Slash commands and Terra produce the same commands.** `/b` → pick House → place it is the same validated "build house here" command Terra would emit.
+4. **Slash commands and Terra produce the same commands.** `/b b h` → place it is the same validated "build hut here" command Terra would emit.
 5. **The AI rival uses the same command interface as the player.** No cheating paths; one validation layer to test.
 6. **Headless simulation mode.** The sim runs without rendering for automated tests, balance runs, and AI training (as in the prototype).
 7. **Scale target:** 200 population per side (400 in 1v1, up to 1,600 in 8-player). People and animals are drawn with a few MultiMeshes and animated on the GPU (vertex-shader limbs), so hundreds of figures cost a handful of draw calls.
@@ -102,8 +102,7 @@ Like supply in StarCraft: you can't grow beyond the housing you've built.
 | Source | Housing | Build (3 workers) |
 |---|---|---|
 | Starting campfire | 8 | — |
-| Hut (wood) | +5 | ~20 s |
-| House (wood + stone) | +10 | ~35 s |
+| Hut (wood) | +6 | ~20 s |
 | **Hard cap** | **200** | |
 
 ### Food and well-being
@@ -129,9 +128,9 @@ Each person eats on a ration cycle; children eat half.
 | Source | Notes |
 |---|---|
 | Berry bushes | Fast, finite, near start |
-| Hunting (Hunter's lodge) | Deer and boar; animals flee |
+| Hunting | Deer and boar; animals flee. Hunters work out from the campfire or a stockpile |
 | Farm | Sow → grow → harvest; one farm and farmer feed ~5 |
-| Granary | Raises the food reserve so you stay well fed through raids |
+| Stockpile | +50 food reserve each, so you stay well fed through raids |
 
 ---
 
@@ -162,18 +161,15 @@ Seven raw resources and two refined ones:
 | Building | Age | Purpose |
 |---|---|---|
 | Campfire | Start | Housing 8, drop-off |
-| Hut | Wood | +5 housing |
+| Hut | Wood | +6 housing |
 | Stockpile | Wood | Drop-off point near work |
-| Hunter's lodge | Wood | Hunting |
 | Farm | Wood | Grain |
 | Armory | Wood → Bronze → Iron | Makes all weapons, armor, arrows and cannons. Upgrades in place each age |
 | Palisade + gate | Wood | Fast, weak, burnable walls |
 | Watch post | Wood | Early-warning alarm |
 | Quarry | Stone | Stone; opens the Stone age |
 | Stone wall + gate | Stone | Strong walls, built in stages |
-| Stone tower | Stone | Alarm + archer position |
-| House | Stone | +10 housing |
-| Granary | Stone | Food reserve |
+| Stone tower | Stone | Alarm and three sheltered rooftop archer posts. The commander can climb from the door. |
 | Stable | Stone | Holds captured horses, breeds them |
 | Mine | Stone | Placed on a bronze ore, coal or iron ore deposit |
 | Smelter | Stone → Iron | Makes bronze; upgrades to an iron furnace |
@@ -181,10 +177,10 @@ Seven raw resources and two refined ones:
 
 ### What each age gives you
 
-**Wood (start with nothing).** 6 villagers, a campfire, empty hands. Gather berries and wood, then build the **Armory**: clubs, wooden spears, wooden shields, bows and stone-tipped arrows. Palisades and watch posts.
-- **Rush window:** clubs and spears can field ~6–8 men by minute 4–5. If you've scouted it, the counter is a palisade, a watch post, and villagers armed from the armory's stock as **militia**.
+**Wood (start with nothing).** 6 villagers, a campfire, empty hands. Gather berries and wood, then build the **Armory**: wooden spears, wooden shields, bows and stone-tipped arrows. Palisades and watch posts.
+- **Rush window:** with the armory at 125 wood and a batch of four spears at 40, a rush fields about five armed men by minute 6–7. If you've scouted it, the counter is a palisade, a watch post, and villagers armed from the armory's stock as **militia**.
 
-**Stone.** Stone walls show up early but take a lot of labor. They're built in stages (foundation → courses → walkway → battlements) and every stage needs stone quarried and hauled. A partly built wall still gives partial cover. Cost grows with length, so you choose between a tight walled core and fields spread outside it. Target: ~30–40 s per segment with 4 masons once the stone is on site. Also: houses, granary, stone towers, stable, siege ladders.
+**Stone.** Stone walls show up early but take a lot of labor. They're built in stages (foundation → courses → walkway → battlements) and every stage needs stone quarried and hauled. A partly built wall still gives partial cover. Cost grows with length, so you choose between a tight walled core and fields spread outside it. Target: ~30–40 s per segment with 4 masons once the stone is on site. Also: stone towers, stable, siege ladders.
 
 **Bronze.** Mines on bronze ore and coal, then a smelter. The armory upgrades to bronze: spears, swords, shields, armor, arrowheads, pikes, lances. Battering rams.
 
@@ -218,7 +214,6 @@ Seven raw resources and two refined ones:
 
 | Item | Tiers | Role |
 |---|---|---|
-| Club | Wood | Cheap rush weapon |
 | Spear | Wood → bronze → iron | General infantry, decent vs cavalry |
 | Bow + arrows | Wood (stone tips) → bronze → iron tips | Ranged; quiver-limited |
 | Shield | Wood → bronze → iron | Blocks arrows and blows, slows the bearer |
@@ -255,6 +250,12 @@ Arming someone takes them off work. Soldiers still eat. Captains lead squads: *"
 
 ### Combat systems
 
+- **Bodies:** people take up space. They step around each other, a limited number can fight one target, and the rest form a second rank.
+- **Blows:** each has a wind-up, an impact and a recovery on the simulation's clock, and the animation runs on the same clock. Stepping back during a wind-up dodges it. Walls stop blows and arrows.
+- **Orders:** guards and followers fight within a leash measured from their post or commander. Holders don't leave their spot.
+- **Pikes** set against a charge cancel its bonus.
+- **The commander:** every click is a blow (one can be queued). Swords sweep two, and spears and pikes have more reach. Right mouse or V blocks from the front at a cost in stamina; raising the guard just as a blow lands parries and staggers the attacker.
+
 Formations (line, wedge, shield wall, loose), morale and routing, wall assaults (ladders, rams, cannons), fire against palisades, and first-person commander combat (swing, thrust, block, bow draw) carried over from the prototype.
 
 ---
@@ -276,8 +277,8 @@ Free text goes to **Terra**. Text starting with `/` is a **slash command**, hand
 
 | Command | Opens |
 |---|---|
-| `/b` | **Build menu:** every structure you can build right now, with cost. Ones you can't afford show what's missing. Pick one → place it → the addressed crew (or the nearest idle villagers) builds it |
-| `/c` | **Craft menu:** what the armory can make right now |
+| `/b` | **Build popup** above the chat: pictures, keys and costs. `b` basic or `v` advanced, then one key (`/b b h` = hut). Locked ones are dimmed, and red means you're short. Pick one → place it → the addressed crew (or the nearest idle villagers) builds it |
+| `/c` | **Weapons popup:** what the armory makes, keyed the same way (`/c b w` = wooden spears) |
 | `/l` | Ledger: stockpiles, population, food, housing |
 | `/p` | People: crews, captains, and what each is doing |
 | `/s` | Scout reports, newest first |
@@ -285,7 +286,7 @@ Free text goes to **Terra**. Text starting with `/` is a **slash command**, hand
 | `/t` | Tech tree: what's next and what it needs |
 | `/h` | Help and the full command list |
 
-Menus are navigated with number keys or the mouse and can be closed with **Esc**.
+The build and weapons popups use letters or the mouse. Other menus are navigated with number keys or the mouse and can be closed with **Esc**.
 
 ### Terra
 
@@ -315,7 +316,7 @@ A guided match against a passive rival. Terra acts as your steward and gives one
 
 1. Walk, look around, and find your villagers.
 2. Open the chat, look at a villager, and type *"gather wood."*
-3. Use `/b` to build a hut and watch the housing cap rise.
+3. Use `/b b h` to build a hut and watch the housing cap rise.
 4. Feed the village: berries, then a farm. See "Well fed" and the first birth.
 5. Build the armory, use `/c` to make spears, and arm a few villagers.
 6. Send a scout. Read the report with `/s`.
@@ -328,7 +329,7 @@ Each step is short. The full tutorial should take ~15 minutes, and later ages (b
 
 ### In regular matches
 
-- **Hints** for the first few matches: one-line tips in chat when something new becomes possible ("You can now build stone walls — try `/b`").
+- **Hints** for the first few matches: one-line tips in chat when something new becomes possible ("You can now build stone walls — try `/b v w`").
 - Ask Terra anything: *"why aren't we growing?"* → *"Food is only 'Fed', not 'Well fed', and housing is full."*
 - **Calm start option:** the AI won't attack for the first 10 minutes. Good for learning; off by default in normal matches.
 
@@ -355,6 +356,8 @@ The first goal was to see how far built-in tools, procedural generation and free
 - **People and animals:** procedural mannequins and quadrupeds, animated on the GPU (walking, running, chopping, hammering, fighting, shooting, riding, grazing), with tools, weapons, shields, armour, carried loads, and the commander's crown and cloak.
 - **Sound:** every effect is synthesized at startup (wind, birds, fire, chopping, hammering, bells, horns, clashes, bows and cannons).
 
+- **Battle:** per-weapon attack poses for close-up and crowd figures, flinches, falls, dropped weapons, sparks, dust and spent arrows.
+
 **Where it still looks like a placeholder:** people and horses read as mannequins up close. **Likely first purchases if needed:** rigged people with animations, horses, then a tree set. Decide after playtesting.
 
 ---
@@ -367,10 +370,10 @@ Each phase ends playable. A phase isn't done until its "done when" is demonstrat
 |---|---|---|
 | 0 | **Foundation**: project, data tables, headless sim, tests | Done |
 | 1 | **Core loop**: terrain, lighting, forests, commander, chat, `/b` `/h`, Terra, gather, build | Done |
-| 2 | **Survival economy**: food states, housing, births, berries, hunting, farms, granary, `/l` `/p` | Done |
-| 3 | **Wood and Stone ages**: armory, `/c`, weapons, bows and arrows, militia, palisades by posts, quarry, stone walls, towers, houses | Done |
+| 2 | **Survival economy**: food states, housing, births, berries, hunting, farms, `/l` `/p` | Done |
+| 3 | **Wood and Stone ages**: armory, `/c`, weapons, bows and arrows, militia, palisades by posts, quarry, stone walls, towers | Done |
 | 4 | **Scouting and knowledge**: fog of war, scouts, timestamped reports, `/s`, field map, alarms | Done |
-| 5 | **Combat**: unit stats and matchups, morale (routing, wounded retreat), commander combat, arrows | Done; formations are basic |
+| 5 | **Combat**: unit stats and matchups, morale (routing, wounded retreat), commander combat, arrows | Done; bodies, timed blows, parrying; formations are basic |
 | 6 | **AI rival v1**: rush/boom/turtle/cavalry/cannon openings, difficulty, win by commander death | Done |
 | 7 | **Intro and tutorial**: opening, "The Founding", hints, calm start | Done |
 | 8 | **Bronze and iron**: mines, smelter, armory upgrades, pikes, swords, lances, armor, rams | Done (siege ladders not yet) |
@@ -415,7 +418,7 @@ Rewritten in GDScript for Godot 4, keeping the design:
 
 ## 16. Decisions (formerly open questions)
 
-1. **Map:** a random seed every match, in three sizes. Small is 512 m (camps at least 320 m apart, 100 m from the edge), Medium is 768 m (460 m, 125 m) and is the default, Large is 1 km (620 m, 150 m) and is the biggest for 1v1. The tutorial always uses Large.
+1. **Map:** a random seed every match. Small (512 m) holds two settlements, Medium (768 m) four, Large (1,024 m) six, and Huge (1,536 m) eight. Medium is the default. The tutorial uses Large with one rival.
 2. **Commander death:** ends the match. Both commanders wear a **crown**, so you can find and kill Rook.
 3. **Rivers:** none at first. Worth adding later as obstacles with fords and bridges.
 4. **Tin:** dropped. Copper and tin are merged into a single **bronze ore**.

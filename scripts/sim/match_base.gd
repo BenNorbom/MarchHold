@@ -4,15 +4,20 @@ extends RefCounted
 
 const Defs = preload("res://scripts/data/defs.gd")
 const Terrain = preload("res://scripts/world/terrain.gd")
+const Blocking = preload("res://scripts/sim/blocking.gd")
 
 const CELL := 2.0                    # path grid cell in metres
 const KCELL := 8.0                   # knowledge grid cell in metres
 const BUCKET := 16.0
 const NODE_BUCKET := 32.0
+const BLD_BUCKET := 32.0
+const WILD_HORSE := 1 << 30         # in a bucket's mask, beside one bit per faction
 const STEEP := 38.0
 const MAX_PATHS_PER_TICK := 14
 
 enum Anim { IDLE, WALK, RUN, CHOP, HAMMER, DIG, PICK, MELEE, SHOOT, CARRY, RIDE, DEAD, LOAD }
+
+const Crowd = preload("res://scripts/sim/crowd.gd")
 
 
 class Unit:
@@ -29,11 +34,13 @@ class Unit:
 	var born := 0.0
 	var female := false
 	var crew := -1
+	var post := -1              # the captain's post they belong to
 	var captain := false
 	var task := "idle"
 	var phase := ""
 	var tgt_node := -1
 	var tgt_bld := -1
+	var last_sites: Array = [] # building sites this person was last sent to
 	var tgt_unit := -1
 	var goal := Vector2.ZERO
 	var path := PackedVector2Array()
@@ -74,8 +81,42 @@ class Unit:
 	var slot := Vector2.ZERO    # formation offset
 	var stuck := 0.0
 	var last_pos := Vector2.ZERO
+	# Battle
+	var vel := Vector2.ZERO     # metres per second over the last tick
+	var style := {}             # how its weapon is fought with, from Defs.MELEE
+	var style_for := "?"        # the weapon `style` was looked up for
+	var engaged := false        # in striking distance of its enemy
+	var front := true           # has a place in the front rank
+	var engage_from := Vector2.ZERO
+	var scan_t := 0.0
+	var avoid_id := -1          # a foe it couldn't get at
+	var avoid_t := 0.0
+	var swing_start := -1.0
+	var swing_hit := -1.0
+	var swing_end := -1.0
+	var swing_live := false     # wound up, not landed yet
+	var swing_tgt := -1
+	var swing_bld := -1
+	var shot_t := -99.0
+	var stun_t := 0.0
+	var hit_dir := Vector2.ZERO
+	var blocking := false
+	var guard_up_t := -99.0
+	var guard_down_t := -99.0
+	var stamina := 1.0
+	# Getting through a crowd
+	var side := 0.0
+	var boxed_t := 0.0
+	var dodge_t := 0.0
+	var ghost_t := 0.0
+	var move_t := -1.0
+	var path_wait := 0.0
+	var dead_ends := 0          # routes in a row that stopped short of the goal
+	var climbing := false       # the last leg goes over its own side's walls, or rough ground
 	var reload := 0.0
 	var in_tower := -1
+	var path_queued := false
+	var path_turn := -1         # the tick this unit's turn to find a route came up
 
 
 class Building:
@@ -108,6 +149,8 @@ class Building:
 	var alarm_t := -99.0
 	var waiting_msg_t := -99.0
 	var line := -1
+	var sight_cells := PackedInt32Array()      # what it watches, worked out once
+	var archer_posts: Array[int] = []
 
 
 class Crew:
@@ -123,13 +166,63 @@ class Crew:
 	var lost := 0
 	var done := false
 	var loop := false
+	# Formation, kept out of `state` because that is the plan.
+	var center := Vector2.ZERO
+	var center_t := -1.0
+	var depth := 0.0            # front rank to back
+	var width := 2.2
+	var lane := 0.0             # sideways shift past other crews at the same spot
+	var lane_t := -99.0
+	var wall := -1              # the enemy wall across an attack's line
+	var wall_t := -99.0
 	var origin := Vector2.ZERO
+	var post := -1              # the post whose captain set this job, -1 for a direct order
+
+
+## A captain's place and purpose. Plain data, so it can be saved.
+class Post:
+	var id := 0
+	var faction := 0
+	var name := ""
+	var mandate := ""
+	var center := Vector2.ZERO
+	var radius := 60.0
+	var captain := -1
+	var target := 0             # people including the captain, 0 for everyone free
+	var members: Array = []     # unit ids, longest-serving first
+	var jobs := {}              # role -> crew id
+	var pickers := 0            # people the bushes nearby have room for
+	var pickers_t := -999.0
+	var forbid := {}            # structure ids the player said not to build
+	var posture := "fall_back"  # hold, or fall back when outnumbered
+	var saving := {}            # {rank, cost} of the project waiting on materials
+	var blocked := {}           # project -> why it hasn't started
+	var walled := false
+	var rng := RandomNumberGenerator.new()
+	var seen := {}              # resource node ids this post has laid eyes on
+	var survey_nodes: Array = []
+	var surveying := false
+	var rounds := 0
+	var works_t := -999.0       # when the captain last looked at what to build
+	var alert := ""             # intruder, raid or falling_back
+	var alert_t := -999.0       # when the threat was last seen
+	var threat := 0             # the most seen at once during this alert
+	var threat_at := Vector2.ZERO
+	var refuge := Vector2.ZERO
+	var lost := 0
+	var lost_at_alert := 0
+	var blocked_since := {}     # project -> when it was first held up
+	var blocked_told := {}
+	var ready_told := false
 
 
 class Faction:
 	var id := 0
 	var name := ""
 	var commander_name := ""
+	var short_name := ""
+	var alive := true
+	var out_t := -1.0
 	var color := Color.WHITE
 	var stock := {}
 	var gear := {}
@@ -139,7 +232,6 @@ class Faction:
 	var commander := -1
 	var food_state := 2
 	var knowledge := PackedFloat32Array()
-	var visible := PackedByteArray()
 	var intel := {}
 	var reports: Array = []
 	var names_used := {}
@@ -150,7 +242,10 @@ class Faction:
 	var attack_msg_t := -99.0
 	var is_ai := false
 	var mark := Vector2.ZERO
+	var mark_t := -999.0
 	var has_mark := false
+	var places := {}            # lower-case name -> {name, pos}
+	var reserve := {}           # resource -> what captains must leave. Stores are shared, so it's per side.
 	var pop := 0
 	var adults := 0
 	var children := 0
@@ -168,6 +263,8 @@ class Shot:
 	var faction := 0
 	var shooter := -1
 	var pos := Vector3.ZERO
+	var prev := Vector3.ZERO    # last tick's position, for the view
+	var arc := 0.12
 	var vel := Vector3.ZERO
 	var start := Vector3.ZERO
 	var end := Vector3.ZERO
@@ -196,8 +293,12 @@ var unit_by_id := {}
 var buildings: Array = []
 var bld_by_id := {}
 var crews := {}
+## Work people were pulled off by a military order: unit id -> {group, steps, loop}. Empty steps = was idle.
+var work_memory := {}
+var posts := {}
 var factions: Array = []
 var shots: Array = []
+var crowd := Crowd.new()
 var messages: Array = []
 var events: Array = []
 var next_id := 1
@@ -205,18 +306,28 @@ var over := false
 var winner := -1
 var end_reason := ""
 var options := {}
-var grids: Array = []
+var blocking: Blocking
 var terrain_solid := PackedByteArray()
 var paths_this_tick := 0
+# With three or more settlements each has its own share of the routes and its own queue.
+var fair_paths := false
+var path_queues: Array = []          # faction -> unit ids waiting, longest first
+var paths_left := PackedInt32Array()
+var path_granted := false
 var ulist: Array = []
 var uhead := PackedInt32Array()
 var unext := PackedInt32Array()
 var node_buckets: Array = []
+var kind_buckets := {}               # node kind -> bucket -> node ids, or null where there are none
+var uside := PackedInt32Array()      # unit bucket -> which sides have someone in it
+var bld_buckets := {}                # cell -> buildings centred there, oldest first
+var own_blds: Array = []             # faction -> its buildings, oldest first
+var own_by_type: Array = []          # faction -> type -> the same
 
 
 # --- Setup ------------------------------------------------------------------------
 
-func _init_world(tr: Terrain) -> void:
+func _init_world(tr: Terrain, faction_count: int) -> void:
 	terrain = tr
 	map_size = tr.size
 	grid_n = int(map_size / CELL)
@@ -229,29 +340,30 @@ func _init_world(tr: Terrain) -> void:
 			var p := Vector2((i + 0.5) * CELL, (j + 0.5) * CELL)
 			var solid := terrain.slope_deg(p.x, p.y) > STEEP or not terrain.in_bounds(p, 3.0)
 			terrain_solid[j * grid_n + i] = 1 if solid else 0
-	grids.clear()
-	for f in 2:
-		var g := AStarGrid2D.new()
-		g.region = Rect2i(0, 0, grid_n, grid_n)
-		g.cell_size = Vector2(1, 1)
-		g.diagonal_mode = AStarGrid2D.DIAGONAL_MODE_ONLY_IF_NO_OBSTACLES
-		g.default_compute_heuristic = AStarGrid2D.HEURISTIC_OCTILE
-		g.default_estimate_heuristic = AStarGrid2D.HEURISTIC_OCTILE
-		g.jumping_enabled = true
-		g.update()
-		for j in grid_n:
-			for i in grid_n:
-				if terrain_solid[j * grid_n + i] == 1:
-					g.set_point_solid(Vector2i(i, j), true)
-		grids.append(g)
+	blocking = Blocking.new()
+	blocking.setup(grid_n, terrain_solid, faction_count)
 	node_buckets.clear()
 	node_buckets.resize(node_bucket_n * node_bucket_n)
 	for k in node_bucket_n * node_bucket_n:
 		node_buckets[k] = PackedInt32Array()
+	kind_buckets.clear()
 	for n in terrain.nodes:
 		_bucket_node(n)
 	uhead.resize(bucket_n * bucket_n)
 	uhead.fill(-1)
+	uside.resize(bucket_n * bucket_n)
+	uside.fill(0)
+	bld_buckets.clear()
+	fair_paths = faction_count > 2
+	path_queues.clear()
+	paths_left.resize(faction_count)
+	paths_left.fill(MAX_PATHS_PER_TICK / faction_count)
+	own_blds.clear()
+	own_by_type.clear()
+	for f in faction_count:
+		path_queues.append([])
+		own_blds.append([])
+		own_by_type.append({})
 
 
 func _bucket_node(n) -> void:
@@ -260,6 +372,14 @@ func _bucket_node(n) -> void:
 	var arr: PackedInt32Array = node_buckets[bj * node_bucket_n + bi]
 	arr.append(n.id)
 	node_buckets[bj * node_bucket_n + bi] = arr
+	if not kind_buckets.has(n.kind):
+		var empty := []
+		empty.resize(node_bucket_n * node_bucket_n)
+		kind_buckets[n.kind] = empty
+	var of_kind: Array = kind_buckets[n.kind]
+	if of_kind[bj * node_bucket_n + bi] == null:
+		of_kind[bj * node_bucket_n + bi] = []
+	of_kind[bj * node_bucket_n + bi].append(n.id)
 
 
 func new_id() -> int:
@@ -299,8 +419,16 @@ func pick_name(f: Faction) -> String:
 			f.names_used[n] = 1
 			return n
 	var base: String = Defs.NAMES[rng.randi_range(0, Defs.NAMES.size() - 1)]
-	f.names_used[base] = int(f.names_used.get(base, 1)) + 1
-	return "%s %d" % [base, f.names_used[base]]
+	if not f.names_used.has(base):
+		f.names_used[base] = 1
+		return base
+	# The count survives deaths, so a name never comes back for someone else.
+	var nth := int(f.names_used[base]) - 1
+	f.names_used[base] = nth + 2
+	var full := "%s %s" % [base, Defs.BYNAMES[nth % Defs.BYNAMES.size()]]
+	for lap in nth / Defs.BYNAMES.size():
+		full += " the Younger"
+	return full
 
 
 # --- Entities ------------------------------------------------------------------------
@@ -315,13 +443,14 @@ func spawn_unit(faction: int, kind: String, p: Vector2) -> Unit:
 	u.last_pos = p
 	u.born = t
 	u.facing = rng.randf() * TAU
+	u.side = 1.0 if u.id % 2 == 0 else -1.0
 	match kind:
 		"villager":
 			u.max_hp = Defs.VILLAGER["hp"]
 			u.female = rng.randf() < 0.5
 		"commander":
 			u.max_hp = Defs.COMMANDER["hp"]
-			u.weapon = "club"
+			u.weapon = "wood_spear"
 		"horse":
 			u.max_hp = 60.0
 			u.female = rng.randf() < 0.5
@@ -353,6 +482,9 @@ func add_building(faction: int, type: String, p: Vector2, rot: float, complete: 
 		b.size = Vector2(d["length"], d["thick"])
 	else:
 		b.size = d["size"]
+	if type == "tower":
+		b.archer_posts.resize(d["archers"])
+		b.archer_posts.fill(-1)
 	b.max_hp = float(d["hp"])
 	b.hp = b.max_hp * (1.0 if complete else 0.05)
 	if complete:
@@ -361,6 +493,7 @@ func add_building(faction: int, type: String, p: Vector2, rot: float, complete: 
 		b.paid = true
 	buildings.append(b)
 	bld_by_id[b.id] = b
+	_index_building(b)
 	if complete:
 		_block(b)
 	emit({"type": "building", "id": b.id})
@@ -371,6 +504,7 @@ func remove_building(b: Building, reason: String = "") -> void:
 	if b.dead:
 		return
 	b.dead = true
+	_unindex_building(b)
 	_unblock(b)
 	emit({"type": "building_gone", "id": b.id, "reason": reason})
 	for u: Unit in units:
@@ -380,34 +514,138 @@ func remove_building(b: Building, reason: String = "") -> void:
 		if u.enemy_bld == b.id:
 			u.enemy_bld = -1
 		if u.in_tower == b.id:
-			u.in_tower = -1
+			leave_tower(u)
+
+
+func building_base_height(b: Building) -> float:
+	var mid := terrain.height_at(b.pos.x, b.pos.y)
+	var lo := mid
+	var ax := Vector2.from_angle(b.rot) * b.size.x * 0.5
+	var az := Vector2.from_angle(b.rot + PI * 0.5) * b.size.y * 0.5
+	for p in [b.pos + ax + az, b.pos + ax - az, b.pos - ax + az, b.pos - ax - az]:
+		lo = minf(lo, terrain.height_at(p.x, p.y))
+	return lerpf(lo, mid, 0.35)
+
+
+func unit_floor_y(u: Unit) -> float:
+	var tower := bld(u.in_tower)
+	if tower != null and not tower.dead:
+		return building_base_height(tower) + Defs.TOWER_DECK_HEIGHT
+	return terrain.height_at(u.pos.x, u.pos.y)
+
+
+func tower_door(b: Building) -> Vector2:
+	return b.pos + Vector2(0, b.size.y * 0.5 + 0.9).rotated(b.rot)
+
+
+func tower_archer_count(b: Building) -> int:
+	return b.archer_posts.size() - b.archer_posts.count(-1)
+
+
+func enter_tower(u: Unit, b: Building) -> bool:
+	if b == null or b.dead or not b.complete or b.type != "tower" or b.faction != u.faction:
+		return false
+	if u.dead or u.child or u.mounted or u.siege >= 0 or u.in_tower >= 0 or u.pos.distance_to(tower_door(b)) > Defs.TOWER_DOOR_REACH:
+		return false
+	var post_pos := b.pos
+	if u.kind != "commander":
+		var slot := b.archer_posts.find(-1)
+		if u.kind != "villager" or not u.bow or slot < 0:
+			return false
+		b.archer_posts[slot] = u.id
+		var outward := Vector2.from_angle(b.rot + TAU * float(slot) / b.archer_posts.size())
+		post_pos += outward * 1.25
+		u.facing = atan2(outward.x, outward.y)
+	u.in_tower = b.id
+	_relocate_at_tower(u, post_pos)
+	u.anim = Anim.IDLE
+	return true
+
+
+func _release_tower_post(u: Unit, b: Building) -> void:
+	var slot := b.archer_posts.find(u.id)
+	if slot >= 0:
+		b.archer_posts[slot] = -1
+
+
+func leave_tower(u: Unit) -> void:
+	var tower := bld(u.in_tower)
+	u.in_tower = -1
+	if tower == null:
+		return
+	_release_tower_post(u, tower)
+	_relocate_at_tower(u, tower_door(tower))
+
+
+func _relocate_at_tower(u: Unit, p: Vector2) -> void:
+	u.pos = p
+	u.prev = p
+	u.last_pos = p
+	u.path = PackedVector2Array()
+
+
+func _bld_bucket(p: Vector2) -> Vector2i:
+	return Vector2i(int(floor(p.x / BLD_BUCKET)), int(floor(p.y / BLD_BUCKET)))
+
+
+func _index_building(b: Building) -> void:
+	var k := _bld_bucket(b.pos)
+	if not bld_buckets.has(k):
+		bld_buckets[k] = []
+	bld_buckets[k].append(b)
+	own_blds[b.faction].append(b)
+	var typed: Dictionary = own_by_type[b.faction]
+	if not typed.has(b.type):
+		typed[b.type] = []
+	typed[b.type].append(b)
+
+
+func _unindex_building(b: Building) -> void:
+	var k := _bld_bucket(b.pos)
+	if bld_buckets.has(k):
+		bld_buckets[k].erase(b)
+	own_blds[b.faction].erase(b)
+	own_by_type[b.faction].get(b.type, []).erase(b)
+
+
+## Living buildings centred within r of p that aren't this faction's, oldest first.
+func foreign_buildings_near(faction: int, p: Vector2, r: float) -> Array:
+	var out := []
+	var r2 := r * r
+	var k0 := _bld_bucket(p - Vector2(r, r))
+	var k1 := _bld_bucket(p + Vector2(r, r))
+	for j in range(k0.y, k1.y + 1):
+		for i in range(k0.x, k1.x + 1):
+			var list = bld_buckets.get(Vector2i(i, j))
+			if list == null:
+				continue
+			for b: Building in list:
+				if b.faction != faction and b.pos.distance_squared_to(p) <= r2:
+					out.append(b)
+	if out.size() > 1:
+		out.sort_custom(func(a, b): return a.id < b.id)
+	return out
 
 
 func buildings_of(faction: int, type: String = "", complete_only: bool = true) -> Array:
+	var list: Array = own_blds[faction] if type == "" else own_by_type[faction].get(type, [])
 	var out := []
-	for b: Building in buildings:
-		if b.dead or b.faction != faction:
-			continue
-		if type != "" and b.type != type:
-			continue
-		if complete_only and not b.complete:
-			continue
-		out.append(b)
+	for b: Building in list:
+		if b.complete or not complete_only:
+			out.append(b)
 	return out
 
 
 func has_building(faction: int, type: String) -> bool:
-	for b: Building in buildings:
-		if not b.dead and b.faction == faction and b.type == type and b.complete:
+	for b: Building in own_by_type[faction].get(type, []):
+		if b.complete:
 			return true
 	return false
 
 
 func home_of(faction: int) -> Building:
-	for b: Building in buildings:
-		if not b.dead and b.faction == faction and b.type == "campfire":
-			return b
-	return null
+	var fires: Array = own_by_type[faction].get("campfire", [])
+	return fires[0] if not fires.is_empty() else null
 
 
 func home_pos(faction: int) -> Vector2:
@@ -416,14 +654,16 @@ func home_pos(faction: int) -> Vector2:
 
 
 func nearest_building(faction: int, p: Vector2, types: Array, complete_only: bool = true) -> Building:
+	if faction < 0:
+		return null
+	var one := types.size() == 1
+	var list: Array = own_by_type[faction].get(types[0], []) if one else own_blds[faction]
 	var best: Building = null
 	var bd := INF
-	for b: Building in buildings:
-		if b.dead or b.faction != faction:
-			continue
+	for b: Building in list:
 		if complete_only and not b.complete:
 			continue
-		if not types.is_empty() and not b.type in types:
+		if not one and not types.is_empty() and not b.type in types:
 			continue
 		var d := b.pos.distance_squared_to(p)
 		if d < bd:
@@ -432,12 +672,13 @@ func nearest_building(faction: int, p: Vector2, types: Array, complete_only: boo
 	return best
 
 
-## Nearest place to drop a resource: campfire or stockpile, plus granary / lodge for food.
-func nearest_dropoff(faction: int, p: Vector2, res: String) -> Building:
-	var types := ["campfire", "stockpile"]
-	if res == "food":
-		types += ["granary", "lodge"]
-	return nearest_building(faction, p, types)
+## Nearest place to drop a resource: campfire or stockpile.
+func nearest_dropoff(faction: int, p: Vector2, _res: String) -> Building:
+	return nearest_building(faction, p, ["campfire", "stockpile"])
+
+
+func dropoffs(faction: int, _res: String) -> Array:
+	return buildings_of(faction).filter(func(b): return b.type in ["campfire", "stockpile"])
 
 
 # --- Grid and pathing ----------------------------------------------------------------
@@ -451,11 +692,7 @@ func cell_center(c: Vector2i) -> Vector2:
 
 
 func solid_for(faction: int, c: Vector2i) -> bool:
-	if c.x < 0 or c.y < 0 or c.x >= grid_n or c.y >= grid_n:
-		return true
-	if faction < 0 or faction > 1:
-		return terrain_solid[c.y * grid_n + c.x] == 1 or grids[0].is_point_solid(c)
-	return grids[faction].is_point_solid(c)
+	return blocking.is_solid(faction, c)
 
 
 func line_clear(faction: int, a: Vector2, b: Vector2) -> bool:
@@ -463,14 +700,19 @@ func line_clear(faction: int, a: Vector2, b: Vector2) -> bool:
 	var len := d.length()
 	if len < 0.01:
 		return true
+	# solid_for and cell_of written out, as this runs for every metre of every route.
+	var grid: AStarGrid2D = blocking.grid
+	var gates: Dictionary = blocking.open_gates[maxi(faction, 0)]
+	var top := grid_n - 1
 	var steps := int(len / (CELL * 0.5)) + 1
 	var last := Vector2i(-1, -1)
 	for s in steps + 1:
-		var c := cell_of(a + d * (float(s) / steps))
+		var p := a + d * (float(s) / steps)
+		var c := Vector2i(clampi(int(p.x / CELL), 0, top), clampi(int(p.y / CELL), 0, top))
 		if c == last:
 			continue
 		last = c
-		if solid_for(faction, c):
+		if grid.is_point_solid(c) and not gates.has(c):
 			return false
 	return true
 
@@ -491,15 +733,20 @@ func nearest_free_cell(faction: int, c: Vector2i, maxr: int = 12) -> Vector2i:
 
 ## Returns waypoints from a to b. Straight line when nothing is in the way.
 func find_path(faction: int, a: Vector2, b: Vector2) -> PackedVector2Array:
-	var pf := clampi(faction, 0, 1)
+	var pf := maxi(faction, 0)
 	if line_clear(pf, a, b):
 		return PackedVector2Array([b])
-	if paths_this_tick >= MAX_PATHS_PER_TICK:
+	if fair_paths:
+		if not path_granted:
+			if paths_left[pf] <= 0:
+				return PackedVector2Array()
+			paths_left[pf] -= 1
+	elif paths_this_tick >= MAX_PATHS_PER_TICK:
 		return PackedVector2Array()
 	paths_this_tick += 1
 	var ca := nearest_free_cell(pf, cell_of(a))
 	var cb := nearest_free_cell(pf, cell_of(b), 20)
-	var ids: Array[Vector2i] = grids[pf].get_id_path(ca, cb, true)
+	var ids: Array[Vector2i] = blocking.route(pf, ca, cb)
 	var out := PackedVector2Array()
 	if ids.is_empty():
 		return PackedVector2Array([b])
@@ -516,9 +763,56 @@ func find_path(faction: int, a: Vector2, b: Vector2) -> PackedVector2Array:
 			out.append(p)
 			anchor = p
 		i += 1
-	if out.is_empty() or out[out.size() - 1].distance_to(b) > CELL * 1.5:
-		if not solid_for(pf, cell_of(b)):
+	# Finish on the goal itself, unless the route couldn't get there.
+	if not solid_for(pf, cell_of(b)):
+		var end := out[out.size() - 1] if not out.is_empty() else a
+		if line_clear(pf, end, b):
 			out.append(b)
+	return out
+
+
+## Deals out the tick's routes: an equal share for each living settlement, the remainder
+## taking turns, and within a settlement whoever has waited longest goes first.
+func share_paths() -> void:
+	var alive := []
+	for f: Faction in factions:
+		paths_left[f.id] = 0
+		if f.alive:
+			alive.append(f.id)
+		else:
+			path_queues[f.id].clear()
+	var n := alive.size()
+	if n == 0:
+		return
+	for i in n:
+		var id: int = alive[i]
+		var share := MAX_PATHS_PER_TICK / n + (1 if (i + ticks) % n < MAX_PATHS_PER_TICK % n else 0)
+		var queue: Array = path_queues[id]
+		while share > 0 and not queue.is_empty():
+			var u := unit(queue.pop_front())
+			if u == null:
+				continue
+			u.path_queued = false
+			if u.dead:
+				continue
+			u.path_turn = ticks
+			share -= 1
+		paths_left[id] = share
+
+
+## A route for a unit, or nothing while it waits its turn.
+func route_for(u: Unit, goal: Vector2) -> PackedVector2Array:
+	if not fair_paths:
+		return find_path(u.faction, u.pos, goal)
+	if u.path_queued:
+		return PackedVector2Array()
+	path_granted = u.path_turn == ticks
+	u.path_turn = -1
+	var out := find_path(u.faction, u.pos, goal)
+	path_granted = false
+	if out.is_empty() and u.faction >= 0:
+		u.path_queued = true
+		path_queues[u.faction].append(u.id)
 	return out
 
 
@@ -546,20 +840,14 @@ func _block(b: Building) -> void:
 		return
 	b.cells = _cells_of(b)
 	b.blocking = true
-	var gate: bool = d.get("gate", false)
-	for k in b.cells:
-		var c := Vector2i(k % grid_n, k / grid_n)
-		for f in 2:
-			if gate and f == b.faction:
-				continue
-			grids[f].set_point_solid(c, true)
+	blocking.add(b.cells, _gate_owner(b))
 	# Anyone standing inside steps out.
 	for u: Unit in units:
 		if u.dead:
 			continue
 		var cu := cell_of(u.pos)
 		if b.cells.has(cu.y * grid_n + cu.x):
-			var f := clampi(u.faction, 0, 1)
+			var f := maxi(u.faction, 0)
 			u.pos = cell_center(nearest_free_cell(f, cu))
 			u.prev = u.pos
 			u.path = PackedVector2Array()
@@ -569,18 +857,11 @@ func _unblock(b: Building) -> void:
 	if not b.blocking:
 		return
 	b.blocking = false
-	for k in b.cells:
-		var c := Vector2i(k % grid_n, k / grid_n)
-		if terrain_solid[k] == 1:
-			continue
-		var still := false
-		for o: Building in buildings:
-			if o != b and o.blocking and not o.dead and o.cells.has(k):
-				still = true
-				break
-		if not still:
-			for f in 2:
-				grids[f].set_point_solid(c, false)
+	blocking.remove(b.cells, _gate_owner(b))
+
+
+func _gate_owner(b: Building) -> int:
+	return b.faction if Defs.BUILDINGS[b.type].get("gate", false) else Blocking.NOT_A_GATE
 
 
 # --- Spatial queries ------------------------------------------------------------------
@@ -588,17 +869,24 @@ func _unblock(b: Building) -> void:
 func rebuild_unit_hash() -> void:
 	ulist.clear()
 	uhead.fill(-1)
+	uside.fill(0)
 	for u: Unit in units:
 		if not u.dead:
 			ulist.append(u)
 	unext.resize(ulist.size())
 	for i in ulist.size():
-		var p: Vector2 = ulist[i].pos
+		var u: Unit = ulist[i]
+		var p: Vector2 = u.pos
 		var bi := clampi(int(p.x / BUCKET), 0, bucket_n - 1)
 		var bj := clampi(int(p.y / BUCKET), 0, bucket_n - 1)
 		var k := bj * bucket_n + bi
 		unext[i] = uhead[k]
 		uhead[k] = i
+		if u.kind == "horse":
+			if u.faction < 0:
+				uside[k] |= WILD_HORSE
+		elif u.faction >= 0:
+			uside[k] |= 1 << u.faction
 
 
 ## Living units within r of p. faction_mode: -2 any, -3 enemies of `of` (people/siege only), or a faction id.
@@ -624,23 +912,62 @@ func units_near(p: Vector2, r: float, faction_mode: int = -2, of: int = -1) -> A
 	return out
 
 
+## A quick look at the buckets: false means none of those sides is within r of p.
+func sides_near(p: Vector2, r: float, sides: int) -> bool:
+	var last := bucket_n - 1
+	var i0 := clampi(int((p.x - r) / BUCKET), 0, last)
+	var i1 := clampi(int((p.x + r) / BUCKET), 0, last)
+	for bj in range(clampi(int((p.y - r) / BUCKET), 0, last), clampi(int((p.y + r) / BUCKET), 0, last) + 1):
+		var row := bj * bucket_n
+		for k in range(row + i0, row + i1 + 1):
+			if uside[k] & sides:
+				return true
+	return false
+
+
+## The bits of every faction but this one.
+func rivals_mask(faction: int) -> int:
+	var all := (1 << factions.size()) - 1
+	return all if faction < 0 else all & ~(1 << faction)
+
+
 func nearest_enemy(p: Vector2, r: float, faction: int, filter: Callable = Callable()) -> Unit:
+	var rivals := rivals_mask(faction)
+	if not sides_near(p, r, rivals):
+		return null
 	var best: Unit = null
 	var bd := INF
-	for u: Unit in units_near(p, r, -3, faction):
-		if u.stable >= 0:
-			continue
-		if filter.is_valid() and not filter.call(u):
-			continue
-		var d := u.pos.distance_squared_to(p)
-		if d < bd:
-			bd = d
-			best = u
+	var r2 := r * r
+	var filtered := filter.is_valid()
+	var last := bucket_n - 1
+	var i0 := clampi(int((p.x - r) / BUCKET), 0, last)
+	var i1 := clampi(int((p.x + r) / BUCKET), 0, last)
+	for bj in range(clampi(int((p.y - r) / BUCKET), 0, last), clampi(int((p.y + r) / BUCKET), 0, last) + 1):
+		var row := bj * bucket_n
+		for k in range(row + i0, row + i1 + 1):
+			if uside[k] & rivals == 0:
+				continue
+			var i := uhead[k]
+			while i != -1:
+				var u: Unit = ulist[i]
+				i = unext[i]
+				if u.faction == faction or u.faction < 0 or u.dead or u.stable >= 0:
+					continue
+				var d := u.pos.distance_squared_to(p)
+				if d > r2 or d >= bd or u.kind == "horse" or u.kind == "deer":
+					continue
+				if filtered and not filter.call(u):
+					continue
+				bd = d
+				best = u
 	return best
 
 
 func nearest_node(kind: String, p: Vector2, maxr: float, filter: Callable = Callable()):
 	var best = null
+	if not kind_buckets.has(kind):
+		return null
+	var of_kind: Array = kind_buckets[kind]
 	var bd := maxr * maxr
 	var ring := int(ceil(maxr / NODE_BUCKET))
 	var bc := Vector2i(clampi(int(p.x / NODE_BUCKET), 0, node_bucket_n - 1), clampi(int(p.y / NODE_BUCKET), 0, node_bucket_n - 1))
@@ -656,9 +983,12 @@ func nearest_node(kind: String, p: Vector2, maxr: float, filter: Callable = Call
 				var bj := bc.y + dy
 				if bi < 0 or bj < 0 or bi >= node_bucket_n or bj >= node_bucket_n:
 					continue
-				for nid in node_buckets[bj * node_bucket_n + bi]:
+				var ids = of_kind[bj * node_bucket_n + bi]
+				if ids == null:
+					continue
+				for nid in ids:
 					var n = terrain.nodes[nid]
-					if n.kind != kind or n.amount == 0.0:
+					if n.amount == 0.0:
 						continue
 					var d: float = n.pos.distance_squared_to(p)
 					if d >= bd:

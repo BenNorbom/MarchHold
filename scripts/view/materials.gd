@@ -168,6 +168,13 @@ func get_mat(name: String) -> Material:
 	return m
 
 
+func banner(dye: Color) -> ShaderMaterial:
+	var m := ShaderMaterial.new()
+	m.shader = preload("res://shaders/banner.gdshader")
+	m.set_shader_parameter("dye", dye)
+	return m
+
+
 func foliage(t: Texture2D, tint: Color, cut: float) -> ShaderMaterial:
 	var m := ShaderMaterial.new()
 	m.shader = FOLIAGE_SHADER

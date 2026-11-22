@@ -70,6 +70,7 @@ func _draw() -> void:
 	draw_texture_rect(fog_tex, r, false)
 	var f = m.fac(0)
 	var ink := Color(0.22, 0.15, 0.08)
+	var ours: Color = f.color
 	# Known terrain features.
 	var show_names := bool(Settings.get_val("resource_labels", true))
 	for n in m.terrain.nodes:
@@ -92,28 +93,36 @@ func _draw() -> void:
 			continue
 		var p := _to_screen(r, b.pos)
 		var sz := 3.0 if Defs.BUILDINGS[b.type].get("wall", false) else 5.0
-		draw_rect(Rect2(p - Vector2(sz, sz) * 0.5, Vector2(sz, sz)), Color(0.15, 0.25, 0.5))
+		draw_rect(Rect2(p - Vector2(sz, sz) * 0.5, Vector2(sz, sz)), ours)
 		if b.type == "campfire":
-			draw_circle(p, 7, Color(0.15, 0.25, 0.5))
+			draw_circle(p, 7, ours)
 			draw_string(font, p + Vector2(9, 5), "Home", HORIZONTAL_ALIGNMENT_LEFT, -1, 15, ink)
+	# Places you named, and your captains' posts.
+	var places: Dictionary = m.places_of(0)
+	for key in places:
+		var p := _to_screen(r, places[key]["pos"])
+		draw_arc(p, 6.0, 0, TAU, 16, ink, 1.5)
+		draw_string(font, p + Vector2(9, 5), places[key]["name"], HORIZONTAL_ALIGNMENT_LEFT, -1, 15, ink)
 	# What you know about the enemy.
 	for key in f.intel:
 		var e: Dictionary = f.intel[key]
+		var side = m.fac(int(e.get("faction", -1)))
+		var theirs: Color = side.color if side else Color(0.6, 0.12, 0.1)
 		var p := _to_screen(r, e["pos"])
 		match e["kind"]:
 			"building":
 				if e.get("faction", -1) == 0:
 					continue
 				var sz := 3.0 if Defs.BUILDINGS[e["type"]].get("wall", false) else 5.0
-				draw_rect(Rect2(p - Vector2(sz, sz) * 0.5, Vector2(sz, sz)), Color(0.6, 0.12, 0.1))
+				draw_rect(Rect2(p - Vector2(sz, sz) * 0.5, Vector2(sz, sz)), theirs)
 				if e["type"] == "campfire":
-					draw_circle(p, 8, Color(0.6, 0.12, 0.1))
-					draw_string(font, p + Vector2(10, 5), "Rook's camp (%s)" % _ago(e["t"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color(0.5, 0.08, 0.05))
+					draw_circle(p, 8, theirs)
+					draw_string(font, p + Vector2(10, 5), "%s's camp (%s)" % [m.fac(e["faction"]).short_name, _ago(e["t"])], HORIZONTAL_ALIGNMENT_LEFT, -1, 15, theirs.darkened(0.45))
 			"units":
 				if e.get("faction", -1) == 0 or m.t - float(e["t"]) > 300.0:
 					continue
-				draw_circle(p, 5, Color(0.75, 0.15, 0.1, 0.85))
-				draw_string(font, p + Vector2(7, -4), "%d (%s)" % [int(e["total"]), _ago(e["t"])], HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(0.55, 0.08, 0.05))
+				draw_circle(p, 5, theirs)
+				draw_string(font, p + Vector2(7, -4), "%d (%s)" % [int(e["total"]), _ago(e["t"])], HORIZONTAL_ALIGNMENT_LEFT, -1, 13, theirs.darkened(0.45))
 			"herd":
 				draw_string(font, p - Vector2(6, -4), "≈", HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color(0.45, 0.3, 0.1))
 				draw_string(font, p + Vector2(8, 4), "horses (%s)" % _ago(e["t"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(0.45, 0.3, 0.1))

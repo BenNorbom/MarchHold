@@ -17,24 +17,22 @@ flowchart TB
 
   subgraph WOOD["Wood age · start"]
     fire(["Campfire<br/>housing 8"]):::bld
-    hut(["Hut<br/>+5 housing"]):::bld
+    hut(["Hut<br/>+6 housing"]):::bld
     stock(["Stockpile"]):::bld
-    lodge(["Hunter's lodge"]):::bld
     farm(["Farm"]):::bld
     armory1(["Armory · wood"]):::key
     palisade(["Palisade + gate"]):::bld
     post(["Watch post"]):::bld
-    w_items["Club · wooden spear · wooden shield<br/>bow · stone-tipped arrows · militia"]:::item
+    w_items["Wooden spear · wooden shield<br/>bow · stone-tipped arrows · militia"]:::item
   end
 
   subgraph STONE["Stone age · ~3–5 min"]
     quarry(["Quarry"]):::key
     swall(["Stone wall + gate"]):::bld
-    tower(["Stone tower"]):::bld
-    house(["House<br/>+10 housing"]):::bld
-    granary(["Granary"]):::bld
+    tower(["Stone tower<br/>3 sheltered archer posts"]):::bld
     stable(["Stable"]):::bld
     ladders["Siege ladders"]:::item
+    mounted["Mounted archery research<br/>~60 s"]:::item
   end
 
   subgraph BRONZE["Bronze age · ~10–13 min"]
@@ -57,10 +55,11 @@ flowchart TB
     cannon["Cannon + shot"]:::item
   end
 
-  fire --> hut & stock & lodge & farm & armory1
+  fire --> hut & stock & farm & armory1
   armory1 --> palisade & post & w_items
   armory1 --> quarry
-  quarry --> swall & tower & house & granary & stable & ladders
+  quarry --> swall & tower & stable & ladders
+  stable --> mounted
   quarry --> mine --> ores --> smelter1
   smelter1 -->|"bronze"| armory2 --> b_items
   armory1 -.->|upgrade| armory2

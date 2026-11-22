@@ -11,6 +11,7 @@ const LINES := [
 	[41.0, 4.0, "Press Enter to talk to your people", "Type /h at any time for help."],
 ]
 const TOTAL := 45.0
+const RIVAL_LINE := "Across the valley: Commander Rook"
 
 var g
 var t := 0.0
@@ -44,7 +45,10 @@ func _process(delta: float) -> void:
 		if t >= l[0] and t < l[0] + l[1]:
 			var k: float = (t - l[0]) / l[1]
 			var a := clampf(minf(k * 4.0, (1.0 - k) * 4.0), 0.0, 1.0)
-			g.hud.show_caption(l[2], l[3])
+			if g.rivals.size() > 1 and l[2] == RIVAL_LINE:
+				g.hud.show_caption("Across the land: rival commanders", "They are building too, and fighting each other. You will only know what they are doing if you send scouts.")
+			else:
+				g.hud.show_caption(l[2], l[3])
 			g.hud.caption.modulate.a = a
 			g.hud.caption_sub.modulate.a = a
 	if t >= TOTAL:

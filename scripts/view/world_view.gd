@@ -5,13 +5,16 @@ extends Node3D
 const Defs = preload("res://scripts/data/defs.gd")
 const Terrain = preload("res://scripts/world/terrain.gd")
 const PeopleView = preload("res://scripts/view/people_view.gd")
+const BattleFx = preload("res://scripts/view/battle_fx.gd")
 const UiTheme = preload("res://scripts/ui/ui_theme.gd")
 
 const CHUNK := 32              # terrain cells per chunk side (64 m)
 const TREE_CHUNK := 256.0
 const GRASS_TILE := 16.0
+const WALL_BANNER_EVERY := 3   # wall pieces per banner
 const SPLAT_TEXEL := 2.0       # metres per splat map pixel
-const LANDMARK_RANGE := 40.0   # names show from a little beyond quarry and mine placement reach
+const LANDMARK_RANGE := 160.0  # names show from this far, unless a hill is in the way
+const LANDMARK_CHECK := 0.2    # seconds between checks for hills in the way
 
 var m                           # Match
 var mats
@@ -23,6 +26,8 @@ var splat_img: Image
 var splat_tex: ImageTexture
 var terrain_mat: ShaderMaterial
 var people: PeopleView
+var battle_fx: BattleFx
+var tick_alpha := 0.0           # how far this frame is between two sim ticks
 var node_slots := {}            # resource node id -> [[MultiMesh, index], ...]
 var bush_slots := {}            # the same for bush leaves, which outlast their berries
 var bld_nodes := {}             # building id -> {"root", "mesh", "body", "tier", "len", "h", "fire"}
@@ -31,6 +36,7 @@ var grass_radius := 32.0
 var grass_mat: ShaderMaterial
 var arrow_mm: MultiMesh
 var ball_mm: MultiMesh
+var banner_mats := {}           # faction id -> cloth material
 var engine_nodes := {}          # unit id -> MeshInstance3D
 var fx_pool: Array = []
 var mark_node: Node3D
@@ -45,6 +51,7 @@ var selected_ids: Array[int] = []
 var select_mm: MultiMesh
 var landmark_labels: Node3D
 var landmark_font: Font
+var landmark_wait := 0.0
 
 
 func setup(match_ref, materials, mesh_lib, q: int) -> void:
@@ -66,6 +73,9 @@ func setup(match_ref, materials, mesh_lib, q: int) -> void:
 	people = PeopleView.new()
 	add_child(people)
 	people.setup(m, mats, meshes, q)
+	battle_fx = BattleFx.new()
+	add_child(battle_fx)
+	battle_fx.setup(mats, meshes)
 	_projectiles()
 	for b in m.buildings:
 		_sync_building(b)
@@ -448,6 +458,17 @@ func _show_landmark_labels() -> void:
 	landmark_labels.visible = bool(Settings.get_val("resource_labels", true))
 
 
+## Labels draw through everything so leaves can't hide them; hills still must.
+func _update_landmark_labels(delta: float, cam: Vector3) -> void:
+	landmark_wait -= delta
+	if landmark_wait > 0.0 or not landmark_labels.visible:
+		return
+	landmark_wait = LANDMARK_CHECK
+	for label: Label3D in landmark_labels.get_children():
+		var at := label.position
+		label.visible = cam.distance_to(at) < LANDMARK_RANGE and m.terrain.clear_line(cam, at)
+
+
 func _mm(mesh: Mesh, list: Array, slots = null) -> MultiMesh:
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
@@ -539,8 +560,7 @@ func _sync_building(b) -> void:
 	if info.is_empty() or info["tier"] != b.tier:
 		_remove_building(b.id)
 		var root := Node3D.new()
-		var tr: Terrain = m.terrain
-		var base_y := _base_height(b)
+		var base_y: float = m.building_base_height(b)
 		root.position = Vector3(b.pos.x, base_y, b.pos.y)
 		root.rotation.y = -b.rot
 		var mi := MeshInstance3D.new()
@@ -551,14 +571,17 @@ func _sync_building(b) -> void:
 		root.add_child(mi)
 		add_child(root)
 		var body := StaticBody3D.new()
-		var cs := CollisionShape3D.new()
-		var box := BoxShape3D.new()
 		var h: float = meshes.building_height(b.type, b.tier, length)
-		var col_h := h if not d.get("walkable", false) else 0.2
-		box.size = Vector3(b.size.x, col_h, b.size.y)
-		cs.shape = box
-		cs.position = Vector3(0, col_h * 0.5, 0)
-		body.add_child(cs)
+		if b.type == "tower":
+			_add_tower_collision(body)
+		else:
+			var cs := CollisionShape3D.new()
+			var box := BoxShape3D.new()
+			var col_h := h if not d.get("walkable", false) else 0.2
+			box.size = Vector3(b.size.x, col_h, b.size.y)
+			cs.shape = box
+			cs.position = Vector3(0, col_h * 0.5, 0)
+			body.add_child(cs)
 		root.add_child(body)
 		if d.get("walkable", false):
 			body.collision_layer = 0
@@ -578,18 +601,50 @@ func _sync_building(b) -> void:
 		body2.collision_layer = 0
 	if b.complete and not info["complete"]:
 		info["complete"] = true
+		# Walls carry one every few pieces, gates always.
+		if not is_wall or d.get("gate", false) or b.line < 0 or (b.id - b.line) % WALL_BANNER_EVERY == 0:
+			_add_banner(info["root"], b.faction, meshes.banner_spot(b.type, b.size))
 		paint_dirt(b.pos, b.size.length() * 0.5 + 2.5)
 
 
-func _base_height(b) -> float:
-	var tr: Terrain = m.terrain
-	var lo := INF
-	var ax: Vector2 = Vector2.from_angle(b.rot) * b.size.x * 0.5
-	var az: Vector2 = Vector2.from_angle(b.rot + PI * 0.5) * b.size.y * 0.5
-	for p in [b.pos, b.pos + ax + az, b.pos + ax - az, b.pos - ax + az, b.pos - ax - az]:
-		lo = minf(lo, tr.height_at(p.x, p.y))
-	var mid := tr.height_at(b.pos.x, b.pos.y)
-	return lerpf(lo, mid, 0.35)
+func _add_banner(parent: Node3D, faction: int, spot: Array) -> void:
+	var f = m.fac(faction)
+	if f == null or spot.is_empty():
+		return
+	if not banner_mats.has(faction):
+		banner_mats[faction] = mats.banner(f.color)
+	var height: float = spot[1]
+	var pole := MeshInstance3D.new()
+	pole.name = "Banner"
+	pole.mesh = meshes.banner_pole(height)
+	pole.position = spot[0]
+	var cloth := MeshInstance3D.new()
+	cloth.mesh = meshes.banner_cloth()
+	cloth.material_override = banner_mats[faction]
+	cloth.position.y = height - 0.05
+	cloth.scale = Vector3.ONE * float(spot[2])
+	# The shader turns the cloth about the pole, so it can be culled only by the whole circle it sweeps.
+	cloth.custom_aabb = AABB(Vector3(-1.8, -1.3, -1.8), Vector3(3.6, 1.6, 3.6))
+	cloth.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF # it would turn toward the sun in the shadow pass
+	pole.add_child(cloth)
+	parent.add_child(pole)
+
+
+func _add_tower_collision(body: StaticBody3D) -> void:
+	var base := CollisionShape3D.new()
+	var cylinder := CylinderShape3D.new()
+	cylinder.radius = Defs.TOWER_DECK_RADIUS
+	cylinder.height = Defs.TOWER_DECK_HEIGHT
+	base.shape = cylinder
+	base.position.y = cylinder.height * 0.5
+	body.add_child(base)
+	for piece in meshes.tower_parapet():
+		var cs := CollisionShape3D.new()
+		var box := BoxShape3D.new()
+		box.size = piece[1]
+		cs.shape = box
+		cs.transform = piece[0]
+		body.add_child(cs)
 
 
 func _paint_for(b) -> void:
@@ -685,7 +740,7 @@ func _projectiles() -> void:
 	var ai := MultiMeshInstance3D.new()
 	ai.multimesh = arrow_mm
 	ai.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	ai.custom_aabb = AABB(Vector3(-100, -100, -100), Vector3(1300, 400, 1300))
+	ai.custom_aabb = AABB(Vector3(-100, -100, -100), Vector3(m.map_size + 276, 400, m.map_size + 276))
 	add_child(ai)
 	ball_mm = MultiMesh.new()
 	ball_mm.transform_format = MultiMesh.TRANSFORM_3D
@@ -694,7 +749,7 @@ func _projectiles() -> void:
 	ball_mm.visible_instance_count = 0
 	var bi := MultiMeshInstance3D.new()
 	bi.multimesh = ball_mm
-	bi.custom_aabb = AABB(Vector3(-100, -100, -100), Vector3(1300, 400, 1300))
+	bi.custom_aabb = AABB(Vector3(-100, -100, -100), Vector3(m.map_size + 276, 400, m.map_size + 276))
 	add_child(bi)
 	for i in 12:
 		var p := GPUParticles3D.new()
@@ -740,11 +795,13 @@ func puff(p: Vector3, big: bool) -> void:
 
 
 func _update_shots() -> void:
+	var alpha := tick_alpha
 	var na := 0
 	var nb := 0
 	for s in m.shots:
-		if s.dead:
-			continue
+		if s.t == 0.0:
+			continue      # loosed since the last tick
+		var at: Vector3 = s.prev.lerp(s.pos, alpha)
 		if s.kind == "arrow":
 			if na >= arrow_mm.instance_count:
 				continue
@@ -752,16 +809,16 @@ func _update_shots() -> void:
 			if s.free:
 				dir = s.vel
 			else:
-				var k := clampf(s.t / s.dur, 0.0, 1.0)
-				dir = (s.end - s.start) + Vector3(0, (4.0 - 8.0 * k) * s.start.distance_to(s.end) * 0.12, 0)
+				var k := clampf((s.t - Defs.TICK * (1.0 - alpha)) / s.dur, 0.0, 1.0)
+				dir = (s.end - s.start) + Vector3(0, (4.0 - 8.0 * k) * s.start.distance_to(s.end) * s.arc, 0)
 			if dir.length() < 0.01:
 				dir = Vector3.FORWARD
-			arrow_mm.set_instance_transform(na, Transform3D(Basis.looking_at(-dir.normalized(), Vector3.UP if absf(dir.normalized().y) < 0.98 else Vector3.RIGHT), s.pos))
+			arrow_mm.set_instance_transform(na, Transform3D(Basis.looking_at(-dir.normalized(), Vector3.UP if absf(dir.normalized().y) < 0.98 else Vector3.RIGHT), at))
 			na += 1
 		else:
 			if nb >= ball_mm.instance_count:
 				continue
-			ball_mm.set_instance_transform(nb, Transform3D(Basis(), s.pos))
+			ball_mm.set_instance_transform(nb, Transform3D(Basis(), at))
 			nb += 1
 	arrow_mm.visible_instance_count = na
 	ball_mm.visible_instance_count = nb
@@ -778,6 +835,7 @@ func _update_engines(alpha: float) -> void:
 			mi = MeshInstance3D.new()
 			mi.mesh = meshes.cannon() if u.kind == "cannon" else meshes.ram()
 			add_child(mi)
+			_add_banner(mi, u.faction, meshes.banner_spot(u.kind))
 			engine_nodes[u.id] = mi
 		var p: Vector2 = u.prev.lerp(u.pos, alpha)
 		var tr: Terrain = m.terrain
@@ -878,9 +936,17 @@ func handle_events(events: Array) -> void:
 					add_child(mi)
 					node_slots[n.id] = []
 					carcasses[n.id] = mi
+			"hit":
+				people.on_hit(ev)
+				battle_fx.hit(ev, m.terrain.pos3(ev["pos"]))
+			"death":
+				if ev["kind"] != "deer":
+					battle_fx.fallen(m.terrain.pos3(ev["pos"]))
 			"fx":
 				var p: Vector2 = ev["pos"]
-				if ev["name"] == "muzzle":
+				if ev["name"] == "arrow_land":
+					battle_fx.arrow_landed(ev["at"], ev["dir"], ev["hit"])
+				elif ev["name"] == "muzzle":
 					puff(m.terrain.pos3(p, 1.2), true)
 				elif ev["name"] == "impact":
 					puff(m.terrain.pos3(p, 0.3), true)
@@ -890,11 +956,14 @@ var carcasses := {}
 
 
 func update_frame(delta: float, alpha: float, cam: Vector3) -> void:
+	tick_alpha = alpha
 	cam_pos = cam
 	_update_grass(cam)
+	_update_landmark_labels(delta, cam)
 	_update_shots()
 	_update_engines(alpha)
 	people.update_frame(delta, alpha, cam, hidden_unit)
+	battle_fx.update_frame(delta, cam)
 	_update_selection_rings(alpha)
 	for id in carcasses.keys():
 		var n = m.terrain.nodes[id]
@@ -936,7 +1005,8 @@ func pick_unit(from: Vector3, dir: Vector3, max_d: float = 40.0, faction: int = 
 			continue
 		if faction != -99 and u.faction != faction:
 			continue
-		var p: Vector3 = m.terrain.pos3(u.pos, 1.2 if not u.mounted else 1.9)
+		var torso := 1.9 if u.mounted else (1.5 if u.in_tower >= 0 else 1.2)
+		var p := Vector3(u.pos.x, m.unit_floor_y(u) + torso, u.pos.y)
 		var to := p - from
 		var along := to.dot(dir)
 		if along < 0.5 or along > max_d:

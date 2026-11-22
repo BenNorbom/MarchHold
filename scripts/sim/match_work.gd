@@ -1,10 +1,118 @@
 extends "res://scripts/sim/match_base.gd"
 ## Crews, plans, work and the settlement economy.
 
+const HAUL_WEIGHT := 6.0     # a load is hauled many times, the first walk happens once
+const GATHER_RANGE := 260.0
+const MAX_SEARCHES_PER_TICK := 12
+const SEARCH_RETRY := 2.0    # seconds before looking again when there's nothing to gather
+
+var searches_this_tick := 0
 var claims := {}          # resource node id -> gatherers heading to it
-var birth_acc := [0.0, 0.0]
+var birth_acc := PackedFloat64Array()      # by faction
 var breed_acc := {}       # stable id -> progress
 var upkeep_t := 0.0
+
+
+# --- Posts ---------------------------------------------------------------------
+
+func post_of(u: Unit) -> Post:
+	return posts.get(u.post) if u.post >= 0 else null
+
+
+func post_members(p: Post) -> Array:
+	var out := []
+	for id in p.members:
+		var u := unit(id)
+		if u and not u.dead and u.post == p.id:
+			out.append(u)
+	return out
+
+
+## Everywhere an order can name: places the player named, and posts (the village is just home).
+func places_of(faction: int) -> Dictionary:
+	var out: Dictionary = fac(faction).places.duplicate()
+	for p: Post in posts.values():
+		var key := p.name.to_lower()
+		# One plain word ("farms", "garrison") has to keep its usual meaning in orders.
+		if p.faction == faction and key.contains(" ") and not out.has(key):
+			out[key] = {"name": p.name, "pos": p.center}
+	return out
+
+
+func village_post(faction: int) -> Post:
+	for p: Post in posts.values():
+		if p.faction == faction and p.mandate == "village":
+			return p
+	return null
+
+
+func leads_post(u: Unit) -> bool:
+	var p := post_of(u)
+	return p != null and p.captain == u.id
+
+
+## Working on something the player (not their captain) told them to do.
+func under_direct_order(u: Unit) -> bool:
+	var c := crew_of(u)
+	return c != null and c.post < 0
+
+
+## Where someone idles, falls back to, flees to and heals.
+func resting_place(u: Unit) -> Vector2:
+	var p := post_of(u)
+	if p == null:
+		return home_pos(u.faction)
+	return p.refuge if p.alert == "falling_back" else p.center
+
+
+func join_post(p: Post, u: Unit) -> void:
+	if u.post == p.id:
+		return
+	leave_post(u)
+	var c := crew_of(u)
+	if c and c.post >= 0:
+		release_member(u)
+	u.post = p.id
+	p.members.append(u.id)
+
+
+func leave_post(u: Unit) -> void:
+	var p := post_of(u)
+	u.post = -1
+	if p == null:
+		return
+	p.members.erase(u.id)
+	if u.dead:
+		p.lost += 1
+	if p.captain != u.id:
+		return
+	var heir: Unit = null
+	for m in post_members(p):
+		if not m.child:
+			heir = m
+			break
+	if heir == null:
+		posts.erase(p.id)
+		if p.faction == 0:
+			post(0, "Nobody is left to run the %s." % p.name, "alarm")
+		return
+	var c := crew_of(heir)
+	if c and c.post >= 0:
+		release_member(heir)
+	p.captain = heir.id
+	heir.captain = true
+	if p.faction == 0:
+		post(0, "Captain %s has %s the %s. %s takes over as captain." % [u.name, "fallen at" if u.dead else "left", p.name, heir.name], "alarm")
+
+
+## More hands for a job already under way.
+func add_to_crew(c: Crew, people: Array) -> void:
+	var task: String = c.steps[c.idx]["action"] if c.idx < c.steps.size() else "idle"
+	for u: Unit in people:
+		_join(c, u)
+		_set_task(u, task)
+		c.start_size += 1
+	_assign_slots(c)
 
 
 # --- Crews ---------------------------------------------------------------------
@@ -36,11 +144,14 @@ func _join(c: Crew, u: Unit) -> void:
 func _set_leader(c: Crew, id: int) -> void:
 	c.leader = id
 	var lead := unit(id)
-	c.captain = lead != null and lead.captain
+	# Inside a post only the post has a captain. A crew there ends when its work does.
+	c.captain = lead != null and lead.captain and lead.post < 0
 
 
 func leave_crew(u: Unit) -> void:
 	var c := crew_of(u)
+	if u.in_tower >= 0:
+		leave_tower(u)
 	u.crew = -1
 	_release_claim(u)
 	if c == null:
@@ -59,6 +170,24 @@ func leave_crew(u: Unit) -> void:
 		_assign_slots(c)
 
 
+## Takes someone who died out of their crew. A dead captain is succeeded by the longest-serving member.
+func drop_dead(c: Crew, id: int) -> void:
+	c.members.erase(id)
+	c.lost += 1
+	if c.leader != id:
+		return
+	var had_captain := c.captain
+	_set_leader(c, c.members[0] if not c.members.is_empty() else -1)
+	var heir := unit(c.leader)
+	if not had_captain or heir == null:
+		return
+	heir.captain = true
+	c.captain = true
+	if c.faction == 0:
+		var fallen := unit(id)
+		post(0, "Captain %s has fallen. %s takes over as captain." % [fallen.name if fallen else "", heir.name], "alarm")
+
+
 func release_member(u: Unit) -> void:
 	leave_crew(u)
 	if u.task == "tame":
@@ -72,7 +201,6 @@ func release_member(u: Unit) -> void:
 		u.siege = -1
 	u.tgt_unit = -1
 	u.enemy_bld = -1
-	u.in_tower = -1
 	_set_task(u, "idle")
 
 
@@ -96,7 +224,7 @@ func crew_label(c: Crew) -> String:
 
 
 func is_free_adult(u: Unit) -> bool:
-	return not u.dead and u.kind == "villager" and not u.child and u.crew < 0 and u.siege < 0 and u.stable < 0
+	return not u.dead and u.kind == "villager" and not u.child and u.crew < 0 and u.siege < 0 and u.stable < 0 and not leads_post(u)
 
 
 ## Idle adults of a faction, nearest to p first.
@@ -154,12 +282,19 @@ func recruit(c: Crew, want: int, p: Vector2) -> int:
 		got += 1
 	if got < need:
 		for u in _pull_workers(c.faction, p, need - got, c):
+			_remember_worker(u)
 			_join(c, u)
 			got += 1
 	return got
 
 
 func start_plan(c: Crew, steps: Array) -> void:
+	var lead: String = str(steps[0].get("action", "")) if not steps.is_empty() else ""
+	if lead in Defs.MILITARY_ACTIONS:
+		_remember_crew_work(c)
+	elif lead in Defs.WORK_ACTIONS:
+		for id in c.members:
+			work_memory.erase(id)
 	for id in c.members:
 		var u := unit(id)
 		if u:
@@ -172,7 +307,124 @@ func start_plan(c: Crew, steps: Array) -> void:
 	_begin_step(c)
 
 
+# --- Back to work ---------------------------------------------------------------
+# A military order (to arms, attack, fall back...) remembers what each person was doing,
+# so "back to work" can put everyone back on it. Memories older than this are ignored,
+# so a standing army drafted long ago isn't disbanded by an emergency call-up.
+const WORK_MEMORY_TIME := 900.0
+
+
+## What this crew is doing, in a form "back to work" can restart. {} if it isn't working.
+func _work_entry(c: Crew) -> Dictionary:
+	if c.captain:
+		return {}
+	if c.steps.is_empty():
+		# A fresh crew of idle villagers: going back means going back to idle.
+		return {"group": c.id, "steps": [], "loop": false, "t": t}
+	if c.idx >= c.steps.size() or not str(c.steps[c.idx].get("action", "")) in Defs.WORK_ACTIONS:
+		return {}
+	var steps: Array = c.steps.slice(c.idx).duplicate(true)
+	var first: Dictionary = steps[0]
+	var amount := int(first.get("amount", 0))
+	if amount > 0:
+		var done := int(c.state.get("made", 0)) if first["action"] == "craft" else int(c.state.get("delivered", 0.0))
+		if done >= amount:
+			steps.remove_at(0)
+		else:
+			first["amount"] = amount - done
+	for s in steps:
+		s["count"] = 0
+	return {"group": c.id, "steps": steps, "loop": c.loop, "t": t}
+
+
+func _remember(u: Unit, entry: Dictionary) -> bool:
+	var old = work_memory.get(u.id)
+	if old != null and t - float(old["t"]) <= WORK_MEMORY_TIME:
+		return false  # keep the earliest memory: that's the real job
+	work_memory[u.id] = entry
+	return true
+
+
+## Called as a crew is about to take a military order.
+func _remember_crew_work(c: Crew) -> void:
+	var entry := _work_entry(c)
+	if entry.is_empty():
+		return
+	var used := false
+	for id in c.members:
+		var u := unit(id)
+		if u and _remember(u, entry):
+			used = true
+	if used:
+		# The unbuilt sites stay on the map for when they return.
+		for i in range(c.idx, c.steps.size()):
+			c.steps[i]["sites"] = []
+
+
+## A worker is being pulled out of a working crew to fill another order.
+func _remember_worker(u: Unit) -> void:
+	var c := crew_of(u)
+	if c == null:
+		return
+	var entry := _work_entry(c)
+	if not entry.is_empty():
+		_remember(u, entry)
+
+
+func _crew_is_working(c: Crew) -> bool:
+	return c.idx < c.steps.size() and str(c.steps[c.idx].get("action", "")) in Defs.WORK_ACTIONS
+
+
+## Put people back on the work a military order pulled them off. `only` limits it to those ids.
+## Returns how many went back. Anyone who has since been given new work is left alone.
+func resume_work(faction: int, only: Array = []) -> int:
+	var groups := {}
+	for id in work_memory.keys():
+		var u := unit(id)
+		if u == null or u.dead:
+			work_memory.erase(id)
+			continue
+		if u.faction != faction or (not only.is_empty() and not only.has(id)):
+			continue
+		var entry: Dictionary = work_memory[id]
+		work_memory.erase(id)
+		if t - float(entry["t"]) > WORK_MEMORY_TIME or u.child or u.siege >= 0:
+			continue
+		var cur := crew_of(u)
+		if cur != null and (cur.captain or _crew_is_working(cur)):
+			continue
+		var key: int = entry["group"]
+		if not groups.has(key):
+			groups[key] = {"entry": entry, "units": []}
+		groups[key]["units"].append(u)
+	var back := 0
+	for g in groups.values():
+		var us: Array = g["units"]
+		var steps: Array = g["entry"]["steps"]
+		back += us.size()
+		if steps.is_empty():
+			for u in us:
+				release_member(u)
+			continue
+		var crew := crew_of(us[0])
+		var same := crew != null and crew.members.size() == us.size()
+		if same:
+			for u in us:
+				if u.crew != crew.id:
+					same = false
+		if not same:
+			for u in us:
+				release_member(u)
+			crew = make_crew(faction, us)
+		crew.loop = bool(g["entry"]["loop"])
+		start_plan(crew, steps.duplicate(true))
+	return back
+
+
+## The rival drops its unstarted sites. A player's sites wait to be resumed.
 func _cancel_sites(c: Crew) -> void:
+	if not fac(c.faction).is_ai:
+		return
 	for s in c.steps:
 		for sid in s.get("sites", []):
 			var b := bld(sid)
@@ -194,9 +446,12 @@ func cancel_plan(c: Crew) -> void:
 
 
 func _set_task(u: Unit, task: String) -> void:
+	if u.in_tower >= 0:
+		leave_tower(u)
 	_release_claim(u)
 	u.task = task
 	u.phase = ""
+	u.enemy_bld = -1
 	u.tgt_bld = -1
 	u.work_t = 0.0
 	u.path = PackedVector2Array()
@@ -242,22 +497,40 @@ func resolve_where(c: Crew, where: String, default_dist: float = 140.0):
 			return f.mark if f.has_mark else null
 		"enemy":
 			return known_enemy_camp(c.faction)
+	if where.begins_with(Defs.PLACE):
+		var place: Dictionary = places_of(c.faction).get(where.substr(Defs.PLACE.length()), {})
+		return place.get("pos")
 	var v := Terrain.direction_vector(where)
 	var p := home_pos(c.faction) + v * default_dist
 	return p.clamp(Vector2(20, 20), Vector2(map_size - 20, map_size - 20))
 
 
-func known_enemy_camp(faction: int):
+## Every living rival's camp this faction has seen: [{"faction", "pos", "t"}, ...].
+func known_camps(faction: int) -> Array:
+	var out := []
 	var f := fac(faction)
-	var best = null
-	var bt := -INF
 	for k in f.intel:
 		var e: Dictionary = f.intel[k]
-		if e.get("kind", "") == "building" and e.get("type", "") == "campfire" and e.get("faction", -1) != faction:
-			if float(e["t"]) > bt:
-				bt = float(e["t"])
-				best = e["pos"]
+		if e.get("kind", "") != "building" or e.get("type", "") != "campfire":
+			continue
+		var who := int(e.get("faction", -1))
+		if who >= 0 and who != faction and factions[who].alive:
+			out.append({"faction": who, "pos": e["pos"], "t": e["t"]})
+	return out
+
+
+## The nearest of those camps, or {}.
+func known_enemy(faction: int) -> Dictionary:
+	var best := {}
+	var home := home_pos(faction)
+	for camp in known_camps(faction):
+		if best.is_empty() or (camp["pos"] as Vector2).distance_squared_to(home) < (best["pos"] as Vector2).distance_squared_to(home):
+			best = camp
 	return best
+
+
+func known_enemy_camp(faction: int):
+	return known_enemy(faction).get("pos")
 
 
 func _begin_step(c: Crew) -> void:
@@ -271,6 +544,7 @@ func _begin_step(c: Crew) -> void:
 			c.done = true
 			return
 		c.start_size = c.members.size()
+		_remember_sites(c)
 		var err := _prepare_step(c, s)
 		if err == "":
 			for id in c.members:
@@ -283,6 +557,19 @@ func _begin_step(c: Crew) -> void:
 			post(0, "%s: %s" % [crew_label(c), err], "warn")
 		c.idx += 1
 	_finish_plan(c)
+
+
+## So people ordered away can be told to carry on with what they were building.
+func _remember_sites(c: Crew) -> void:
+	var sites := []
+	for s in c.steps:
+		sites.append_array(s.get("sites", []))
+	if sites.is_empty():
+		return
+	for id in c.members:
+		var u := unit(id)
+		if u:
+			u.last_sites = sites
 
 
 ## Checks a step can start and fills crew.state. Returns a problem or "".
@@ -304,16 +591,22 @@ func _prepare_step(c: Crew, s: Dictionary) -> String:
 					if subj in Defs.DEPOSITS:
 						return "we need a mine on a %s deposit first." % Defs.RESOURCE_NAMES[subj]
 					return "we need a %s first." % Defs.building_name(types[0]).to_lower()
-			var p = resolve_where(c, s.get("where", ""), 120.0)
+			var where: String = s.get("where", "")
+			var p = resolve_where(c, where, 120.0)
 			c.state["origin"] = p if p != null else crew_center(c)
+			c.state["named_place"] = where != "" and p != null
 		"build":
 			var sites: Array = s.get("sites", [])
 			var live := []
+			var finished := false
 			for sid in sites:
 				var b := bld(sid)
-				if b and not b.dead and not b.complete:
-					live.append(sid)
-			if live.is_empty():
+				if b and not b.dead:
+					if b.complete:
+						finished = true
+					else:
+						live.append(sid)
+			if live.is_empty() and not finished:  # if others finished it, the step is simply done
 				return "there's no site placed for the %s." % Defs.building_name(subj).to_lower()
 			c.state["sites"] = live
 		"upgrade":
@@ -405,6 +698,8 @@ func _prepare_step(c: Crew, s: Dictionary) -> String:
 			if p == null:
 				return "we don't know where their camp is. Scout first." if where in ["", "enemy"] else "mark a spot first (look at the ground and press R)."
 			c.state["target"] = p
+			if where in ["", "enemy"]:
+				c.state["foe"] = known_enemy(c.faction).get("faction", -1)
 		"follow":
 			if unit(f.commander) == null:
 				return "there's no one to follow."
@@ -412,7 +707,12 @@ func _prepare_step(c: Crew, s: Dictionary) -> String:
 			c.state["target"] = home_pos(c.faction)
 		"promote":
 			var lead := unit(c.leader)
-			if lead:
+			if lead and not leads_post(lead):
+				# Their own crew now, outside any post.
+				for id in c.members:
+					var mate := unit(id)
+					if mate and not leads_post(mate):
+						leave_post(mate)
 				lead.captain = true
 				c.captain = true
 				c.loop = false
@@ -498,10 +798,33 @@ func _enemy_guess(faction: int):
 	var e = known_enemy_camp(faction)
 	if e != null:
 		return e
-	# The camps face each other across the middle of the map.
 	var home := home_pos(faction)
 	var c := Vector2(map_size, map_size) * 0.5
+	if factions.size() > 2:
+		return _unexplored_on_ring(faction, home, c)
+	# Two camps face each other across the middle of the map.
 	return (c * 2.0 - home).clamp(Vector2(40, 40), Vector2(map_size - 40, map_size - 40))
+
+
+## With several camps, all anyone knows is that they stand on a ring. Go to the nearest
+## part of it this faction hasn't seen, or failing that the part seen longest ago.
+func _unexplored_on_ring(faction: int, home: Vector2, c: Vector2) -> Vector2:
+	var known := fac(faction).knowledge
+	var r: float = map_size * 0.5 - float(terrain.config["margin"])
+	var from := (home - c).angle()
+	var best := c
+	var best_seen := INF
+	# Outwards from home to either side, starting past the home kit.
+	for k in range(2, 13):
+		for side in [1.0, -1.0]:
+			var p := c + Vector2.from_angle(from + side * k * TAU / 24.0) * r
+			if p.distance_to(home) < Defs.RING_SPACING * 0.8:
+				continue
+			var seen: float = known[kcell(p)]
+			if seen < best_seen:
+				best_seen = seen
+				best = p
+	return best
 
 
 func _advance(c: Crew) -> void:
@@ -539,6 +862,8 @@ func _assign_slots(c: Crew) -> void:
 		var col := i % per_row
 		var n_in_row := mini(per_row, live.size() - row * per_row)
 		live[i].slot = Vector2((col - (n_in_row - 1) * 0.5) * 1.9, -row * 2.0)
+	c.depth = maxf(0.0, float((live.size() - 1) / per_row) * 2.0)
+	c.width = maxf(2.2, (mini(per_row, live.size()) - 1) * 1.9 + 2.2)
 
 
 func _rank(u: Unit) -> int:
@@ -556,6 +881,79 @@ func slot_point(u: Unit, center: Vector2, facing_dir: Vector2) -> Vector2:
 	return center + right * u.slot.x + fwd * u.slot.y
 
 
+## The crew's centre, worked out once a tick.
+func crew_center_now(c: Crew) -> Vector2:
+	if c.center_t != t:
+		c.center_t = t
+		c.center = crew_center(c)
+	return c.center
+
+
+func post_facing(faction: int, target: Vector2) -> Vector2:
+	var home := home_pos(faction)
+	return (target - home) if target.distance_to(home) > 5.0 else Vector2(0, -1)
+
+
+## Where this unit stands when guarding or holding.
+func station(u: Unit, c: Crew) -> Vector2:
+	var target: Vector2 = c.state.get("target", u.pos)
+	var dir := post_facing(u.faction, target)
+	var spot := slot_point(u, lane_center(c, target, dir), dir)
+	if solid_for(u.faction, cell_of(spot)):
+		spot = cell_center(nearest_free_cell(maxi(u.faction, 0), cell_of(spot)))
+	return spot
+
+
+## Crews sent to the same place line up side by side instead of inside each other.
+func lane_center(c: Crew, center: Vector2, facing_dir: Vector2) -> Vector2:
+	if t - c.lane_t >= 1.0:
+		c.lane_t = t
+		c.lane = _lane_offset(c)
+	var lane := c.lane
+	if lane == 0.0 or facing_dir.length() < 0.01:
+		return center
+	var fwd := facing_dir.normalized()
+	return center + Vector2(-fwd.y, fwd.x) * lane
+
+
+func _lane_offset(c: Crew) -> float:
+	if c.idx >= c.steps.size():
+		return 0.0
+	var kind := _post_kind(c.steps[c.idx]["action"])
+	var target: Vector2 = c.state.get("target", Vector2.ZERO)
+	var sharing := []
+	for o: Crew in crews.values():
+		if o.faction != c.faction or o.members.is_empty() or o.idx >= o.steps.size():
+			continue
+		if _post_kind(o.steps[o.idx]["action"]) != kind:
+			continue
+		if kind != "follow" and (o.state.get("target", Vector2.INF) as Vector2).distance_to(target) > 8.0:
+			continue
+		sharing.append(o)
+	if sharing.size() < 2:
+		return 0.0
+	sharing.sort_custom(func(a, b): return a.id < b.id)
+	var right: float = sharing[0].width * 0.5
+	var left := -right
+	for i in sharing.size():
+		var w: float = sharing[i].width
+		var at := 0.0
+		if i > 0:
+			if i % 2 == 1:
+				at = right + w * 0.5
+				right += w
+			else:
+				at = left - w * 0.5
+				left -= w
+		if sharing[i] == c:
+			return at
+	return 0.0
+
+
+func _post_kind(action: String) -> String:
+	return "guard" if action == "hold" else action
+
+
 # --- Crew drivers --------------------------------------------------------------
 
 func update_crews(dt: float) -> void:
@@ -564,10 +962,7 @@ func update_crews(dt: float) -> void:
 		for id in c.members.duplicate():
 			var u := unit(id)
 			if u == null or u.dead:
-				c.members.erase(id)
-				c.lost += 1
-				if c.leader == id:
-					_set_leader(c, c.members[0] if not c.members.is_empty() else -1)
+				drop_dead(c, id)
 		if c.members.is_empty():
 			crews.erase(c.id)
 			continue
@@ -666,40 +1061,120 @@ func unit_speed(u: Unit) -> float:
 	return s * (1.0 - slow)
 
 
-func move_to(u: Unit, goal: Vector2, dt: float, arrive: float = 1.0, run: bool = false) -> bool:
+## Walks toward goal around anyone in the way. True once within `arrive`, or as near
+## as the crowd lets it get when `crowd_ok`.
+func move_to(u: Unit, goal: Vector2, dt: float, arrive: float = 1.0, run: bool = false, crowd_ok: bool = true) -> bool:
 	var d := u.pos.distance_to(goal)
 	if d <= arrive:
 		u.path = PackedVector2Array()
 		return true
-	if u.path.is_empty() or u.path_goal.distance_squared_to(goal) > 4.0:
-		u.path = find_path(u.faction, u.pos, goal)
+	var same_goal := u.path_goal.distance_squared_to(goal) <= 4.0
+	if u.path.is_empty() and same_goal and t < u.path_wait and not (fair_paths and u.path_turn == ticks):
+		return false
+	if u.path.is_empty() or not same_goal:
+		u.path = route_for(u, goal)
 		u.path_i = 0
 		u.path_goal = goal
+		u.climbing = false
 		if u.path.is_empty():
 			u.path_goal = Vector2(-999, -999)
 			return false
-	var wp: Vector2 = u.path[mini(u.path_i, u.path.size() - 1)]
-	var step := unit_speed(u) * (1.35 if run else 1.0) * dt
+		var end := u.path[u.path.size() - 1]
+		if end.distance_squared_to(goal) <= 1.0:
+			u.dead_ends = 0
+		elif crowd_ok and not solid_for(u.faction, cell_of(goal)) and not _enemy_works_between(u.faction, end, goal):
+			# No way round. People clamber over their own walls and rough ground, never an enemy's walls.
+			u.path.append(goal)
+			u.climbing = true
+	var last := u.path.size() - 1
+	var i := mini(u.path_i, last)
+	var wp: Vector2 = u.path[i]
+	# Corners only need passing near, or two people would fight over the same point.
+	while i < last and u.pos.distance_squared_to(wp) < 1.2 and line_clear(u.faction, u.pos, u.path[i + 1]):
+		i += 1
+		u.path_i = i
+		wp = u.path[i]
+	var stride := unit_speed(u) * (1.35 if run else 1.0) * dt
 	var to := wp - u.pos
 	var dist := to.length()
+	u.move_t = t
+	var next_pos := wp
 	if dist > 0.001:
-		u.facing = atan2(to.x, to.y)
-	if dist <= step:
-		u.pos = wp
-		u.path_i += 1
-		if u.path_i >= u.path.size():
-			u.path = PackedVector2Array()
-			if u.pos.distance_to(goal) > arrive:
-				u.path_goal = Vector2(-999, -999)
-	else:
-		u.pos += to / dist * step
+		next_pos = crowd.step(u, to / dist, minf(stride, dist), self)
+		var in_way: Unit = crowd.blocker
+		if in_way:
+			# The route stops short of the goal and somebody is already standing at its end.
+			if i == last and dist < 2.0 and wp.distance_squared_to(u.path_goal) > 1.0:
+				u.path = PackedVector2Array()
+				_dead_end(u)
+				return false
+			# Somebody is standing on the spot: this is as close as it gets.
+			if crowd_ok and i == last and d <= arrive + 1.2 and in_way.pos.distance_squared_to(goal) < d * d and not in_way.anim in [Anim.WALK, Anim.RUN]:
+				u.path = PackedVector2Array()
+				return true
+		if next_pos != u.pos:
+			next_pos = _keep_out(u, next_pos)
+			var heading := next_pos - u.pos
+			if heading.length_squared() > 0.0001:
+				u.facing = atan2(heading.x, heading.y)
+	u.pos = next_pos
 	if u.mounted:
 		u.anim = Anim.RIDE
 	elif u.carry > 0.0:
 		u.anim = Anim.CARRY
 	else:
 		u.anim = Anim.RUN if run else Anim.WALK
-	return u.pos.distance_to(goal) <= arrive
+	var left := u.pos.distance_to(goal)
+	if u.pos.distance_squared_to(wp) < 0.0025:
+		u.path_i = i + 1
+		if i == last:
+			u.path = PackedVector2Array()
+			if left > arrive:
+				if solid_for(u.faction, cell_of(goal)) and left <= arrive + CELL * 1.5:
+					return true       # the goal is inside something: next to it will do
+				if wp.distance_squared_to(u.path_goal) > 1.0:
+					_dead_end(u)            # as far as the ground allows
+				else:
+					u.path_goal = Vector2(-999, -999)
+	return left <= arrive
+
+
+## A step that would end inside something solid slides along it instead.
+func _keep_out(u: Unit, p: Vector2) -> Vector2:
+	var to_cell := cell_of(p)
+	var from_cell := cell_of(u.pos)
+	if to_cell == from_cell or not solid_for(u.faction, to_cell) or solid_for(u.faction, from_cell):
+		return p
+	if u.climbing and u.path_i >= u.path.size() - 1:
+		return p
+	if not u.path.is_empty() and not line_clear(u.faction, u.pos, u.path[mini(u.path_i, u.path.size() - 1)]):
+		# Jostled off the route: what's ahead is now behind a corner.
+		u.path = PackedVector2Array()
+		u.path_goal = Vector2(-999, -999)
+	var by := p - u.pos
+	for alt: Vector2 in [Vector2(by.x, 0), Vector2(0, by.y)]:
+		if alt == Vector2.ZERO:
+			continue
+		var q := u.pos + alt
+		if not solid_for(u.faction, cell_of(q)):
+			return q
+	return u.pos
+
+
+## A search that can't succeed covers the whole map, so wait longer before each retry.
+func _dead_end(u: Unit) -> void:
+	u.path_wait = t + minf(4.0, 0.5 * pow(2.0, u.dead_ends))
+	u.dead_ends = mini(u.dead_ends + 1, 4)
+
+
+func _enemy_works_between(faction: int, a: Vector2, b: Vector2) -> bool:
+	for o: Building in buildings:
+		if o.dead or not o.blocking or o.faction == faction or o.faction < 0:
+			continue
+		var r := o.size.length() * 0.5
+		if Geometry2D.get_closest_point_to_segment(o.pos, a, b).distance_squared_to(o.pos) <= r * r:
+			return true
+	return false
 
 
 ## Distance from p to the edge of a building's footprint.
@@ -712,7 +1187,7 @@ func dist_to_building(p: Vector2, b: Building) -> float:
 
 ## A spot just outside the footprint, spread around the building per unit.
 func approach_point(u: Unit, b: Building, pad: float) -> Vector2:
-	var dir := Vector2.from_angle(float(u.id % 23) / 23.0 * TAU)
+	var dir := Vector2.from_angle(float(u.id) * GOLDEN_ANGLE)
 	var local := dir.rotated(-b.rot)
 	var sx := (b.size.x * 0.5 + pad) / maxf(absf(local.x), 0.001)
 	var sy := (b.size.y * 0.5 + pad) / maxf(absf(local.y), 0.001)
@@ -722,8 +1197,9 @@ func approach_point(u: Unit, b: Building, pad: float) -> Vector2:
 func go_to_building(u: Unit, b: Building, dt: float, pad: float = 1.4, run: bool = false) -> bool:
 	if dist_to_building(u.pos, b) <= pad + 1.0:
 		return true
-	move_to(u, approach_point(u, b, pad), dt, 0.7, run)
-	return dist_to_building(u.pos, b) <= pad + 1.0
+	var arrived := move_to(u, approach_point(u, b, pad), dt, 0.7, run)
+	var d := dist_to_building(u.pos, b)
+	return d <= pad + 1.0 or (arrived and d <= pad + 3.0)
 
 
 func face(u: Unit, p: Vector2) -> void:
@@ -770,7 +1246,8 @@ func update_worker(u: Unit, dt: float) -> void:
 		"scout":
 			_do_scout(u, c, dt)
 		"recall":
-			if move_to(u, c.state["target"] + _ring(u, 6.0), dt, 2.0):
+			var refuge: Vector2 = resting_place(u) if post_of(u) else c.state.get("target", home_pos(u.faction))
+			if move_to(u, refuge + _ring(u, 6.0), dt, 2.0):
 				u.phase = "done"
 				u.anim = Anim.IDLE
 		"guard", "hold", "attack", "follow":
@@ -779,19 +1256,25 @@ func update_worker(u: Unit, dt: float) -> void:
 			_do_idle(u, dt)
 
 
+const GOLDEN_ANGLE := 2.399963
+
+
 func _ring(u: Unit, r: float) -> Vector2:
-	return Vector2.from_angle(float(u.id % 17) / 17.0 * TAU) * r
+	# Never the same spot twice, and a big group fills several rings.
+	var spread := float(u.id % 4) * 1.3 if r > 2.0 else 0.0
+	return Vector2.from_angle(float(u.id) * GOLDEN_ANGLE) * (r + spread)
 
 
 func _do_idle(u: Unit, dt: float) -> void:
 	if u.carry > 0.0:
-		var dp := nearest_dropoff(u.faction, u.pos, u.carry_res)
-		if dp and go_to_building(u, dp, dt):
-			add_stock(u.faction, u.carry_res, u.carry)
-			u.carry = 0.0
+		_unload(u, dt)
 		return
-	var home := home_pos(u.faction)
+	var home := resting_place(u)
 	if u.siege >= 0:
+		return
+	var held := post_of(u)
+	if held and held.captain == u.id and held.surveying and held.alert == "":
+		_walk_rounds(u, held, dt)
 		return
 	if u.pos.distance_to(home) > 26.0:
 		move_to(u, home + _ring(u, 10.0 + float(u.id % 5) * 2.0), dt, 2.0)
@@ -805,6 +1288,28 @@ func _do_idle(u: Unit, dt: float) -> void:
 	if u.phase == "stroll":
 		if move_to(u, u.goal, dt, 0.8):
 			u.phase = ""
+
+
+## Carries what's in hand to a drop-off. True once it's in the stores.
+func _unload(u: Unit, dt: float) -> bool:
+	var dp := nearest_dropoff(u.faction, u.pos, u.carry_res)
+	if dp == null or not go_to_building(u, dp, dt):
+		return false
+	add_stock(u.faction, u.carry_res, u.carry)
+	u.carry = 0.0
+	return true
+
+
+## A captain still looking for an outcrop or deposit walks the bounds: an outer lap, then an inner one.
+func _walk_rounds(u: Unit, p: Post, dt: float) -> void:
+	const STOPS := 16
+	var out: float = [0.82, 0.5][(p.rounds / STOPS) % 2]
+	var goal := (p.center + Vector2.from_angle(p.rounds * TAU / STOPS) * p.radius * out).clamp(Vector2(20, 20), Vector2(map_size - 20, map_size - 20))
+	u.work_t += dt
+	# A stop on a cliff or in a lake of trees is skipped after a while.
+	if move_to(u, goal, dt, 8.0) or u.work_t > 40.0:
+		u.work_t = 0.0
+		p.rounds += 1
 
 
 func _do_gather(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
@@ -846,9 +1351,14 @@ func _do_gather(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
 		u.phase = "haul"
 	match u.phase:
 		"", "find":
-			var origin: Vector2 = c.state.get("origin", u.pos)
-			var limit := 3 if g["node"] != "tree" else 2
-			var n = nearest_node(g["node"], origin, 260.0, func(nd): return int(claims.get(nd.id, 0)) < limit and (g["node"] != "rock" or true))
+			_release_claim(u)
+			if u.carry >= float(g["carry"]):
+				u.phase = "haul"  # a fresh order doesn't send a full load back to the tree
+				return
+			if searches_this_tick >= MAX_SEARCHES_PER_TICK:
+				u.anim = Anim.IDLE  # a big crew picks its spots over a few ticks
+				return
+			var n = _pick_node(u, c, g)
 			if n == null:
 				if c.faction == 0 and not c.state.get("warned", false):
 					post(0, "%s: there's no more %s nearby." % [crew_label(c), g["name"]], "warn")
@@ -868,7 +1378,17 @@ func _do_gather(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
 			var reach: float = 1.6 + n.scale * (1.2 if n.kind == "rock" and n.sub == "outcrop" else 0.6)
 			if n.kind == "berry":
 				reach = 0.2 + n.scale * 1.4  # right up against the leaves
-			if move_to(u, n.pos, dt, reach):
+			var stand: Vector2 = n.pos
+			var cell := cell_of(n.pos)
+			if solid_for(u.faction, cell):
+				# Hard against a building: work from the nearest open ground.
+				var open := nearest_free_cell(u.faction, cell, 2)
+				if open == cell:
+					u.phase = "find"
+					return
+				stand = cell_center(open)
+				reach = 0.5
+			if move_to(u, stand, dt, reach):
 				u.phase = "work"
 		"work":
 			var n = terrain.nodes[u.tgt_node] if u.tgt_node >= 0 else null
@@ -901,6 +1421,42 @@ func _do_gather(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
 				u.phase = "find"
 
 
+## The resource to work next. With no place named, the one with the shortest haul to a
+## drop-off wins unless it's a long walk away. A named place is always respected.
+func _pick_node(u: Unit, c: Crew, g: Dictionary):
+	if t < float(c.state.get("none_until", 0.0)):
+		return null  # a crewmate just looked and found nothing
+	searches_this_tick += 1
+	var kind: String = g["node"]
+	var limit := 2 if kind == "tree" else 3
+	var usable := func(nd) -> bool:
+		if int(claims.get(nd.id, 0)) >= limit:
+			return false
+		var cell := cell_of(nd.pos)
+		return not solid_for(u.faction, cell) or nearest_free_cell(u.faction, cell, 2) != cell
+	var best = null
+	var best_cost := INF
+	if not c.state.get("named_place", false):
+		for drop: Building in dropoffs(u.faction, g["resource"]):
+			var search := GATHER_RANGE
+			if best != null:  # no need to look where nothing could beat the best so far
+				search = minf(search, (best_cost - drop.pos.distance_to(u.pos)) / (HAUL_WEIGHT - 1.0))
+				if search <= 0.0:
+					continue
+			var n = nearest_node(kind, drop.pos, search, usable)
+			if n == null:
+				continue
+			var cost: float = n.pos.distance_to(drop.pos) * HAUL_WEIGHT + n.pos.distance_to(u.pos)
+			if cost < best_cost:
+				best_cost = cost
+				best = n
+	if best == null:
+		best = nearest_node(kind, c.state.get("origin", u.pos), GATHER_RANGE, usable)
+	if best == null:
+		c.state["none_until"] = t + SEARCH_RETRY
+	return best
+
+
 func _work_building(u: Unit, type: String, subj: String) -> Building:
 	var best: Building = null
 	var bd := INF
@@ -923,33 +1479,34 @@ func _work_building(u: Unit, type: String, subj: String) -> Building:
 
 func _do_hunt(u: Unit, c: Crew, dt: float) -> void:
 	var g: Dictionary = Defs.GATHER["hunt"]
-	var lodge := bld(u.tgt_bld)
-	if lodge == null or lodge.dead:
-		lodge = nearest_building(u.faction, u.pos, ["lodge"])
-		if lodge == null:
+	# Hunters range out from the drop-off that was nearest when they set out.
+	var base := bld(u.tgt_bld)
+	if base == null or base.dead:
+		base = nearest_dropoff(u.faction, u.pos, "food")
+		if base == null:
 			_set_task(u, "idle")
 			return
-		u.tgt_bld = lodge.id
+		u.tgt_bld = base.id
 	match u.phase:
 		"", "find":
 			if u.carry >= float(g["carry"]):
 				u.phase = "haul"
 				return
-			var meat = nearest_node("carcass", lodge.pos, 230.0)
+			var meat = nearest_node("carcass", base.pos, 230.0)
 			if meat:
 				_claim(u, meat)
 				u.phase = "go"
 				return
 			var deer: Unit = null
 			var bd := 230.0 * 230.0
-			for o: Unit in units_near(lodge.pos, 230.0, -1):
-				if o.kind == "deer" and o.pos.distance_squared_to(lodge.pos) < bd:
-					bd = o.pos.distance_squared_to(lodge.pos)
+			for o: Unit in units_near(base.pos, 230.0, -1):
+				if o.kind == "deer" and o.pos.distance_squared_to(base.pos) < bd:
+					bd = o.pos.distance_squared_to(base.pos)
 					deer = o
 			if deer == null:
 				u.anim = Anim.IDLE
-				if go_to_building(u, lodge, dt) and c.faction == 0 and not c.state.get("warned", false):
-					post(0, "%s: no deer left near the lodge." % crew_label(c), "warn")
+				if go_to_building(u, base, dt) and c.faction == 0 and not c.state.get("warned", false):
+					post(0, "%s: no deer left near the %s." % [crew_label(c), Defs.building_name(base.type).to_lower()], "warn")
 					c.state["warned"] = true
 				return
 			u.tgt_unit = deer.id
@@ -1018,6 +1575,10 @@ func _do_build(u: Unit, c: Crew, dt: float) -> void:
 			return
 		u.tgt_bld = b.id
 		u.phase = "go"
+	if u.phase == "unload":
+		if _unload(u, dt):
+			u.phase = "go"
+		return
 	if u.phase == "go":
 		var reach := b.size.length() * 0.5 + 1.0
 		if go_to_building(u, b, dt):
@@ -1027,6 +1588,9 @@ func _do_build(u: Unit, c: Crew, dt: float) -> void:
 	if not b.paid:
 		var cost: Dictionary = Defs.BUILDINGS[b.type]["cost"]
 		if not pay(b.faction, cost):
+			if u.carry > 0.0 and cost.has(u.carry_res):
+				u.phase = "unload"
+				return
 			u.anim = Anim.IDLE
 			if b.faction == 0 and t - b.waiting_msg_t > 25.0:
 				b.waiting_msg_t = t
@@ -1267,7 +1831,7 @@ func refill_quiver(u: Unit, f: Faction) -> void:
 
 
 func _equip_best(u: Unit, f: Faction) -> void:
-	var weapons := ["iron_sword", "iron_spear", "bronze_sword", "bronze_spear", "wood_spear", "club"]
+	var weapons := ["iron_sword", "iron_spear", "bronze_sword", "bronze_spear", "wood_spear"]
 	if u.mounted:
 		weapons = ["iron_lance", "bronze_lance"] + weapons
 	for w in weapons:
@@ -1494,13 +2058,13 @@ func _do_scout(u: Unit, c: Crew, dt: float) -> void:
 			var home := home_pos(u.faction)
 			var away := (target - home).normalized()
 			var near := target - away * 50.0 + Vector2.from_angle(float(u.id % 7) * 0.9) * 10.0
-			if move_to(u, near, dt, 10.0, true):
+			if move_to(u, near, dt, 10.0, true) or t < u.path_wait:
 				u.scout_leg = 1
 				u.scout_dir = Vector2(-away.y, away.x) * (1.0 if u.id % 2 == 0 else -1.0)
 		1:
 			# Circle around the target at a safe distance.
 			var side := (target + u.scout_dir * 75.0 - (target - home_pos(u.faction)).normalized() * 20.0).clamp(Vector2(20, 20), Vector2(map_size - 20, map_size - 20))
-			if move_to(u, side, dt, 10.0, true):
+			if move_to(u, side, dt, 10.0, true) or t < u.path_wait:
 				u.scout_leg = 2
 		2:
 			var dest := home_pos(u.faction)
@@ -1532,7 +2096,7 @@ func _refresh_counts(f: Faction) -> void:
 			kids += 1
 		else:
 			adults += 1
-			if u.crew < 0 and u.siege < 0:
+			if u.crew < 0 and u.siege < 0 and not leads_post(u):
 				idle += 1
 		if u.weapon != "" or u.bow:
 			soldiers += 1
@@ -1560,6 +2124,8 @@ func _refresh_counts(f: Faction) -> void:
 
 func upkeep(dt: float) -> void:
 	for f: Faction in factions:
+		if not f.alive:
+			continue
 		_refresh_counts(f)
 		var food := float(f.stock.get("food", 0.0))
 		food -= (f.adults * Defs.RATION_ADULT + f.children * Defs.RATION_CHILD) * dt
@@ -1593,7 +2159,6 @@ func upkeep(dt: float) -> void:
 		else:
 			birth_acc[f.id] = minf(birth_acc[f.id], 0.5)
 		# Growing up, healing at home.
-		var home := home_pos(f.id)
 		for u: Unit in units:
 			if u.dead or u.faction != f.id:
 				continue
@@ -1604,8 +2169,8 @@ func upkeep(dt: float) -> void:
 					u.max_hp = Defs.VILLAGER["hp"]
 					u.hp = u.max_hp * frac
 					if f.id == 0:
-						post(0, "%s has grown up and can work." % u.name, "info")
-			if is_person(u) and u.hp < u.max_hp and t - u.hit_t > 8.0 and u.pos.distance_to(home) < 30.0:
+						post(0, "%s has grown up and can work." % u.name, "grown")
+			if is_person(u) and u.hp < u.max_hp and t - u.hit_t > 8.0 and u.pos.distance_to(resting_place(u)) < 30.0:
 				u.hp = minf(u.max_hp, u.hp + 1.0 * dt)
 		_breed(f, dt)
 		if f.age == 0 and has_building(f.id, "quarry"):
@@ -1654,7 +2219,7 @@ func _breed(f: Faction, dt: float) -> void:
 				foal.faction = f.id
 				emit({"type": "unit", "id": foal.id})
 				if f.id == 0:
-					post(0, "A foal was born in the stable.", "birth")
+					post(0, "A foal was born in the stable.", "info")
 
 
 func _open_age(f: Faction, age: int) -> void:
@@ -1665,8 +2230,8 @@ func _open_age(f: Faction, age: int) -> void:
 	if f.id == 0:
 		post(0, "The %s age has begun! Type /b and /c to see what's new." % Defs.AGES[age], "age")
 		sound("age", home_pos(0), 0)
-	elif f.id == 1:
-		emit({"type": "rival_age", "age": age})
+	else:
+		emit({"type": "rival_age", "faction": f.id, "age": age})
 
 
 func kill_unit(u: Unit, why: String = "") -> void:
@@ -1675,6 +2240,15 @@ func kill_unit(u: Unit, why: String = "") -> void:
 	u.dead = true
 	u.dead_t = t
 	u.anim = Anim.DEAD
+	u.prev = u.pos            # the body lies still between ticks
+	u.swing_live = false
+	u.blocking = false
+	var line := crew_of(u)
+	if line:
+		_assign_slots(line)   # close the gap; the dead get no slot
+	var tower := bld(u.in_tower)
+	if tower:
+		_release_tower_post(u, tower)
 	_release_claim(u)
 	var f := fac(u.faction)
 	if u.kind == "villager" and f:
@@ -1695,11 +2269,9 @@ func kill_unit(u: Unit, why: String = "") -> void:
 	if u.crew >= 0:
 		var c := crew_of(u)
 		if c:
-			c.members.erase(u.id)
-			c.lost += 1
-			if c.leader == u.id:
-				_set_leader(c, c.members[0] if not c.members.is_empty() else -1)
+			drop_dead(c, u.id)
 		u.crew = -1
+	leave_post(u)
 	emit({"type": "death", "id": u.id, "kind": u.kind, "pos": u.pos, "faction": u.faction})
 	if u.faction == 0 and u.kind == "villager":
 		var text := "%s %s." % [u.name, "starved" if why == "starved" else "was killed"]

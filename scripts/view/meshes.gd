@@ -51,8 +51,6 @@ func building(type: String, tier: int = 0, length: float = 4.0) -> ArrayMesh:
 			h = _hut(g)
 		"stockpile":
 			h = _stockpile(g, size)
-		"lodge":
-			h = _lodge(g, size)
 		"farm":
 			h = _farm(g, size)
 		"armory":
@@ -71,10 +69,6 @@ func building(type: String, tier: int = 0, length: float = 4.0) -> ArrayMesh:
 			h = _stone_gate(g, length)
 		"tower":
 			h = _tower(g)
-		"house":
-			h = _house(g, size)
-		"granary":
-			h = _granary(g, size)
 		"stable":
 			h = _stable(g, size)
 		"mine":
@@ -183,19 +177,6 @@ func _cabin(g: Geo, size: Vector2, wall_h: float, roof_h: float, wall: String = 
 	g.gable(Vector3(0, 0, 0), size.x - 0.2, size.y - 0.2, 0.3 + wall_h - 0.15, 0.3 + wall_h + roof_h, 0.55, 1.0)
 	g.slot("roughwood", m("roughwood"))
 	g.cylinder(Vector3(-size.x * 0.5 - 0.5, 0.3 + wall_h + roof_h + 0.05, 0), Vector3(size.x * 0.5 + 0.5, 0.3 + wall_h + roof_h + 0.05, 0), 0.12, 0.12, 6)
-
-
-func _lodge(g: Geo, size: Vector2) -> float:
-	_cabin(g, size, 2.2, 2.0)
-	_door(g, 0.8, size.y * 0.5 - 0.05, 0.9, 1.8)
-	# Drying rack with hides.
-	g.slot("roughwood", m("roughwood"))
-	g.cylinder(Vector3(-2.0, 0, size.y * 0.5 + 1.3), Vector3(-2.0, 1.8, size.y * 0.5 + 1.3), 0.06, 0.05, 5)
-	g.cylinder(Vector3(-0.6, 0, size.y * 0.5 + 1.3), Vector3(-0.6, 1.8, size.y * 0.5 + 1.3), 0.06, 0.05, 5)
-	g.cylinder(Vector3(-2.1, 1.7, size.y * 0.5 + 1.3), Vector3(-0.5, 1.7, size.y * 0.5 + 1.3), 0.05, 0.05, 5)
-	g.slot("darkwood", m("darkwood"))
-	g.box(Vector3(-1.3, 1.25, size.y * 0.5 + 1.3), Vector3(1.0, 0.85, 0.04), 1.0)
-	return 4.6
 
 
 func _farm(g: Geo, size: Vector2) -> float:
@@ -352,60 +333,38 @@ func _stone_gate(g: Geo, length: float) -> float:
 
 func _tower(g: Geo) -> float:
 	g.slot("stone", m("stone"))
-	g.cylinder(Vector3(0, -0.3, 0), Vector3(0, 9.0, 0), 2.45, 2.2, 14, false, 1.0, 0.0)
-	g.cylinder(Vector3(0, 9.0, 0), Vector3(0, 9.6, 0), 2.55, 2.55, 14, true, 1.0)
-	for i in 8:
-		var a := TAU * i / 8.0
-		g.obox(Vector3(cos(a) * 2.3, 10.05, sin(a) * 2.3), Vector3(0.7, 0.9, 0.5), Basis(Vector3.UP, -a + PI * 0.5), 1.0)
-	_door(g, 0, 2.2, 1.0, 2.0)
+	var deck := Defs.TOWER_DECK_HEIGHT
+	var radius := Defs.TOWER_DECK_RADIUS
+	g.cylinder(Vector3(0, -0.3, 0), Vector3(0, deck - 0.6, 0), 2.45, 2.2, 16, false, 1.0)
+	g.cylinder(Vector3(0, deck - 0.6, 0), Vector3(0, deck, 0), radius, radius, 16, true, 1.0)
+	for piece in tower_parapet():
+		var xf: Transform3D = piece[0]
+		g.obox(xf.origin, piece[1], xf.basis, 1.0)
+	for x in [-0.76, 0.76]:
+		g.box(Vector3(x, 1.04, 2.49), Vector3(0.28, 2.25, 0.34), 1.0)
+	g.box(Vector3(0, 2.17, 2.49), Vector3(1.8, 0.32, 0.38), 1.0)
+	g.box(Vector3(0, 0.02, 2.58), Vector3(1.55, 0.22, 0.70), 1.0)
+	_door(g, 0, 2.43, 1.25, 2.1)
 	g.slot("darkwood", m("darkwood"))
+	g.box(Vector3(0, deck + 0.025, 0), Vector3(0.92, 0.05, 1.15), 1.0)
 	for y in [4.0, 6.5]:
 		g.box(Vector3(0, y, 2.25), Vector3(0.25, 0.7, 0.12), 1.0)
-	return 10.5
+	return deck + Defs.TOWER_PARAPET_HEIGHT + Defs.TOWER_MERLON_HEIGHT
 
 
-func _house(g: Geo, size: Vector2) -> float:
-	_foundation(g, size, 0.3)
-	g.slot("stone", m("stone"))
-	g.box(Vector3(0, 0.3 + 1.2, 0), Vector3(size.x - 0.2, 2.4, size.y - 0.2), 1.0)
-	g.slot("plaster", m("plaster"))
-	g.box(Vector3(0, 2.7 + 1.0, 0), Vector3(size.x - 0.1, 2.0, size.y - 0.1), 1.0)
-	g.gable_ends(Vector3.ZERO, size.x - 0.1, size.y - 0.1, 4.7, 7.0, 1.0)
-	# Timber framing.
-	g.slot("darkwood", m("darkwood"))
-	for i in 5:
-		var x := -size.x * 0.5 + 0.1 + i * (size.x - 0.2) / 4.0
-		for z in [size.y * 0.5 - 0.02, -size.y * 0.5 + 0.02]:
-			g.box(Vector3(x, 3.7, z), Vector3(0.18, 2.0, 0.06), 1.0)
-	for z in [size.y * 0.5 - 0.02, -size.y * 0.5 + 0.02]:
-		g.box(Vector3(0, 2.75, z), Vector3(size.x - 0.1, 0.18, 0.06), 1.0)
-		g.box(Vector3(0, 4.65, z), Vector3(size.x - 0.1, 0.18, 0.06), 1.0)
-	g.slot("thatch", m("thatch"))
-	g.gable(Vector3.ZERO, size.x - 0.1, size.y - 0.1, 4.55, 7.0, 0.6, 1.0)
-	g.slot("stone", m("stone"))
-	g.box(Vector3(size.x * 0.3, 6.6, -0.8), Vector3(0.7, 2.2, 0.7), 1.0)
-	_door(g, -0.8, size.y * 0.5 - 0.02, 1.0, 2.0)
-	g.slot("darkwood", m("darkwood"))
-	for x in [1.0, 2.3]:
-		g.box(Vector3(x, 1.5, size.y * 0.5), Vector3(0.6, 0.6, 0.06), 1.0)
-	return 7.8
-
-
-func _granary(g: Geo, size: Vector2) -> float:
-	g.slot("stone", m("stone"))
-	for sx in [-1.0, 0.0, 1.0]:
-		for sz in [-1.0, 1.0]:
-			g.cylinder(Vector3(sx * (size.x * 0.5 - 0.5), 0, sz * (size.y * 0.5 - 0.5)), Vector3(sx * (size.x * 0.5 - 0.5), 0.8, sz * (size.y * 0.5 - 0.5)), 0.3, 0.2, 6)
-	g.slot("planks", m("planks"))
-	g.box(Vector3(0, 0.9, 0), Vector3(size.x, 0.2, size.y), 1.0)
-	g.box(Vector3(0, 2.4, 0), Vector3(size.x - 0.4, 2.8, size.y - 0.4), 1.0)
-	g.gable_ends(Vector3.ZERO, size.x - 0.4, size.y - 0.4, 3.8, 6.2, 1.0)
-	g.slot("thatch", m("thatch"))
-	g.gable(Vector3.ZERO, size.x - 0.4, size.y - 0.4, 3.7, 6.2, 0.6, 1.0)
-	_door(g, 0, size.y * 0.5 - 0.15, 1.2, 1.9)
-	g.slot("darkwood", m("darkwood"))
-	g.obox(Vector3(0, 0.45, size.y * 0.5 + 0.7), Vector3(1.0, 0.08, 1.6), Basis(Vector3.RIGHT, -0.55), 1.0)
-	return 6.4
+## The parapet mesh and its collision shapes use the same stone blocks.
+func tower_parapet() -> Array:
+	var pieces := []
+	for i in Defs.TOWER_PARAPET_SIDES:
+		var a := TAU * i / Defs.TOWER_PARAPET_SIDES
+		var center := Vector3(cos(a), 0, sin(a)) * Defs.TOWER_PARAPET_RADIUS
+		var basis := Basis(Vector3.UP, PI * 0.5 - a)
+		center.y = Defs.TOWER_DECK_HEIGHT + Defs.TOWER_PARAPET_HEIGHT * 0.5
+		pieces.append([Transform3D(basis, center), Vector3(Defs.TOWER_PARAPET_WIDTH, Defs.TOWER_PARAPET_HEIGHT, Defs.TOWER_PARAPET_THICKNESS)])
+		if i % 2 == 0:
+			center.y = Defs.TOWER_DECK_HEIGHT + Defs.TOWER_PARAPET_HEIGHT + Defs.TOWER_MERLON_HEIGHT * 0.5
+			pieces.append([Transform3D(basis, center), Vector3(Defs.TOWER_PARAPET_WIDTH, Defs.TOWER_MERLON_HEIGHT, Defs.TOWER_PARAPET_THICKNESS)])
+	return pieces
 
 
 func _stable(g: Geo, size: Vector2) -> float:
@@ -491,6 +450,85 @@ func _university(g: Geo, size: Vector2) -> float:
 	g.pyramid(Vector3(size.x * 0.5 - 1.4, 0, size.y * 0.5 - 1.4), 1.9, 13.0, 16.5, 4, 1.0)
 	_door(g, 0, size.y * 0.5 - 0.1, 1.8, 3.0)
 	return 16.5
+
+
+# --- Banners -----------------------------------------------------------------------
+
+## Where a building or engine flies its banner: [foot of the pole, pole height, cloth scale].
+func banner_spot(type: String, size: Vector2 = Vector2.ZERO) -> Array:
+	var hx := size.x * 0.5
+	var hz := size.y * 0.5
+	match type:
+		"campfire":
+			return [Vector3(0.3, -0.2, 2.8), 5.6, 1.4]
+		"hut":
+			return [Vector3(0, 4.1, 0), 2.0, 0.9]
+		"stockpile":
+			return [Vector3(2.15, 2.0, 2.15), 2.2, 0.8]
+		"farm":
+			return [Vector3(-hx, -0.2, -hz), 3.6, 0.9]
+		"armory":
+			return [Vector3(0.6 - hx, 5.0, 0), 2.2, 1.1]
+		"palisade":
+			return [Vector3(0, 2.6, -0.22), 2.4, 0.7]
+		"palisade_gate":
+			return [Vector3(-hx, 4.0, 0), 2.2, 0.9]
+		"watch_post":
+			return [Vector3(0, 7.3, 0), 2.0, 0.9]
+		"quarry":
+			return [Vector3(1.8, 5.2, -0.5), 2.0, 0.9]
+		"stone_wall":
+			return [Vector3(0, 3.8, 0), 2.6, 0.8]
+		"stone_gate":
+			return [Vector3(0.35 - hx, 5.0, 0), 2.4, 1.0]
+		"tower":
+			return [Vector3(0, Defs.TOWER_DECK_HEIGHT, -1.85), 3.6, 1.4]
+		"stable":
+			return [Vector3(0.4 - hx, 2.8, -hz * 0.3), 2.8, 1.0]
+		"mine":
+			return [Vector3(-1.0, 2.2, 2.2), 2.2, 0.9]
+		"smelter":
+			return [Vector3(2.6, 2.8, -2.6), 2.6, 1.0]
+		"university":
+			return [Vector3(hx - 1.4, 16.2, hz - 1.4), 2.8, 1.6]
+		"cannon":
+			return [Vector3(0.33, 0.4, -1.0), 2.5, 0.65]
+		"ram":
+			return [Vector3(0, 2.2, -1.7), 1.7, 0.7]
+	return []
+
+
+func banner_pole(height: float) -> ArrayMesh:
+	var key := "banner_pole:%.1f" % height
+	if cache.has(key):
+		return cache[key]
+	var g := _g()
+	g.slot("wood", m("darkwood"))
+	g.cylinder(Vector3.ZERO, Vector3(0, height, 0), 0.06, 0.045, 6)
+	g.slot("metal", m("metal"))
+	g.sphere(Vector3(0, height + 0.06, 0), 0.09, 3, 6)
+	var mesh := g.finish()
+	cache[key] = mesh
+	return mesh
+
+
+## A swallowtail hanging down from the origin and running along +X.
+func banner_cloth() -> ArrayMesh:
+	if cache.has("banner_cloth"):
+		return cache["banner_cloth"]
+	const STEPS := 10
+	var g := _g()
+	g.slot("cloth")
+	for i in STEPS:
+		var u0 := float(i) / STEPS
+		var u1 := float(i + 1) / STEPS
+		# Two rows; the middle edge is shorter, which cuts the notch in the tail.
+		for row in [[0.0, 1.6, -0.5, 1.25], [-0.5, 1.25, -1.0, 1.6]]:
+			g.quad(Vector3(u0 * row[1], row[0], 0), Vector3(u1 * row[1], row[0], 0), Vector3(u1 * row[3], row[2], 0), Vector3(u0 * row[3], row[2], 0),
+				Vector3.BACK, Vector2(u0, 0), Vector2(u1, 0), Vector2(u1, 1), Vector2(u0, 1))
+	var mesh := g.finish()
+	cache["banner_cloth"] = mesh
+	return mesh
 
 
 # --- Ghost (placement preview) ------------------------------------------------------
@@ -751,9 +789,6 @@ func item(name: String) -> ArrayMesh:
 	var hand_r := Vector3(-0.24, 0.77, 0.07)
 	var hand_l := Vector3(0.24, 0.77, 0.07)
 	match name:
-		"club":
-			_p(g, 3, 5)
-			g.cylinder(hand_r + Vector3(0, -0.05, -0.05), hand_r + Vector3(0, 0.05, 0.65), 0.03, 0.07, 6)
 		"wood_spear", "bronze_spear", "iron_spear":
 			_p(g, 3, 5)
 			g.cylinder(hand_r + Vector3(0, -0.6, 0), hand_r + Vector3(0, 1.45, 0.05), 0.022, 0.022, 5)
@@ -829,6 +864,11 @@ func item(name: String) -> ArrayMesh:
 			_p(g, 2, 5 if name == "wood_shield" else (7 if name == "bronze_shield" else 6))
 			var c2 := hand_l + Vector3(0.09, 0.28, 0.12)
 			g.cylinder(c2, c2 + Vector3(0.06, 0, 0.02), 0.36, 0.36, 12, true)
+			# Painted face inside a rim that still shows the shield's material.
+			_p(g, 2, 13)
+			g.cylinder(c2 + Vector3(0.06, 0, 0.02), c2 + Vector3(0.067, 0, 0.0223), 0.31, 0.31, 12, true)
+			# Cylinders only cap their far end, so the back needs a disc of its own.
+			g.cylinder(c2, c2 - Vector3(0.006, 0, 0.002), 0.36, 0.36, 12, true)
 			_p(g, 2, 6 if name == "wood_shield" else 3)
 			g.sphere(c2 + Vector3(0.07, 0, 0.02), 0.07, 3, 6, Vector3(0.6, 1, 1))
 		"bronze_helmet", "iron_helmet":
@@ -841,6 +881,10 @@ func item(name: String) -> ArrayMesh:
 			g.xf = Transform3D(Basis.from_scale(Vector3(1.0, 1.0, 0.75)), Vector3.ZERO)
 			g.cylinder(Vector3(0, 1.0, 0), Vector3(0, 1.44, 0), 0.215, 0.245, 9, true)
 			g.xf = old
+			# Tabard in the side's colour, front and back.
+			_p(g, 0, 13)
+			for side in [1.0, -1.0]:
+				g.box(Vector3(0, 1.14, 0.18 * side), Vector3(0.27, 0.6, 0.04), 1.0, false)
 		"crown":
 			_p(g, 1, 8)
 			g.cylinder(Vector3(0, 1.73, -0.01), Vector3(0, 1.8, -0.01), 0.118, 0.122, 10, false)

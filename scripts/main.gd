@@ -14,10 +14,12 @@ var shot_path := ""
 var shot_seconds := 6.0
 var shot_view := ""
 var shot_demo := false
+var shot_battle := 0
 var smoke := false
 var shot_menu := false
 var shot_ui := ""
 var smoke_tutorial := false
+var dev_rivals := 1
 
 
 func _ready() -> void:
@@ -32,12 +34,18 @@ func _ready() -> void:
 			shot_view = a.substr(12)
 		elif a == "--shot-demo":
 			shot_demo = true
+		elif a == "--shot-battle":
+			shot_battle = 12
+		elif a.begins_with("--shot-battle="):
+			shot_battle = int(a.substr(14))
 		elif a == "--smoke":
 			smoke = true
 		elif a == "--shot-menu":
 			shot_menu = true
 		elif a.begins_with("--shot-ui="):
 			shot_ui = a.substr(10)
+		elif a.begins_with("--rivals="):
+			dev_rivals = int(a.substr(9))
 		elif a == "--smoke-tutorial":
 			smoke_tutorial = true
 	if shot_menu:
@@ -71,14 +79,16 @@ func _ready() -> void:
 		return
 	if smoke:
 		Settings.data["intro_seen"] = true
-		_start({"seed": 777, "difficulty": 1})
+		_start({"seed": 777, "difficulty": 1, "opponents": dev_rivals})
 		_smoke()
 		return
 	if shot_path != "":
 		Settings.data["intro_seen"] = true
-		_start({"seed": 4242, "difficulty": 1})
+		_start({"seed": 4242, "difficulty": 1, "opponents": dev_rivals})
 		if shot_demo:
 			_demo_buildings()
+		if shot_battle > 0:
+			_demo_battle(shot_battle)
 		_take_shot()
 		return
 	_show_menu()
@@ -161,9 +171,9 @@ func _demo_buildings() -> void:
 	var home: Vector2 = m.home_pos(0)
 	var f = m.fac(0)
 	f.age = 4
-	var plan := [["hut", 14, 0.4], ["hut", 16, 1.2], ["house", 22, 2.0], ["house", 24, 2.7], ["armory", 20, 3.5], ["granary", 26, 4.3],
+	var plan := [["hut", 14, 0.4], ["hut", 16, 1.2], ["hut", 22, 2.0], ["hut", 24, 2.7], ["armory", 20, 3.5],
 		["stable", 32, 5.0], ["smelter", 30, 5.8], ["watch_post", 36, 0.9], ["tower", 40, 2.4], ["university", 44, 3.1], ["farm", 34, 4.0],
-		["stockpile", 18, 5.4], ["lodge", 28, 6.1]]
+		["stockpile", 18, 5.4]]
 	for p in plan:
 		var pos: Vector2 = home + Vector2.from_angle(p[2]) * float(p[1])
 		var r: Dictionary = m.place_site(0, p[0], pos, p[2] + PI)
@@ -182,12 +192,40 @@ func _demo_buildings() -> void:
 	for k in 6:
 		var u = m.spawn_unit(0, "villager", home + Vector2(4 + k, 6))
 		u.name = "Demo"
-		u.weapon = ["wood_spear", "bronze_sword", "iron_pike", "", "club", "bronze_spear"][k]
+		u.weapon = ["wood_spear", "bronze_sword", "iron_pike", "", "wood_spear", "bronze_spear"][k]
 		u.shield = "bronze_shield" if k == 1 else ""
 		u.armor = "bronze_armor" if k == 1 else ""
 		u.bow = k == 3
 	var cn = m.spawn_unit(0, "cannon", home + Vector2(10, -8))
 	var h = m.spawn_unit(-1, "horse", home + Vector2(-6, 9))
+
+
+## Developer flag --shot-battle[=N]: two lines of N meet in front of the commander.
+func _demo_battle(n: int) -> void:
+	var m = game.m
+	var me = m.commander(0)
+	var ahead := Vector2(sin(me.facing), cos(me.facing))
+	var middle: Vector2 = me.pos + ahead * 16.0
+	var kits := ["wood_spear", "wood_spear", "bronze_sword", "bow", "iron_pike", "wood_spear"]
+	for side in 2:
+		var men := []
+		for k in n:
+			var back := 7.0 + (k / 12) * 1.8
+			var at: Vector2 = middle + ahead * (back if side else -back) + ahead.orthogonal() * (k % 12 - 5.5) * 1.6
+			var u = m.spawn_unit(side, "villager", at)
+			u.name = "Demo"
+			u.bow = kits[k % kits.size()] == "bow"
+			u.arrows = 16 if u.bow else 0
+			u.weapon = "" if u.bow else kits[k % kits.size()]
+			u.shield = "wood_shield" if k % 3 == 2 else ""
+			men.append(u)
+		var c = m.make_crew(side, men)
+		c.steps = [{"action": "attack", "subject": "", "count": 0, "amount": 0, "where": ""}]
+		c.state = {"target": middle}
+		c.start_size = men.size()
+		for u in men:
+			m._set_task(u, "attack")
+		m._assign_slots(c)
 
 
 ## Developer smoke test: drives the real game through its main paths.
@@ -203,11 +241,9 @@ func _smoke() -> void:
 	say.call("pick berries")
 	for i in 600:
 		m.tick(0.1)
-		g.ai.update(0.1)
+		g.run_rivals(0.1)
 	g._process(0.016)
-	say.call("/b")
-	print("menu open: ", g.hud.menu_open, " items: ", g.menu_items.size())
-	g._menu_select(1)
+	say.call("/b b h")
 	print("placing: ", g.placing, " type: ", g.place_type)
 	for k in 30:
 		var p: Vector2 = home + Vector2.from_angle(k * 0.7) * (16.0 + k)
@@ -232,6 +268,10 @@ func _smoke() -> void:
 	say.call("what is the meaning of the weather")
 	for cmdtxt in ["/l", "/p", "/s", "/t", "/h", "/c", "/b hut", "/c arrows 2"]:
 		say.call(cmdtxt)
+		await get_tree().process_frame   # /b and /c reopen the chat as a picker
+		if g.hud.chat_open:
+			g.hud.close_chat()
+			g._on_chat_closed()
 		if g.hud.menu_open:
 			g._close_menu()
 		if g.placing:
@@ -255,7 +295,7 @@ func _smoke() -> void:
 		g._place_click()
 	for i in 1200:
 		m.tick(0.1)
-		g.ai.update(0.1)
+		g.run_rivals(0.1)
 		if i % 20 == 0:
 			g._process(0.05)
 	g._process(0.016)
@@ -284,7 +324,7 @@ func _take_shot() -> void:
 				game.m.fac(0).knowledge.fill(game.m.t - 120.0)
 				game._toggle_map()
 			"build":
-				game._menu_build()
+				game.open_chat("/b b", true)
 			"ledger":
 				game._menu_ledger()
 			"chat":

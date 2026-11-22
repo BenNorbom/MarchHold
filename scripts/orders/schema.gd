@@ -7,18 +7,18 @@ const Defs = preload("res://scripts/data/defs.gd")
 const KINDS := ["plan", "clarify", "reply", "cancel"]
 
 
-static func step_fields() -> Dictionary:
+static func step_fields(places: Array = []) -> Dictionary:
 	return {
 		"action": {"type": "string", "enum": Defs.ACTIONS},
 		"subject": {"type": "string", "enum": Defs.all_subjects()},
 		"count": {"type": "integer", "minimum": 0, "maximum": 100},
 		"amount": {"type": "integer", "minimum": 0, "maximum": 10000},
-		"where": {"type": "string", "enum": Defs.WHERE},
+		"where": {"type": "string", "enum": Defs.WHERE + places},
 	}
 
 
-static func plan_schema() -> Dictionary:
-	var fields := step_fields()
+static func plan_schema(places: Array = []) -> Dictionary:
+	var fields := step_fields(places)
 	return {
 		"type": "object",
 		"properties": {
@@ -62,17 +62,21 @@ static func _whole_number(value, maximum: int) -> bool:
 
 static func action_guide() -> String:
 	var lines: Array[String] = []
-	lines.append("gather: subject wood, stone, berries, hunt (needs a hunter's lodge), farm (needs a farm), bronze_ore/coal/iron_ore (need a mine on that deposit). amount = units to deliver, 0 = keep going (last step only).")
+	lines.append("gather: subject wood, stone, berries, hunt (deer near a stockpile or the campfire), farm (needs a farm), bronze_ore/coal/iron_ore (need a mine on that deposit). amount = units to deliver, 0 = keep going (last step only). Leave where empty unless a place is named: villagers then pick resources with the shortest haul to a drop-off.")
 	lines.append("build: subject is a structure id; the player places each site. One step builds one structure, or one whole wall line for palisade/stone_wall.")
+	lines.append("resume: carry on construction that is already placed (see unfinished), with no placement. subject is that structure id, or empty for whatever was left. Use it to continue, resume, finish or help with construction.")
 	lines.append("upgrade: subject armory or smelter (armory wood->bronze->iron, smelter->iron furnace).")
 	lines.append("craft: subject an item id; amount = how many items (0 = one batch). Siege items (cannon, ram) are made one per batch.")
 	lines.append("arm: crew members take gear from the armory; subject an item id, or empty for the best kit available.")
 	lines.append("mount: crew members take horses from a stable. man: subject cannon or ram, crew members crew a siege engine.")
-	lines.append("smelt: subject bronze or iron. research: subject gunpowder. tame: drive wild horses into a stable; amount = horses.")
+	lines.append("smelt: subject bronze or iron. research: subject gunpowder (university) or mounted_archery (stable; riders may only shoot after it). tame: drive wild horses into a stable; amount = horses.")
 	lines.append("scout: go out, look, come back and report. where = direction, enemy (their camp, or across the map if unknown), or marked.")
 	lines.append("guard / attack / hold / follow: military orders that never end, so they must be the last step. attack defaults to where=enemy.")
 	lines.append("recall: come home. promote: make the crew leader or addressed individual a captain. dismiss: release the addressed individual or disband the whole crew. status: report.")
-	lines.append("where: here = the commander's position, marked = the spot the player marked with R, home = the campfire, or a compass direction from home.")
+	lines.append("resume_work: 'back to work'. People pulled off their jobs by a military order (arm, guard, attack, recall...) return to what they were doing. Use it as the only step.")
+	lines.append("mandate: put the addressed person in charge of a place and a purpose. It is the first step and only limits may follow it. subject village (runs the main camp and takes everyone idle), farming, industry, garrison or army. count = how many people the post should have (0 = default). where = its place. The captain then assigns the work and builds what it needs without further orders.")
+	lines.append("limits for a captain, alone or after a mandate, never mixed with other steps. reserve: subject a resource, amount = what captains must leave in store (0 clears it). forbid / allow: subject a structure. posture: subject hold (at all costs) or fall_back (if outnumbered).")
+	lines.append("where: here = the commander's position, marked = the spot the player marked with R, home = the campfire, a compass direction from home, or one of the ids in places when the order names that place.")
 	return "\n".join(lines)
 
 
@@ -80,12 +84,12 @@ static func instructions() -> String:
 	return " ".join([
 		"You are Terra, the player's steward and command interpreter in the fictional medieval strategy game MarchHold.",
 		"Speak directly to the player, briefly, in plain words. Translate their intent into ordered steps for the addressed crew, using only the game actions provided.",
-		"A plan runs one crew sequentially. Build, upgrade, craft, arm, mount, man, research, scout and recall steps finish by themselves. Promote, dismiss and status are immediate.",
+		"A plan runs one crew sequentially. Build, resume, upgrade, craft, arm, mount, man, research, scout and recall steps finish by themselves. Promote, dismiss, status and resume_work are immediate.",
 		"A gather, smelt or tame step ends after amount units arrive; use 0 for continuous work only as the final step. Guard, attack, hold and follow never end and must be last.",
 		"For 'gather wood then build a hut', use the requested quantity or the building's cost from can_build. Use supplied costs and stocks for 'gather enough'.",
-		"Count is how many people the crew should have for that step (0 = keep the crew as it is; when nobody is addressed, 0 lets the game pick idle villagers). If addressed.individual is true, the player is giving orders to one villager alone, so set count to 0. If addressed.selected is set, the player picked exactly that many villagers by hand; they work as one crew, so set count to 0.",
+		"Count is how many people the crew should have for that step (0 = keep the crew as it is; when nobody is addressed, 0 lets the game pick idle villagers). If addressed.individual is true, the player is giving orders to one villager alone, so set count to 0. If addressed.selected is set, the player picked exactly that many villagers by hand; they work as one crew, so set count to 0. A mandate is the exception: its count is always the post's size. If addressed.who is a captain with a post, the order is carried out by that post's people, and count is how many of them.",
 		"Amount is a quantity, otherwise 0. Subject is the singular structure for build, the item for craft or arm, otherwise empty unless listed. Where is empty unless the order names a place.",
-		"The player places each build site by hand, including wall posts. Set where to empty for build steps. Repeat build steps for several structures. Never invent positions, parallel teams or unsupported tasks.",
+		"The player places each build site by hand, including wall posts, unless a captain with a post is addressed: then the captain picks the site inside their area. Set where to empty for build steps. Repeat build steps for several structures. Use resume for existing unfinished construction. Never invent positions, parallel teams or unsupported tasks.",
 		"Only use structures and items listed in can_build and can_craft. If something is locked, explain what it needs (see locked and next_age). Suggest prerequisites as advice unless the player asked you to carry them out.",
 		"For an order, choose reasonable defaults for missing details using the facts supplied. Honor explicit quantities and use approximate quantities when the player is flexible. For example, choose two available workers for 'send a couple of scouts east' or estimate what 'a little more wood' means from current stocks and tasks.",
 		"The game submits a plan immediately and opens manual placement if it includes construction. Briefly describe what you chose without claiming it succeeded or asking for approval. Clarify only if you cannot infer a reasonable action or the request cannot fit in the supported steps.",

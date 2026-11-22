@@ -7,6 +7,9 @@ const Defs = preload("res://scripts/data/defs.gd")
 const STEP := 2.0                 # metres between height samples
 const FOREST_CELL := 8.0          # forest density grid
 const RIM_MIN := 80.0             # a narrower rim of hills would be too steep to walk
+# Each camp's own outcrop: on its level ground, in the commander's first view and inside a wall ring.
+const HOME_STONE_DISTS := [30.0, 28.0, 32.0, 26.0]
+const HOME_STONE_OFF_AXIS := 30.0 # degrees to either side of the way the commander first faces
 
 
 class RNode:
@@ -21,7 +24,7 @@ class RNode:
 	## The name shown in the world and on the map, or "" for unnamed nodes.
 	func landmark_name() -> String:
 		if kind == "rock" and sub == "outcrop":
-			return "Stone outcrop"
+			return "Stone"
 		if kind == "deposit":
 			var res: String = Defs.RESOURCE_NAMES[sub]
 			return res.left(1).to_upper() + res.substr(1)
@@ -38,22 +41,30 @@ var forest_res := 0
 var heights := PackedFloat32Array()
 var forest := PackedFloat32Array()
 var starts: Array[Vector2] = []
+var kit := Vector2.ZERO        # how far each camp's own deposits and deer are
 var nodes: Array = []           # Array[RNode]
+var deposits: Array = []        # the deposit and outcrop nodes, also found in nodes
+var outcrops: Array = []
 var herds: Array = []           # {kind, pos, count}
 var rng := RandomNumberGenerator.new()
 
 
-func generate(seed_in: int, map_in: String = Defs.MAP_LARGEST) -> void:
-	map_id = map_in if Defs.MAP_SIZES.has(map_in) else Defs.MAP_DEFAULT
+func generate(seed_in: int, map_in: String = Defs.MAP_REFERENCE, settlements: int = 2) -> void:
+	var camps := clampi(settlements, 2, Defs.MAX_SETTLEMENTS)
+	map_id = Defs.map_for(camps, map_in)
 	config = Defs.MAP_SIZES[map_id]
 	size = float(config["size"])
-	size_scale = size / float(Defs.MAP_SIZES[Defs.MAP_LARGEST]["size"])
+	size_scale = size / float(Defs.MAP_SIZES[Defs.MAP_REFERENCE]["size"])
 	height_res = int(size / STEP) + 1
 	forest_res = int(size / FOREST_CELL)
 	seed_value = seed_in
 	rng.seed = seed_in
 	_heights()
-	_pick_starts()
+	kit = config["kit"]
+	if camps == 2:
+		_pick_starts()
+	else:
+		_pick_ring(camps)
 	for s in starts:
 		_flatten(s, 34.0, 80.0)
 	_forest_map()
@@ -148,6 +159,38 @@ func _pick_starts() -> void:
 	starts = best
 
 
+## Three or more camps stand evenly on a ring, so each has two neighbours equally far away.
+func _pick_ring(camps: int) -> void:
+	var c := Vector2(size, size) * 0.5
+	var r: float = size * 0.5 - float(config["margin"])
+	var best: Array[Vector2] = []
+	var best_score := -INF
+	for attempt in 80:
+		var turn := rng.randf() * TAU
+		var ring: Array[Vector2] = []
+		var worst := 0.0
+		var total := 0.0
+		for k in camps:
+			var p := c + Vector2.from_angle(turn + k * TAU / camps) * r
+			var rough := _roughness(p)
+			worst = maxf(worst, rough)
+			total += rough
+			ring.append(p)
+		var score := -worst - total / camps + rng.randf() * 2.0
+		if score > best_score:
+			best_score = score
+			best = ring
+	# Shuffled, so a faction's number says nothing about where it starts or who its neighbours are.
+	for k in range(camps - 1, 0, -1):
+		var j := rng.randi_range(0, k)
+		var held := best[k]
+		best[k] = best[j]
+		best[j] = held
+	starts = best
+	var spacing := 2.0 * r * sin(PI / camps)
+	kit = Vector2(minf(kit.x, spacing * 0.28), minf(kit.y, spacing * 0.45))
+
+
 func _roughness(p: Vector2) -> float:
 	var hs: Array[float] = []
 	for a in 8:
@@ -186,6 +229,16 @@ func slope_deg(x: float, z: float) -> float:
 
 func in_bounds(p: Vector2, margin: float = 4.0) -> bool:
 	return p.x >= margin and p.y >= margin and p.x <= size - margin and p.y <= size - margin
+
+
+## Whether the line between two points clears the hills. Trees and buildings don't count.
+func clear_line(from: Vector3, to: Vector3) -> bool:
+	var count := int(from.distance_to(to) / (STEP * 2.0))
+	for i in range(1, count):
+		var p := from.lerp(to, float(i) / count)
+		if height_at(p.x, p.z) > p.y:
+			return false
+	return true
 
 
 func pos3(p: Vector2, lift: float = 0.0) -> Vector3:
@@ -253,6 +306,10 @@ func _add(kind: String, sub: String, p: Vector2, amount: float, scale: float = 1
 	n.scale = scale
 	n.rot = rng.randf() * TAU
 	nodes.append(n)
+	if kind == "deposit":
+		deposits.append(n)
+	elif sub == "outcrop":
+		outcrops.append(n)
 	return n
 
 
@@ -285,10 +342,11 @@ func _too_close_to_nodes(p: Vector2, r: float) -> bool:
 
 func _place_nodes() -> void:
 	nodes.clear()
+	deposits.clear()
+	outcrops.clear()
 	herds.clear()
 	var k_size := size_scale
 	var k_area := k_size * k_size
-	var kit: Vector2 = config["kit"]
 	# Camp essentials first, so both sides get the same kit at similar distances.
 	for s in starts:
 		for c in 3:
@@ -322,9 +380,11 @@ func _place_nodes() -> void:
 				_add("tree", "oak" if rng.randf() < 0.6 else "pine", tp, 40.0, rng.randf_range(0.8, 1.25))
 		herds.append({"kind": "deer", "pos": _free_spot(s, kit.x + 10.0, kit.y, 5.0), "count": 5})
 	# Contested deposits in the middle band between the camps.
-	var mid := (starts[0] + starts[1]) * 0.5
+	var duel := starts.size() == 2
+	var mid := (starts[0] + starts[1]) * 0.5 if duel else Vector2(size, size) * 0.5
+	var contested := 2 if duel else starts.size()
 	for dep in Defs.DEPOSITS:
-		for k in 2:
+		for k in contested:
 			_add("deposit", dep, _free_spot(mid, 40.0 * k_size, 200.0 * k_size, 40.0), -1.0)
 	var inset := 120.0 * k_size
 	for k in roundi(6 * k_area):
@@ -375,6 +435,36 @@ func _place_nodes() -> void:
 			var h := height_at(p.x, p.y)
 			var pine := h > 34.0 or tree_noise.get_noise_2d(p.x, p.y) > 0.25
 			_add("tree", "pine" if pine else "oak", p, 40.0, rng.randf_range(0.75, 1.3))
+	# Last, so it can keep clear of everything else without moving any of it.
+	for s in starts:
+		_add("rock", "outcrop", _home_stone_spot(s), -1.0)
+
+
+## The least crowded spot near camp, favoring the edge of the commander's first view.
+func _home_stone_spot(home: Vector2) -> Vector2:
+	var middle := Vector2.ZERO
+	for s in starts:
+		middle += s / starts.size()
+	var ahead := (middle - home).angle()
+	var around: Array = []
+	for nd in nodes:
+		if nd.pos.distance_to(home) < 50.0:
+			around.append(nd)
+	var best := home
+	var best_score := -INF
+	for step in range(-36, 36):
+		var off := step * 5.0
+		for dist: float in HOME_STONE_DISTS:
+			var p := home + Vector2.from_angle(ahead + deg_to_rad(off)) * dist
+			var crowding := 0.0
+			for nd in around:
+				var clear := 7.0 if nd.kind == "tree" else 11.0
+				crowding += maxf(0.0, clear - p.distance_to(nd.pos))
+			var score := -crowding * 1000.0 - absf(absf(off) - HOME_STONE_OFF_AXIS) - absf(dist - 30.0)
+			if score > best_score:
+				best_score = score
+				best = p
+	return best
 
 
 func count_nodes(kind: String) -> int:

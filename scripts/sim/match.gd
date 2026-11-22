@@ -2,33 +2,40 @@ extends "res://scripts/sim/match_combat.gd"
 ## Public match API: setup, the fixed-step tick, validated commands, the
 ## commander's actions and read-only queries for menus and Terra.
 
+const Captains = preload("res://scripts/sim/captains.gd")
+const Works = preload("res://scripts/sim/captain_works.gd")
 const START_FOOD := 40.0
+const FRESH_MARK := 120.0       # seconds a mark counts as "this"
 
 
 func setup(opts: Dictionary) -> void:
 	options = opts
 	var seed_in := int(opts.get("seed", 1))
 	rng.seed = seed_in * 7919 + 13
+	var count := clampi(int(opts.get("settlements", 2)), 2, Defs.MAX_SETTLEMENTS)
 	var tr := Terrain.new()
-	tr.generate(seed_in, str(opts.get("map", Defs.MAP_LARGEST)))
-	_init_world(tr)
+	tr.generate(seed_in, str(opts.get("map", Defs.MAP_REFERENCE)), count)
+	_init_world(tr, count)
+	birth_acc.resize(count)
+	birth_acc.fill(0.0)
 	factions.clear()
-	for i in 2:
+	for i in count:
 		var f := Faction.new()
 		f.id = i
-		f.name = "Your people" if i == 0 else "Rook's people"
-		f.commander_name = "Commander" if i == 0 else "Commander Rook"
-		f.color = Color(0.16, 0.28, 0.55) if i == 0 else Color(0.62, 0.15, 0.11)
-		f.is_ai = i == 1 or bool(opts.get("ai_both", false))
+		var who: Dictionary = Defs.COMMANDERS[i]
+		f.short_name = who["name"]
+		f.name = "Your people" if i == 0 else "%s's people" % who["name"]
+		f.commander_name = "Commander" if i == 0 else "Commander %s" % who["name"]
+		f.color = who["color"]
+		f.is_ai = i > 0 or bool(opts.get("ai_both", false))
 		f.start = tr.starts[i]
 		for r in Defs.RESOURCES:
 			f.stock[r] = 0.0
 		f.knowledge.resize(kres * kres)
 		f.knowledge.fill(-1.0)
-		f.visible.resize(kres * kres)
 		factions.append(f)
 	for f: Faction in factions:
-		var other: Vector2 = factions[1 - f.id].start
+		var other: Vector2 = factions[1 - f.id].start if count == 2 else Vector2(map_size, map_size) * 0.5
 		var rot := atan2((other - f.start).y, (other - f.start).x)
 		add_building(f.id, "campfire", f.start, rot, true)
 		var cmd := spawn_unit(f.id, "commander", f.start + Vector2.from_angle(rot) * 7.0)
@@ -63,13 +70,22 @@ func tick(dt: float = Defs.TICK) -> void:
 	t += dt
 	ticks += 1
 	paths_this_tick = 0
+	searches_this_tick = 0
+	if fair_paths:
+		share_paths()
 	rebuild_unit_hash()
+	crowd.index(units, map_size)
+	update_engagements()
 	upkeep_t += dt
 	if upkeep_t >= 1.0:
 		upkeep(upkeep_t)
 		upkeep_t = 0.0
 		check_morale()
 	update_crews(dt)
+	for p: Post in posts.values():
+		# Once a second each, staggered so they don't all think on the same tick.
+		if (ticks + p.id) % 10 == 0:
+			Captains.think(self, p)
 	var n := units.size()
 	for i in n:
 		var u: Unit = units[i]
@@ -85,8 +101,12 @@ func tick(dt: float = Defs.TICK) -> void:
 				update_animal(u, dt)
 			"cannon", "ram":
 				update_engine(u, dt)
-		_unstick(u, dt)
+	crowd.separate(units, self)
+	resolve_strikes()
 	update_shots(dt)
+	for u: Unit in units:
+		if not u.dead:
+			_settle(u, dt)
 	vision_t += dt
 	if vision_t >= 0.5:
 		vision_t = 0.0
@@ -96,6 +116,13 @@ func tick(dt: float = Defs.TICK) -> void:
 
 
 func _update_villager(u: Unit, dt: float) -> void:
+	if u.in_tower >= 0:
+		_update_tower_archer(u, dt)
+		return
+	if u.task == "arm" and not armed(u) and u.siege < 0:
+		u.flee_t = 0.0
+		update_worker(u, dt)
+		return
 	if u.task == "scout" and u.scout_leg < 3:
 		update_worker(u, dt)
 		return
@@ -106,18 +133,21 @@ func _update_villager(u: Unit, dt: float) -> void:
 
 
 func _update_commander(u: Unit, dt: float) -> void:
-	u.cooldown = maxf(0.0, u.cooldown - dt)
 	if u.task == "player":
+		commander_update(u.faction, t)
 		return
 	# Outnumbered: fall back rather than fight alone.
 	if u.flee_t > 0.0:
 		u.flee_t -= dt
-		move_to(u, u.goal, dt, 2.0, true)
+		u.cooldown = maxf(0.0, u.cooldown - dt)
+		if move_to(u, u.goal, dt, 2.0, true):
+			u.anim = Anim.IDLE
 		return
 	var foes := 0
 	var friends := 0
 	var threat := Vector2.ZERO
-	for o: Unit in units_near(u.pos, 26.0, -2):
+	var around: Array = units_near(u.pos, 26.0, -2) if sides_near(u.pos, 26.0, rivals_mask(u.faction)) else []
+	for o: Unit in around:
 		if o.dead or o.stable >= 0 or not is_person(o) or o.id == u.id:
 			continue
 		if o.faction == u.faction and armed(o):
@@ -127,6 +157,7 @@ func _update_commander(u: Unit, dt: float) -> void:
 			threat += o.pos
 	if foes >= 3 and foes > friends + 1:
 		var away := (u.pos - threat / foes).normalized()
+		cancel_swing(u)
 		u.goal = (u.pos + away * 45.0).clamp(Vector2(20, 20), Vector2(map_size - 20, map_size - 20))
 		u.flee_t = 5.0
 		return
@@ -145,24 +176,37 @@ func _update_commander(u: Unit, dt: float) -> void:
 		u.anim = Anim.IDLE
 
 
-func _unstick(u: Unit, dt: float) -> void:
-	if u.kind == "commander" and u.task == "player":
-		return
-	var moved := u.pos.distance_to(u.last_pos)
-	if u.anim in [Anim.WALK, Anim.RUN, Anim.CARRY, Anim.RIDE] and moved < 0.02:
-		u.stuck += dt
-		if u.stuck > 2.5:
-			u.stuck = 0.0
-			u.path = PackedVector2Array()
-			u.path_goal = Vector2(-999, -999)
-			var c := cell_of(u.pos)
-			if solid_for(clampi(u.faction, 0, 1), c):
-				u.pos = cell_center(nearest_free_cell(clampi(u.faction, 0, 1), c))
-			else:
-				u.pos += Vector2.from_angle(rng.randf() * TAU) * 1.5
-	else:
-		u.stuck = 0.0
+## After everyone has moved: how fast, and has anyone jammed or stopped?
+func _settle(u: Unit, dt: float) -> void:
+	var delta := u.pos - u.last_pos
+	u.vel = delta / dt
 	u.last_pos = u.pos
+	if not is_person(u) or (u.kind == "commander" and u.task == "player"):
+		return
+	var moved := delta.length()
+	if u.move_t != t:
+		u.stuck = 0.0
+		if u.anim in [Anim.WALK, Anim.RUN, Anim.CARRY]:
+			u.anim = Anim.IDLE    # arrived: don't march on the spot
+		return
+	if moved < 0.02 and u.anim in [Anim.WALK, Anim.RUN]:
+		u.anim = Anim.IDLE
+	if moved >= unit_speed(u) * dt * 0.25:
+		u.stuck = maxf(0.0, u.stuck - dt * 2.0)
+		return
+	u.stuck += dt
+	if u.stuck > 1.2:
+		# Jammed: plan again, try the other side and squeeze past friends for a moment.
+		u.stuck = 0.0
+		u.path = PackedVector2Array()
+		u.path_goal = Vector2(-999, -999)
+		u.side = -u.side
+		u.dodge_t = t + 1.0
+		u.ghost_t = t + 1.2
+		var c := cell_of(u.pos)
+		if solid_for(u.faction, c):
+			u.pos = cell_center(nearest_free_cell(maxi(u.faction, 0), c))
+			u.prev = u.pos
 
 
 func _cleanup() -> void:
@@ -187,10 +231,63 @@ func _cleanup() -> void:
 func on_commander_dead(u: Unit) -> void:
 	if over:
 		return
+	var f := fac(u.faction)
+	f.alive = false
+	f.out_t = t
+	var left := living()
+	if left.size() > 1 and not is_player_faction(f.id):
+		eliminate(f)
+		return
 	over = true
-	winner = 1 - u.faction
+	if left.size() == 1:
+		winner = left[0]
+	else:
+		# The player fell with rivals still standing: the killer's side takes the win.
+		var killer := unit(u.attacker)
+		winner = killer.faction if killer else -1
 	end_reason = "%s was killed." % u.name
 	emit({"type": "over", "winner": winner})
+
+
+func living() -> Array:
+	var out := []
+	for f: Faction in factions:
+		if f.alive:
+			out.append(f.id)
+	return out
+
+
+## A fallen commander's settlement breaks up: people scatter and buildings collapse.
+## This can run in the middle of a tick, so nothing is taken out of the arrays here.
+func eliminate(f: Faction) -> void:
+	for c: Crew in crews.values():
+		if c.faction == f.id:
+			dissolve(c)
+	for u: Unit in units:
+		if u.dead or u.faction != f.id:
+			continue
+		if u.kind == "horse":
+			u.faction = -1
+			u.stable = -1
+			u.herd = -1
+			u.goal = u.pos
+			continue
+		_release_claim(u)
+		u.dead = true
+		u.dead_t = -1.0     # gone, with no body left to draw
+	for b: Building in buildings:
+		if not b.dead and b.faction == f.id:
+			remove_building(b, "abandoned")
+	for other: Faction in factions:
+		for key in other.intel.keys():
+			if int(other.intel[key].get("faction", -1)) == f.id:
+				other.intel.erase(key)
+	for c: Crew in crews.values():
+		if c.idx < c.steps.size() and c.steps[c.idx]["action"] == "attack" and int(c.state.get("foe", -1)) == f.id:
+			# Nobody is left to fight there. The crew keeps together and marches home.
+			start_plan(c, [{"action": "guard", "subject": "", "count": 0, "amount": 0, "where": "home"}])
+	post(0, "Commander %s has fallen. %s scatter." % [f.short_name, f.name], "done")
+	emit({"type": "eliminated", "faction": f.id})
 
 
 # --- Orders --------------------------------------------------------------------
@@ -199,6 +296,9 @@ func on_commander_dead(u: Unit) -> void:
 func step_problem(faction: int, s: Dictionary) -> String:
 	var f := fac(faction)
 	var subj: String = s.get("subject", "")
+	var at: String = s.get("where", "")
+	if at.begins_with(Defs.PLACE) and not places_of(faction).has(at.substr(Defs.PLACE.length())):
+		return "There's no place called %s. Mark it (R), then say 'call this %s'." % [at.substr(Defs.PLACE.length()).capitalize(), at.substr(Defs.PLACE.length()).capitalize()]
 	match s["action"]:
 		"build":
 			return unlock_problem(faction, subj)
@@ -221,8 +321,9 @@ func step_problem(faction: int, s: Dictionary) -> String:
 			if up.begins_with("!") and not up.contains("first"):
 				return up.substr(1).capitalize()
 		"research":
-			if f.age < 3:
-				return "Research needs the Iron age and a university."
+			var rd: Dictionary = Defs.RESEARCH.get(subj, {})
+			if not rd.is_empty() and f.age < int(rd["age"]):
+				return "%s needs the %s age and a %s." % [rd["name"], Defs.AGES[rd["age"]], Defs.building_name(rd["building"]).to_lower()]
 		"gather":
 			if subj in Defs.DEPOSITS and f.age < 1:
 				return "Mining needs the Stone age. %s" % Defs.AGE_HOW[1]
@@ -259,7 +360,7 @@ func first_step_problem(faction: int, s: Dictionary) -> String:
 			if fac(faction).researched.has(subj):
 				why = "we already know %s." % Defs.RESEARCH[subj]["name"].to_lower()
 			elif not has_building(faction, Defs.RESEARCH[subj]["building"]):
-				why = "we need a university first."
+				why = "we need a %s first." % Defs.building_name(Defs.RESEARCH[subj]["building"]).to_lower()
 		"tame":
 			if buildings_of(faction, "stable").is_empty():
 				why = "we need a stable to keep horses in."
@@ -361,6 +462,54 @@ func _addressed_crew(faction: int, req: Dictionary) -> Crew:
 	return c if c and c.faction == faction and not c.members.is_empty() else null
 
 
+## The person a piece of text opens with, matched on the longest name first.
+## A bare first name works while it is unambiguous. prefix also accepts the start of one.
+## Returns {unit, rest, error}: rest is the text after the name.
+func find_person(faction: int, text: String, prefix: bool = false) -> Dictionary:
+	var said := text.strip_edges()
+	var low := said.to_lower()
+	var living: Array[Unit] = []
+	var best: Unit = null
+	var taken := 0
+	for u: Unit in units:
+		if u.dead or u.faction != faction or u.kind != "villager" or u.name == "":
+			continue
+		living.append(u)
+		var n := u.name.to_lower()
+		if n.length() > taken and low.begins_with(n) and (low.length() == n.length() or low[n.length()] in " ,:.!?"):
+			best = u
+			taken = n.length()
+	var none := {"unit": null, "rest": said, "error": ""}
+	var words := low.split(" ", false)
+	if words.is_empty():
+		return none
+	# A dead "Hal Miller" must not turn into plain Hal.
+	if (best == null or not best.name.contains(" ")) and words.size() > 1 and not words[0].right(1) in ",:":
+		if words[1].rstrip(",:.!?").capitalize() in Defs.BYNAMES:
+			return none
+	if best == null:
+		var word := words[0].rstrip(",:.!?")
+		if word == "":
+			return none
+		var found := living.filter(func(u): return u.name.to_lower().get_slice(" ", 0) == word)
+		if found.is_empty() and prefix:
+			found = living.filter(func(u): return u.name.to_lower().begins_with(word))
+		if found.size() > 1:
+			var leaders := found.filter(func(u): return u.captain)
+			if leaders.size() != 1:
+				var options: Array[String] = []
+				for u in found.slice(0, 4):
+					options.append(u.name)
+				none["error"] = "Which one: %s?" % ", ".join(options)
+				return none
+			found = leaders
+		if found.is_empty():
+			return none
+		best = found[0]
+		taken = words[0].length()
+	return {"unit": best, "rest": said.substr(taken).lstrip(" ,:.!?"), "error": ""}
+
+
 ## Join one villager or their whole crew to an existing crew without restarting its plan.
 func reassign_crew(faction: int, req: Dictionary, destination_id: int) -> Dictionary:
 	var destination := _addressed_crew(faction, {"unit": destination_id})
@@ -393,6 +542,253 @@ func reassign_crew(faction: int, req: Dictionary, destination_id: int) -> Dictio
 	return {"ok": true, "crew": destination.id}
 
 
+func posts_of(faction: int) -> Array:
+	var out := []
+	for p: Post in posts.values():
+		if p.faction == faction:
+			out.append(p)
+	out.sort_custom(func(a, b): return a.id < b.id)
+	return out
+
+
+func post_label(p: Post) -> String:
+	var lead := unit(p.captain)
+	return "Captain %s (%s)" % [lead.name if lead else "", p.name]
+
+
+func post_status(p: Post) -> String:
+	var doing: Array[String] = []
+	var working := {}
+	var ordered := 0
+	for u in post_members(p):
+		var c := crew_of(u)
+		if c == null or c.idx >= c.steps.size():
+			continue
+		if c.post != p.id:
+			ordered += 1
+		else:
+			var s: Dictionary = c.steps[c.idx]
+			var what: String = s["action"]
+			if what == "gather":
+				what = Defs.GATHER[s["subject"]]["name"]
+			elif what == "smelt":
+				what = "smelting"
+			working[what] = int(working.get(what, 0)) + 1
+	for what in working:
+		doing.append("%d %s" % [working[what], what])
+	if ordered > 0:
+		doing.append("%d on your orders" % ordered)
+	var size := str(p.members.size())
+	if p.target > 0:
+		size += " of %d" % p.target
+	var alarm: String = {"intruder": " Intruder seen.", "raid": " Under attack.", "falling_back": " Falling back."}.get(p.alert, "")
+	return "%s: %s people. %s.%s" % [post_label(p), size, ", ".join(doing) if not doing.is_empty() else "standing by", alarm]
+
+
+## Who carries out an order given to a captain: as many of their people as it needs.
+func _post_detail(p: Post, first: Dictionary) -> Array:
+	var pool: Array = post_members(p).filter(func(u): return u.id != p.captain and not u.child and u.siege < 0)
+	var a: String = first["action"]
+	var want := int(first.get("count", 0))
+	if want == 0:
+		var soldiers: bool = p.mandate in ["garrison", "army"]
+		if a == "recall" or (soldiers and a in ["attack", "follow", "guard", "hold", "arm"]):
+			want = pool.size()
+		elif a in ["attack", "follow", "guard", "hold"]:
+			# A working post sends its fighters, not its farmers.
+			var fighters := pool.filter(func(u): return armed(u)).size()
+			want = fighters if fighters > 0 else 4
+		elif a == "arm":
+			want = 4
+		elif a == "gather":
+			want = 3
+		else:
+			want = _default_size(p.faction, first)
+	# People free or on the captain's jobs go before anyone already on your orders.
+	var key := func(u):
+		return (0 if u.crew < 0 else (1 if not under_direct_order(u) else 2))
+	pool.sort_custom(func(x, y):
+		var kx: int = key.call(x)
+		var ky: int = key.call(y)
+		if kx != ky:
+			return kx < ky
+		var fighting: bool = a in ["attack", "guard", "hold", "follow"]
+		if fighting and armed(x) != armed(y):
+			return armed(x)
+		return x.id < y.id)
+	var out := pool.slice(0, want)
+	var lead := unit(p.captain)
+	if out.is_empty() and lead and not lead.dead:
+		out.append(lead)
+	return out
+
+
+## Stands a post down. Its people are free again.
+func close_post(p: Post) -> void:
+	for u in post_members(p):
+		var c := crew_of(u)
+		if c and c.post == p.id:
+			release_member(u)
+		u.post = -1
+	posts.erase(p.id)
+
+
+## Puts someone in charge of a place and a purpose, or changes the charge they have.
+func give_mandate(faction: int, req: Dictionary, s: Dictionary) -> Dictionary:
+	var kind: String = s["subject"]
+	var d: Dictionary = Defs.MANDATES[kind]
+	var people: Array = []
+	if req.has("post"):
+		var held: Post = posts.get(int(req["post"]))
+		if held and held.faction == faction:
+			people.append(unit(held.captain))
+	elif req.has("units"):
+		for id in req["units"]:
+			var su := orderable_unit(faction, int(id))
+			if su:
+				people.append(su)
+	elif req.has("unit"):
+		var u := orderable_unit(faction, int(req["unit"]))
+		if u:
+			people.append(u)
+			var c := crew_of(u)
+			if c and c.post < 0 and c.leader == u.id and not req.get("individual", false):
+				for id in c.members:
+					if id != u.id:
+						people.append(unit(id))
+	elif req.has("crew"):
+		var c := _addressed_crew(faction, req)
+		if c:
+			var chosen := orderable_unit(faction, int(req.get("person", c.leader)))
+			if chosen == null or not c.members.has(chosen.id):
+				chosen = unit(c.leader)
+			people.append(chosen)
+			# A captain brings their own crew. Anyone else comes alone.
+			if c.captain and c.post < 0 and chosen.id == c.leader:
+				for id in c.members:
+					if id != chosen.id:
+						people.append(unit(id))
+	elif req.is_empty() or not req.get("all", false):
+		var free := idle_adults(faction, home_pos(faction))
+		if not free.is_empty():
+			people.append(free[0])
+	if people.is_empty():
+		return {"ok": false, "error": "Say who is in charge: look at someone, or start with their name."}
+	var lead: Unit = people[0]
+	var at = home_pos(faction)
+	var where: String = s["where"]
+	if kind != "village":
+		if where == "":
+			at = lead.pos
+		else:
+			var here := Crew.new()
+			here.faction = faction
+			here.members = [lead.id]
+			at = resolve_where(here, where, 120.0)
+			if at == null:
+				return {"ok": false, "error": "Mark a spot first (look at the ground and press R)." if where == "marked" else "We don't know where that is yet."}
+	var p: Post = village_post(faction) if kind == "village" else null
+	if p == null and leads_post(lead):
+		p = post_of(lead)
+	if p == null:
+		p = Post.new()
+		p.id = new_id()
+		p.faction = faction
+		p.rng.seed = p.id * 7919 + int(options.get("seed", 1))
+		posts[p.id] = p
+	elif p.captain != lead.id and leads_post(lead):
+		leave_post(lead)
+	for u: Unit in people:
+		# Taking charge ends whatever they were doing.
+		if u.crew >= 0:
+			release_member(u)
+		join_post(p, u)
+	p.captain = lead.id
+	lead.captain = true
+	if p.mandate != kind or not p.center.is_equal_approx(at):
+		p.seen = {}
+		p.survey_nodes = []
+		p.rounds = 0
+		p.walled = false
+		p.saving = {}
+		p.alert = ""
+		p.ready_told = false
+		p.blocked_since = {}
+		p.blocked_told = {}
+	p.mandate = kind
+	p.center = at
+	p.radius = float(d["radius"])
+	if d.has("home_radius") and p.center.distance_to(home_pos(faction)) <= Defs.HOME_GROUND:
+		p.radius = float(d["home_radius"])
+	var count := int(s.get("count", 0))
+	p.target = count if count > 0 else maxi(int(d["size"]), people.size() if kind != "village" else 0)
+	var title: String = "village"
+	if kind != "village":
+		if where.begins_with(Defs.PLACE) and fac(faction).places.has(where.substr(Defs.PLACE.length())):
+			title = fac(faction).places[where.substr(Defs.PLACE.length())]["name"]
+		elif p.center.distance_to(home_pos(faction)) <= Defs.HOME_GROUND:
+			title = d["name"]
+		else:
+			title = "%s %s" % [Terrain.compass_name(p.center - home_pos(faction)), d["name"]]
+		var base := title
+		var nth := 1
+		while posts_of(faction).any(func(o): return o != p and o.name == title):
+			nth += 1
+			title = "%s %d" % [base, nth]
+	p.name = title
+	return {"ok": true, "crews": [], "post": p.id}
+
+
+## A mandate and its limits, or limits for a post that already stands.
+func settle(faction: int, req: Dictionary, steps: Array) -> Dictionary:
+	var result := {"ok": true, "crews": []}
+	var p: Post = null
+	if steps[0]["action"] == "mandate":
+		result = give_mandate(faction, req, steps[0])
+		if not result["ok"]:
+			return result
+		p = posts[result["post"]]
+	elif req.has("post"):
+		p = posts.get(int(req["post"]))
+	elif req.has("unit") or req.has("crew"):
+		var u: Unit = unit(int(req["unit"])) if req.has("unit") else null
+		var c := _addressed_crew(faction, req) if req.has("crew") else null
+		if c:
+			u = unit(c.leader)
+		if u and u.faction == faction:
+			p = post_of(u)
+	elif req.is_empty():
+		p = village_post(faction)
+	if p and p.faction != faction:
+		p = null
+	if p == null and steps.size() == 1 and steps[0]["action"] == "posture" and steps[0]["subject"] == "hold" and not req.is_empty():
+		# To anyone without a post, "hold at all costs" is just "hold".
+		return command(faction, req.merged({"steps": [{"action": "hold", "subject": "", "count": 0, "amount": 0, "where": ""}]}, true))
+	for s in steps:
+		var subj: String = s["subject"]
+		if s["action"] == "mandate":
+			continue
+		if s["action"] == "reserve":
+			var f := fac(faction)
+			if int(s["amount"]) > 0:
+				f.reserve[subj] = int(s["amount"])
+			else:
+				f.reserve.erase(subj)
+			continue
+		if p == null:
+			return {"ok": false, "error": "Say which captain: look at them, or start with their name."}
+		match s["action"]:
+			"forbid":
+				p.forbid[subj] = true
+			"allow":
+				p.forbid.erase(subj)
+			"posture":
+				p.posture = subj
+				if subj == "hold" and p.alert == "falling_back":
+					p.alert = "raid"
+	return result
+
+
 ## Orders accept {"unit": id} (their crew), {"unit": id, "individual": true},
 ## {"units": [ids]} (an exact selection), {"crew": id}, {"all": true}, or an empty
 ## address for free villagers, plus steps.
@@ -401,12 +797,42 @@ func command(faction: int, req: Dictionary) -> Dictionary:
 	var err := Defs.validate_steps(steps)
 	if err != "":
 		return {"ok": false, "error": err}
+	if steps[0]["action"] == "resume_work":
+		return _resume_order(faction, req)
+	var expanded := []
+	for s in steps:
+		if s["action"] != "resume":
+			expanded.append(s)
+			continue
+		var work := _resume_as_builds(faction, req, s)
+		if work.is_empty():
+			return {"ok": false, "error": nothing_to_resume(s["subject"])}
+		expanded.append_array(work)
+	steps = expanded
 	for s in steps:
 		var e2 := step_problem(faction, s)
 		if e2 != "":
 			return {"ok": false, "error": e2}
+	if steps[0]["action"] in Defs.SETTINGS:
+		return settle(faction, req, steps)
+	var laid: Array = []
+	if req.has("post"):
+		# Told to build, a captain picks the sites.
+		var builder: Post = posts.get(int(req["post"]))
+		for s in steps:
+			if s["action"] != "build" or not s["sites"].is_empty() or builder == null or builder.faction != faction:
+				continue
+			var placed: Dictionary = Works.lay_out(self, builder, s["subject"])
+			if not placed.get("ok", false):
+				for id in laid:
+					remove_site(id)
+				return {"ok": false, "error": "%s: %s" % [post_label(builder), placed.get("error", "there's no room.")]}
+			s["sites"] = placed["ids"]
+			laid.append_array(placed["ids"])
 	var e3 := first_step_problem(faction, steps[0])
 	if e3 != "":
+		for id in laid:
+			remove_site(id)
 		return {"ok": false, "error": e3}
 	var targets := []
 	var first: Dictionary = steps[0]
@@ -417,6 +843,27 @@ func command(faction: int, req: Dictionary) -> Dictionary:
 		var idle := idle_adults(faction, home_pos(faction))
 		if not idle.is_empty():
 			targets.append(make_crew(faction, idle))
+	elif req.has("post"):
+		var p: Post = posts.get(int(req["post"]))
+		if p == null or p.faction != faction:
+			return {"ok": false, "error": "That post has been stood down."}
+		if steps.size() == 1 and first["action"] in ["status", "dismiss"]:
+			if first["action"] == "status":
+				post(faction, post_status(p), "info")
+			else:
+				post(faction, "The %s is stood down." % p.name, "info")
+				close_post(p)
+			return {"ok": true, "crews": []}
+		var detail := _post_detail(p, first)
+		if detail.is_empty():
+			for id in laid:
+				remove_site(id)
+			return {"ok": false, "error": "%s has nobody to send." % post_label(p)}
+		for s in steps:
+			s["count"] = 0      # their own people, not whoever is nearest
+		for u in detail:
+			release_member(u)
+		targets.append(make_crew(faction, detail))
 	elif req.has("crew"):
 		var c := _addressed_crew(faction, req)
 		if c == null:
@@ -451,6 +898,7 @@ func command(faction: int, req: Dictionary) -> Dictionary:
 			targets.append(same)
 		else:
 			for su in picked:
+				_remember_worker(su)
 				release_member(su)
 			targets.append(make_crew(faction, picked))
 	elif req.has("unit"):
@@ -473,6 +921,7 @@ func command(faction: int, req: Dictionary) -> Dictionary:
 			for s in steps:
 				s["count"] = 0
 			if c and c.members.size() > 1:
+				_remember_worker(u)
 				release_member(u)
 				c = null
 		if c == null:
@@ -495,11 +944,43 @@ func command(faction: int, req: Dictionary) -> Dictionary:
 	for c in targets:
 		if c.members.is_empty():
 			continue
+		c.post = -1         # a direct order overrides the captain's
 		start_plan(c, steps.duplicate(true))
 		ids.append(c.id)
 	if ids.is_empty():
 		return {"ok": false, "error": "Nobody could take that order."}
 	return {"ok": true, "crews": ids}
+
+
+## "Back to work": everyone addressed returns to what a military order pulled them off.
+func _resume_order(faction: int, req: Dictionary) -> Dictionary:
+	var only := []
+	if not req.get("all", false):
+		if req.has("post"):
+			var post: Post = posts.get(int(req["post"]))
+			if post == null or post.faction != faction:
+				return {"ok": false, "error": "That post is no longer available."}
+			only = post_members(post).map(func(u): return u.id)
+			if only.is_empty():
+				return {"ok": false, "error": "Nobody at that post has earlier work."}
+		elif req.has("crew"):
+			var c := _addressed_crew(faction, req)
+			if c == null:
+				return {"ok": false, "error": "That crew is no longer available."}
+			only = c.members.duplicate()
+		elif req.has("units"):
+			only = req["units"].duplicate()
+		elif req.has("unit"):
+			var u := unit(int(req["unit"]))
+			if u == null or u.dead or u.faction != faction:
+				return {"ok": false, "error": "That person can't take orders."}
+			var uc := crew_of(u)
+			only = uc.members.duplicate() if uc and not req.get("individual", false) else [u.id]
+	var back := resume_work(faction, only)
+	if back == 0:
+		return {"ok": false, "error": "Nobody has earlier work to go back to."}
+	post(faction, "%d %s went back to work." % [back, "person" if back == 1 else "people"], "info")
+	return {"ok": true, "crews": []}
 
 
 func cancel(faction: int, req: Dictionary) -> int:
@@ -509,6 +990,13 @@ func cancel(faction: int, req: Dictionary) -> int:
 			if c.faction == faction:
 				cancel_plan(c)
 				n += 1
+	elif req.has("post"):
+		var p: Post = posts.get(int(req["post"]))
+		if p and p.faction == faction:
+			for u in post_members(p):
+				if under_direct_order(u):
+					release_member(u)
+					n += 1
 	elif req.has("units"):
 		for id in req["units"]:
 			var su := orderable_unit(faction, int(id))
@@ -526,6 +1014,131 @@ func cancel(faction: int, req: Dictionary) -> int:
 			cancel_plan(c)
 			n = 1
 	return n
+
+
+# --- Unfinished construction ---------------------------------------------------
+
+## The sites a "continue" order means: the one pointed at, then what these people were
+## building, then those nobody is building. With `join`, also those that have builders.
+## kind is a structure id, "wall" or "gate" for either material, or "" for anything.
+func resume_sites(faction: int, req: Dictionary, kind: String = "", pointed: int = -1, join: bool = true) -> Array:
+	var open := buildings_of(faction, "", false).filter(func(b): return not b.complete and _is_kind(b.type, kind))
+	var at := bld(pointed)
+	if at in open:
+		return open.filter(func(b): return _job_id(b) == _job_id(at))
+	if req.get("all", false):
+		return open
+	var theirs := {}
+	for u: Unit in _addressees(faction, req):
+		for id in u.last_sites:
+			theirs[id] = true
+	var own := open.filter(func(b): return theirs.has(b.id))
+	if not own.is_empty():
+		return own
+	var taken := assigned_sites(faction)
+	var waiting := open.filter(func(b): return not taken.has(b.id))
+	return open if waiting.is_empty() and join else waiting
+
+
+func nothing_to_resume(kind: String) -> String:
+	var what := Defs.building_name(kind).to_lower() if kind != "" else "construction"
+	return "There's no unfinished %s to continue. Type /b to start a new one." % what
+
+
+## Every site in a crew's current or later steps.
+func assigned_sites(faction: int) -> Dictionary:
+	var out := {}
+	for c: Crew in crews.values():
+		if c.faction != faction or c.members.is_empty():
+			continue
+		for i in range(c.idx, c.steps.size()):
+			for id in c.steps[i].get("sites", []):
+				out[id] = true
+	return out
+
+
+## Clears a site nothing has been spent on, with the unstarted rest of its wall.
+func abandon_site(faction: int, id: int) -> bool:
+	var b := bld(id)
+	if b == null or b.dead or b.paid or b.faction != faction:
+		return false
+	var pieces := buildings_of(faction, "", false).filter(func(o): return not o.paid and _job_id(o) == _job_id(b))
+	for piece in pieces:
+		remove_site(piece.id)
+	return true
+
+
+func _is_kind(type: String, kind: String) -> bool:
+	if kind in ["wall", "gate"]:
+		var d: Dictionary = Defs.BUILDINGS[type]
+		return d.get("wall", false) and d.get("gate", false) == (kind == "gate")
+	return kind == "" or type == kind
+
+
+## The pieces of one wall line are one job.
+func _job_id(b: Building) -> int:
+	return b.line if b.line >= 0 else b.id
+
+
+func _addressees(faction: int, req: Dictionary) -> Array:
+	var ids := []
+	if req.has("units"):
+		ids = req["units"]
+	elif req.get("individual", false):
+		ids = [req.get("unit", -1)]
+	else:
+		var c := _addressed_crew(faction, req)
+		if c:
+			ids = c.members
+		elif req.has("unit"):
+			ids = [req["unit"]]
+	var out := []
+	for id in ids:
+		var u := orderable_unit(faction, int(id))
+		if u:
+			out.append(u)
+	return out
+
+
+## One build step per job: started ones first, then the nearest.
+func _resume_as_builds(faction: int, req: Dictionary, s: Dictionary) -> Array:
+	var sites := []
+	if s["sites"].is_empty():
+		sites = resume_sites(faction, req, s["subject"])
+	else:
+		for id in s["sites"]:
+			var b := bld(id)
+			if b and not b.dead and not b.complete and b.faction == faction:
+				sites.append(b)
+	var people := _addressees(faction, req)
+	var from: Vector2 = people[0].pos if not people.is_empty() else home_pos(faction)
+	sites.sort_custom(func(a, b):
+		if a.paid != b.paid:
+			return a.paid
+		return a.pos.distance_squared_to(from) < b.pos.distance_squared_to(from))
+	var jobs := {}
+	var out := []
+	for b: Building in sites:
+		var job := _job_id(b)
+		if not jobs.has(job):
+			jobs[job] = []
+			out.append({"action": "build", "subject": b.type, "count": s["count"] if out.is_empty() else 0,
+				"amount": 0, "where": "", "sites": jobs[job]})
+		jobs[job].append(b.id)
+	return out
+
+
+func _unfinished_brief(faction: int) -> Array:
+	var taken := assigned_sites(faction)
+	var jobs := {}
+	for b: Building in buildings_of(faction, "", false):
+		if b.complete:
+			continue
+		var job: Dictionary = jobs.get_or_add(_job_id(b), {"id": b.type, "pieces": 0, "started": false, "has_builders": false})
+		job["pieces"] += 1
+		job["started"] = job["started"] or b.paid
+		job["has_builders"] = job["has_builders"] or taken.has(b.id)
+	return jobs.values()
 
 
 func place_site(faction: int, type: String, p: Vector2, rot: float) -> Dictionary:
@@ -592,7 +1205,21 @@ func remove_site(id: int) -> void:
 func set_mark(faction: int, p: Vector2) -> void:
 	var f := fac(faction)
 	f.mark = p
+	f.mark_t = t
 	f.has_mark = true
+
+
+## "Call this East Hill": the spot just marked, or else where the commander stands.
+func name_place(faction: int, title: String) -> Dictionary:
+	var f := fac(faction)
+	var p := f.mark
+	if not f.has_mark or t - f.mark_t > FRESH_MARK:
+		var me := commander(faction)
+		if me == null:
+			return {"ok": false, "error": "Mark a spot first (look at the ground and press R)."}
+		p = me.pos
+	f.places[title.to_lower()] = {"name": title, "pos": p}
+	return {"ok": true}
 
 
 # --- The commander -----------------------------------------------------------------
@@ -601,60 +1228,43 @@ func set_commander(faction: int, p: Vector2, facing: float, anim: int) -> void:
 	var u := unit(fac(faction).commander)
 	if u == null or u.dead:
 		return
+	var tower := bld(u.in_tower)
+	if tower and tower.pos.distance_squared_to(p) > Defs.TOWER_DECK_RADIUS * Defs.TOWER_DECK_RADIUS:
+		u.in_tower = -1
 	u.pos = p
 	u.facing = facing
 	u.anim = anim
+	# A lance needs a run-up, which the player's horse takes too.
+	if not u.mounted or anim == Anim.IDLE:
+		u.charge_start = Vector2.ZERO
+	elif anim == Anim.RIDE and u.charge_start == Vector2.ZERO:
+		u.charge_start = p
 
 
 func commander(faction: int) -> Unit:
 	return unit(fac(faction).commander)
 
 
-## A melee blow in front of the commander. Returns what was hit ("" for nothing).
-func commander_strike(faction: int) -> String:
-	var u := commander(faction)
-	if u == null or u.dead or u.cooldown > 0.0:
-		return ""
-	var w := weapon_def(u)
-	u.cooldown = float(w["rate"]) * 0.8
-	var fwd := Vector2(sin(u.facing), cos(u.facing))
-	var reach: float = w["reach"] + 0.8
-	var best: Unit = null
-	var bd := INF
-	for o: Unit in units_near(u.pos, reach + 1.5, -2):
-		if o.faction == faction or o.stable >= 0 or o.dead or o.id == u.id:
-			continue
-		var to := o.pos - u.pos
-		var d := to.length()
-		if d > reach + (0.6 if o.mounted else 0.0):
-			continue
-		if d > 0.3 and fwd.dot(to / d) < 0.55:
-			continue
-		if d < bd:
-			bd = d
-			best = o
-	if best:
-		deal_damage(best, melee_damage(u, best), u, "melee")
-		sound("clash" if best.weapon != "" or best.shield != "" else "hit", best.pos)
-		return best.name if best.name != "" else best.kind
-	for b: Building in buildings:
-		if b.dead or b.faction == faction:
-			continue
-		var local := (u.pos + fwd * reach * 0.7 - b.pos).rotated(-b.rot)
-		if absf(local.x) <= b.size.x * 0.5 + 0.8 and absf(local.y) <= b.size.y * 0.5 + 0.8:
-			damage_building(b, float(w["dmg"]) * _material(b.type), u)
-			sound("chop", b.pos)
-			return Defs.building_name(b.type)
-	sound("swing", u.pos)
-	return ""
+func tower_at_door(faction: int, p: Vector2) -> Building:
+	var nearest: Building = null
+	var best := Defs.TOWER_DOOR_REACH * Defs.TOWER_DOOR_REACH
+	for tower: Building in buildings_of(faction, "tower"):
+		var d := p.distance_squared_to(tower_door(tower))
+		if d <= best:
+			best = d
+			nearest = tower
+	return nearest
 
 
-func commander_shoot(faction: int, origin: Vector3, dir: Vector3, power: float) -> bool:
+func commander_shoot(faction: int, origin: Vector3, dir: Vector3, power: float, now: float = -1.0) -> bool:
 	var u := commander(faction)
-	if u == null or u.dead or not u.bow or u.arrows <= 0:
+	var at := now if now >= 0.0 else t
+	if u == null or u.dead or not can_shoot_bow(u) or u.arrows <= 0 or at + EPS < u.shot_t + NOCK:
 		return false
 	u.arrows -= 1
-	fire_free_arrow(u, origin, dir.normalized() * lerpf(22.0, 62.0, clampf(power, 0.0, 1.0)), armory_tier(faction))
+	u.shot_t = at
+	var p := clampf(power, 0.0, 1.0)
+	fire_free_arrow(u, origin, dir.normalized() * lerpf(22.0, 62.0, p), armory_tier(faction), lerpf(0.45, 1.0, p))
 	return true
 
 
@@ -663,6 +1273,8 @@ func commander_take_gear(faction: int) -> String:
 	var u := commander(faction)
 	if u == null:
 		return ""
+	if u.in_tower >= 0:
+		return "Descend the tower to take gear from the armory."
 	var arm := nearest_building(faction, u.pos, ["armory"])
 	if arm == null or arm.pos.distance_to(u.pos) > arm.size.length() * 0.5 + 4.0:
 		return "Stand next to your armory to take gear."
@@ -691,6 +1303,8 @@ func commander_mount(faction: int) -> String:
 	var u := commander(faction)
 	if u == null:
 		return ""
+	if u.in_tower >= 0:
+		return "Descend the tower before mounting."
 	var st := nearest_building(faction, u.pos, ["stable"])
 	var near := st != null and st.pos.distance_to(u.pos) < st.size.length() * 0.5 + 5.0
 	if u.mounted:
@@ -753,12 +1367,10 @@ func resolve_steps(faction: int, steps: Array) -> Array:
 					farm_room = true
 				if farm_room:
 					st["subject"] = "farm"
-				elif nearest_node("berry", home_pos(faction), 200.0) != null:
+				elif dropoffs(faction, "food").any(func(b): return nearest_node("berry", b.pos, 200.0) != null):
 					st["subject"] = "berries"
-				elif has_building(faction, "lodge"):
-					st["subject"] = "hunt"
 				else:
-					st["subject"] = "berries"
+					st["subject"] = "hunt"
 		out.append(st)
 	return out
 
@@ -787,6 +1399,12 @@ func build_menu(faction: int) -> Array:
 			lock = "Already being upgraded."
 		out.append({"kind": "upgrade", "id": up["building"], "name": up["name"] + " (upgrade)", "cost": up["cost"],
 			"desc": up["desc"], "locked": lock, "missing": missing_cost(faction, up["cost"])})
+	return out
+
+
+## Everything the /r menu can research. Done research drops off the list.
+func research_menu(faction: int) -> Array:
+	var out := []
 	for id in Defs.RESEARCH:
 		var r: Dictionary = Defs.RESEARCH[id]
 		if fac(faction).researched.has(id):
@@ -794,7 +1412,9 @@ func build_menu(faction: int) -> Array:
 		var lock := ""
 		if not has_building(faction, r["building"]):
 			lock = "Needs a %s." % Defs.building_name(r["building"]).to_lower()
-		out.append({"kind": "research", "id": id, "name": "Research " + r["name"].to_lower(), "cost": r["cost"],
+		elif fac(faction).age < int(r["age"]):
+			lock = "Needs the %s age." % Defs.AGES[r["age"]]
+		out.append({"kind": "research", "id": id, "name": r["name"], "cost": r["cost"],
 			"desc": r["desc"], "locked": lock, "missing": missing_cost(faction, r["cost"])})
 	return out
 
@@ -851,7 +1471,11 @@ func brief(faction: int, addressed: String, crew_id: int, individual: bool = fal
 			locked.append(row)
 	var crew_rows := []
 	for c in crews_of(faction):
-		crew_rows.append(crew_status(c))
+		if c.post < 0:      # a post's own jobs are summed up in its status
+			crew_rows.append(crew_status(c))
+	var post_rows := []
+	for p in posts_of(faction):
+		post_rows.append(post_status(p))
 	var known := {}
 	var camp = known_enemy_camp(faction)
 	if camp != null:
@@ -870,6 +1494,11 @@ func brief(faction: int, addressed: String, crew_id: int, individual: bool = fal
 	for g in f.gear:
 		if int(f.gear[g]) > 0:
 			gear[g] = int(f.gear[g])
+	var named := {}
+	var places := places_of(faction)
+	for key: String in places:
+		var away: Vector2 = places[key]["pos"] - home_pos(faction)
+		named[Defs.PLACE + key] = "%s, %d m %s of home" % [places[key]["name"], int(away.length()), Terrain.compass_name(away)]
 	var addressed_info := {"who": addressed, "individual": individual}
 	if selected > 0:
 		addressed_info["selected"] = selected
@@ -886,7 +1515,10 @@ func brief(faction: int, addressed: String, crew_id: int, individual: bool = fal
 		"food": {"state": Defs.FOOD_STATES[f.food_state], "stored": int(f.stock.get("food", 0)), "storage": f.food_cap,
 			"well_fed_needs": int(ceil(f.pop * Defs.WELL_FED_STOCK))},
 		"addressed": addressed_info,
+		"posts": post_rows,
+		"places": named,
 		"crews": crew_rows,
+		"unfinished": _unfinished_brief(faction),
 		"can_build": can_build,
 		"can_craft": can_craft,
 		"locked": locked,
