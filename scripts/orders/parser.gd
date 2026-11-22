@@ -41,6 +41,60 @@ const GATHER_WORDS := [
 	["food", "food:generic"], ["bronze", "bronze_ore"], ["iron", "iron_ore"], ["ore", "bronze_ore:generic"]]
 
 
+# Picking construction back up, matched against whole clauses so "finish gathering wood"
+# and "keep the wood coming" are left alone. {names} stands for BUILD_WORDS.
+const RESUME_LEAD := "^ (?:(?:please|now|ok|okay|you|can you|could you|i want you to|i need you to|let's|everyone|everybody|all of you|all hands|just|go|go and|,) )*(?:(?:send|take|have|get|use) (?:[a-z0-9]+ ){1,3}to )?"
+const RESUME_VERB := "(?:(?:continue|resume|restart|finish|finish off|complete|carry on)(?: with)?(?: (?:to build|building|constructing|(?:the )?construction (?:of|on)|(?:work|working) on(?! (?:the |that )?(?:farm|field))))?|(?:keep|keep on|keep at|help|help with|help to|join|get back to|go back to|return to|back to)(?: the)? (?:build|building|constructing|construction(?: of| on)?|finish|finishing))"
+const RESUME_WHAT := "(?: (?:the|that|this|those|these|your|our|a|an))?(?: (?:unfinished|half built|half finished))?(?: (?:{names}|construction|building|project|site|job|work|it|that|this|what you started|what you were building)(?:s|es)?)?"
+const RESUME_TAIL := "(?: (?:,|please|now|again|first|site|construction|where you left off|you started|you were building|you were working on))*(?: (?:near|by|next to|beside|outside|behind|over there|there|here)(?: [a-z']+){0,4})? $"
+const RESUME_BARE := "(?:build (?:it|this|that|again)|start building again|pick up where you left off|get back to work|go back to work|back to work)(?: (?:please|now))? $"
+# The start of a resume order with more to it than the parser knows.
+const RESUME_START := "(?:(?:continue|resume|finish|complete)(?: with)? (?:to build|building|constructing|construction|the|that)|(?:keep|keep on|back to|get back to) (?:building|constructing)) "
+const RESUME_MENTION := " (?:continue|resume|restart|finish|finish off|complete|carry on|back to|keep building|keep constructing) "
+const EXISTING := " (?:build|construct|put up|raise|erect|make|set up) (?:the|that|this|those|these) "
+const FRESH := " (?:new|another|second|extra) "
+
+static var _regexes := {}
+
+
+static func _matches(s: String, pattern: String) -> bool:
+	if not _regexes.has(pattern):
+		_regexes[pattern] = RegEx.create_from_string(pattern)
+	return _regexes[pattern].search(s) != null
+
+
+static func _resumes(p: String) -> bool:
+	var names: Array[String] = []
+	for pair in BUILD_WORDS:
+		names.append(pair[0])
+	var what := RESUME_WHAT.replace("{names}", "|".join(names))
+	return _matches(p, RESUME_LEAD + RESUME_VERB + what + RESUME_TAIL) or _matches(p, RESUME_LEAD + RESUME_BARE)
+
+
+## True when free text talks about carrying on and not about starting something new.
+static func mentions_resume(text: String) -> bool:
+	var s := normalize(text)
+	return _matches(s, RESUME_MENTION) and not _matches(s, FRESH)
+
+
+## Which standing sites the words fit. A plain "wall" or "gate" can be either material.
+static func _site_kind(p: String, build: String) -> String:
+	if build in ["palisade", "palisade_gate"]:
+		for word in ["palisade", "wood", "wooden", "stone"]:
+			if has_word(p, word):
+				return build
+		return "gate" if build == "palisade_gate" else "wall"
+	return build
+
+
+## Gathering keeps to a place only when the order points at one.
+static func _work_place(p: String) -> String:
+	if p.contains(" here ") or p.contains(" this spot ") or p.contains(" these "):
+		return "here"
+	var where := where_in(p)
+	return where if where == "marked" or where in DIRECTIONS.values() else ""
+
+
 static func normalize(text: String) -> String:
 	var s := text.to_lower().strip_edges()
 	for ch in ["!", "?", ".", "\"", "(", ")", ":"]:
@@ -186,7 +240,8 @@ const VERBS := ["gather", "collect", "chop", "cut", "harvest", "get", "fetch", "
 	"build", "construct", "make", "craft", "forge", "put", "raise", "erect", "set", "arm", "equip", "grab", "take", "scout",
 	"explore", "find", "look", "send", "attack", "charge", "raid", "assault", "kill", "guard", "defend", "protect", "hold",
 	"stay", "follow", "come", "fall", "retreat", "go", "return", "recall", "mount", "ride", "man", "crew", "tame", "catch",
-	"round", "bring", "smelt", "research", "study", "upgrade", "promote", "dismiss", "disband", "report", "status", "keep", "start", "stop"]
+	"round", "bring", "smelt", "research", "study", "upgrade", "promote", "dismiss", "disband", "report", "status", "keep", "start", "stop",
+	"continue", "resume", "finish"]
 
 
 static func _starts_with_verb(p: String) -> bool:
@@ -196,6 +251,15 @@ static func _starts_with_verb(p: String) -> bool:
 
 static func _parse_part(p: String, out: Dictionary):
 	var count := count_in(p)
+	# Resuming comes first: "finish the farm" isn't farm work.
+	var named := find_in(p, BUILD_WORDS)
+	if _resumes(p) and not _matches(p, FRESH):
+		var kind := _site_kind(p, named)
+		var again := _step("resume", "" if kind in ["wall", "gate"] else kind, 0, "", count)
+		again["match"] = kind
+		return again
+	if named != "" and _matches(p, RESUME_LEAD + RESUME_START):
+		return null
 	# Recall / follow / hold.
 	if p.contains("fall back") or p.contains("come back") or p.contains("go home") or p.contains("come home") or has_word(p, "retreat") or has_word(p, "recall") or p.contains("back to camp") or p.contains("return home") or p.contains("return to camp"):
 		return _step("recall", "", 0, "home")
@@ -253,7 +317,10 @@ static func _parse_part(p: String, out: Dictionary):
 			build = "stone_gate"
 		if build == "palisade" and has_word(p, "stone"):
 			build = "stone_wall"
-		return _step("build", build, 0, "", count)
+		var st := _step("build", build, 0, "", count)
+		if _matches(p, EXISTING) and not _matches(p, FRESH):
+			st["match"] = _site_kind(p, build)  # "build the hut" can mean the one already begun
+		return st
 	# Gathering.
 	var res := find_in(p, GATHER_WORDS)
 	var verbish := has_word(p, "gather") or has_word(p, "collect") or has_word(p, "chop") or has_word(p, "cut") or has_word(p, "harvest") or has_word(p, "get") or has_word(p, "fetch") or has_word(p, "mine") or has_word(p, "quarry") or has_word(p, "pick") or has_word(p, "hunt") or has_word(p, "farm") or p.contains("work the") or has_word(p, "keep") or p.contains("go for") or has_word(p, "bring")
@@ -272,7 +339,7 @@ static func _parse_part(p: String, out: Dictionary):
 					if cost.has(r):
 						amount = int(cost[r])
 					break
-		return _step("gather", res, amount, "", count)
+		return _step("gather", res, amount, _work_place(p), count)
 	if has_word(p, "hunt"):
 		return _step("gather", "hunt", 0, "", count)
 	if has_word(p, "farm") and not making:

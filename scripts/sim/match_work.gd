@@ -1,6 +1,12 @@
 extends "res://scripts/sim/match_base.gd"
 ## Crews, plans, work and the settlement economy.
 
+const HAUL_WEIGHT := 6.0     # a load is hauled many times, the first walk happens once
+const GATHER_RANGE := 260.0
+const MAX_SEARCHES_PER_TICK := 12
+const SEARCH_RETRY := 2.0    # seconds before looking again when there's nothing to gather
+
+var searches_this_tick := 0
 var claims := {}          # resource node id -> gatherers heading to it
 var birth_acc := [0.0, 0.0]
 var breed_acc := {}       # stable id -> progress
@@ -172,7 +178,10 @@ func start_plan(c: Crew, steps: Array) -> void:
 	_begin_step(c)
 
 
+## The rival drops its unstarted sites. A player's sites wait to be resumed.
 func _cancel_sites(c: Crew) -> void:
+	if not fac(c.faction).is_ai:
+		return
 	for s in c.steps:
 		for sid in s.get("sites", []):
 			var b := bld(sid)
@@ -271,6 +280,7 @@ func _begin_step(c: Crew) -> void:
 			c.done = true
 			return
 		c.start_size = c.members.size()
+		_remember_sites(c)
 		var err := _prepare_step(c, s)
 		if err == "":
 			for id in c.members:
@@ -283,6 +293,19 @@ func _begin_step(c: Crew) -> void:
 			post(0, "%s: %s" % [crew_label(c), err], "warn")
 		c.idx += 1
 	_finish_plan(c)
+
+
+## So people ordered away can be told to carry on with what they were building.
+func _remember_sites(c: Crew) -> void:
+	var sites := []
+	for s in c.steps:
+		sites.append_array(s.get("sites", []))
+	if sites.is_empty():
+		return
+	for id in c.members:
+		var u := unit(id)
+		if u:
+			u.last_sites = sites
 
 
 ## Checks a step can start and fills crew.state. Returns a problem or "".
@@ -304,16 +327,22 @@ func _prepare_step(c: Crew, s: Dictionary) -> String:
 					if subj in Defs.DEPOSITS:
 						return "we need a mine on a %s deposit first." % Defs.RESOURCE_NAMES[subj]
 					return "we need a %s first." % Defs.building_name(types[0]).to_lower()
-			var p = resolve_where(c, s.get("where", ""), 120.0)
+			var where: String = s.get("where", "")
+			var p = resolve_where(c, where, 120.0)
 			c.state["origin"] = p if p != null else crew_center(c)
+			c.state["named_place"] = where != "" and p != null
 		"build":
 			var sites: Array = s.get("sites", [])
 			var live := []
+			var finished := false
 			for sid in sites:
 				var b := bld(sid)
-				if b and not b.dead and not b.complete:
-					live.append(sid)
-			if live.is_empty():
+				if b and not b.dead:
+					if b.complete:
+						finished = true
+					else:
+						live.append(sid)
+			if live.is_empty() and not finished:  # if others finished it, the step is simply done
 				return "there's no site placed for the %s." % Defs.building_name(subj).to_lower()
 			c.state["sites"] = live
 		"upgrade":
@@ -785,10 +814,7 @@ func _ring(u: Unit, r: float) -> Vector2:
 
 func _do_idle(u: Unit, dt: float) -> void:
 	if u.carry > 0.0:
-		var dp := nearest_dropoff(u.faction, u.pos, u.carry_res)
-		if dp and go_to_building(u, dp, dt):
-			add_stock(u.faction, u.carry_res, u.carry)
-			u.carry = 0.0
+		_unload(u, dt)
 		return
 	var home := home_pos(u.faction)
 	if u.siege >= 0:
@@ -805,6 +831,16 @@ func _do_idle(u: Unit, dt: float) -> void:
 	if u.phase == "stroll":
 		if move_to(u, u.goal, dt, 0.8):
 			u.phase = ""
+
+
+## Carries what's in hand to a drop-off. True once it's in the stores.
+func _unload(u: Unit, dt: float) -> bool:
+	var dp := nearest_dropoff(u.faction, u.pos, u.carry_res)
+	if dp == null or not go_to_building(u, dp, dt):
+		return false
+	add_stock(u.faction, u.carry_res, u.carry)
+	u.carry = 0.0
+	return true
 
 
 func _do_gather(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
@@ -846,9 +882,14 @@ func _do_gather(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
 		u.phase = "haul"
 	match u.phase:
 		"", "find":
-			var origin: Vector2 = c.state.get("origin", u.pos)
-			var limit := 3 if g["node"] != "tree" else 2
-			var n = nearest_node(g["node"], origin, 260.0, func(nd): return int(claims.get(nd.id, 0)) < limit and (g["node"] != "rock" or true))
+			_release_claim(u)
+			if u.carry >= float(g["carry"]):
+				u.phase = "haul"  # a fresh order doesn't send a full load back to the tree
+				return
+			if searches_this_tick >= MAX_SEARCHES_PER_TICK:
+				u.anim = Anim.IDLE  # a big crew picks its spots over a few ticks
+				return
+			var n = _pick_node(u, c, g)
 			if n == null:
 				if c.faction == 0 and not c.state.get("warned", false):
 					post(0, "%s: there's no more %s nearby." % [crew_label(c), g["name"]], "warn")
@@ -868,7 +909,17 @@ func _do_gather(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
 			var reach: float = 1.6 + n.scale * (1.2 if n.kind == "rock" and n.sub == "outcrop" else 0.6)
 			if n.kind == "berry":
 				reach = 0.2 + n.scale * 1.4  # right up against the leaves
-			if move_to(u, n.pos, dt, reach):
+			var stand: Vector2 = n.pos
+			var cell := cell_of(n.pos)
+			if solid_for(u.faction, cell):
+				# Hard against a building: work from the nearest open ground.
+				var open := nearest_free_cell(u.faction, cell, 2)
+				if open == cell:
+					u.phase = "find"
+					return
+				stand = cell_center(open)
+				reach = 0.5
+			if move_to(u, stand, dt, reach):
 				u.phase = "work"
 		"work":
 			var n = terrain.nodes[u.tgt_node] if u.tgt_node >= 0 else null
@@ -899,6 +950,42 @@ func _do_gather(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
 				u.carry = 0.0
 				u.carry_res = ""
 				u.phase = "find"
+
+
+## The resource to work next. With no place named, the one with the shortest haul to a
+## drop-off wins unless it's a long walk away. A named place is always respected.
+func _pick_node(u: Unit, c: Crew, g: Dictionary):
+	if t < float(c.state.get("none_until", 0.0)):
+		return null  # a crewmate just looked and found nothing
+	searches_this_tick += 1
+	var kind: String = g["node"]
+	var limit := 2 if kind == "tree" else 3
+	var usable := func(nd) -> bool:
+		if int(claims.get(nd.id, 0)) >= limit:
+			return false
+		var cell := cell_of(nd.pos)
+		return not solid_for(u.faction, cell) or nearest_free_cell(u.faction, cell, 2) != cell
+	var best = null
+	var best_cost := INF
+	if not c.state.get("named_place", false):
+		for drop: Building in dropoffs(u.faction, g["resource"]):
+			var search := GATHER_RANGE
+			if best != null:  # no need to look where nothing could beat the best so far
+				search = minf(search, (best_cost - drop.pos.distance_to(u.pos)) / (HAUL_WEIGHT - 1.0))
+				if search <= 0.0:
+					continue
+			var n = nearest_node(kind, drop.pos, search, usable)
+			if n == null:
+				continue
+			var cost: float = n.pos.distance_to(drop.pos) * HAUL_WEIGHT + n.pos.distance_to(u.pos)
+			if cost < best_cost:
+				best_cost = cost
+				best = n
+	if best == null:
+		best = nearest_node(kind, c.state.get("origin", u.pos), GATHER_RANGE, usable)
+	if best == null:
+		c.state["none_until"] = t + SEARCH_RETRY
+	return best
 
 
 func _work_building(u: Unit, type: String, subj: String) -> Building:
@@ -1018,6 +1105,10 @@ func _do_build(u: Unit, c: Crew, dt: float) -> void:
 			return
 		u.tgt_bld = b.id
 		u.phase = "go"
+	if u.phase == "unload":
+		if _unload(u, dt):
+			u.phase = "go"
+		return
 	if u.phase == "go":
 		var reach := b.size.length() * 0.5 + 1.0
 		if go_to_building(u, b, dt):
@@ -1027,6 +1118,9 @@ func _do_build(u: Unit, c: Crew, dt: float) -> void:
 	if not b.paid:
 		var cost: Dictionary = Defs.BUILDINGS[b.type]["cost"]
 		if not pay(b.faction, cost):
+			if u.carry > 0.0 and cost.has(u.carry_res):
+				u.phase = "unload"
+				return
 			u.anim = Anim.IDLE
 			if b.faction == 0 and t - b.waiting_msg_t > 25.0:
 				b.waiting_msg_t = t

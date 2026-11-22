@@ -67,6 +67,7 @@ build a hut · build a palisade · make 32 arrows · arm 6 with spears · to arm
 send two scouts east · scout their camp · attack their camp · guard the mark · follow me · hold
 tame 3 horses · mount up · smelt bronze · upgrade the armory · research gunpowder · man the cannon
 promote · dismiss · status · cancel
+continue construction · finish the wall · gather wood here
 ```
 
 Walls are placed post to post: choose a palisade or stone wall, click each post, press Enter to finish.
@@ -77,7 +78,7 @@ In **Settings → Terra connection**, choose **ChatGPT plan → Continue with Ch
 
 You can also choose **OpenAI API key** and paste your own key into the game. This option uses your OpenAI API balance. Choose **Off** to keep orders local.
 
-MarchHold keeps account credentials encrypted on your PC. When you submit a free-form order or question, the game sends the text, recent Terra dialogue and relevant game state to OpenAI. Terra answers questions and uses the village's situation to fill in details you leave open. The game checks orders as soon as Terra returns them. For construction, you choose every building site and set each wall's posts before the crew starts the order. Settings includes a separate per-match request limit (default 120).
+MarchHold keeps account credentials encrypted on your PC. When you submit a free-form order or question, the game sends the text, recent Terra dialogue and relevant game state to OpenAI. Terra answers questions and uses the village's situation to fill in details you leave open. The game checks orders as soon as Terra returns them. For new construction, you choose every building site and set each wall's posts before the crew starts the order. Settings includes a separate per-match request limit (default 120).
 
 ## How the game works
 
