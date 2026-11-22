@@ -6,8 +6,8 @@ const Defs = preload("res://scripts/data/defs.gd")
 const AGE_TIPS := [
 	"",
 	"Stone age: stone walls, towers, stables and mines are open. Try /b v for advanced structures.",
-	"Bronze age: upgrade the armory to bronze for swords, pikes, lances and armor. Then upgrade the smelter to an iron furnace.",
-	"Iron age: upgrade the armory to iron, and build a university to research gunpowder.",
+	"Bronze age: press /r to research the bronze armory for swords, pikes, lances and armor. Every armory improves at once. Then upgrade the smelter to an iron furnace.",
+	"Iron age: research the iron armory (/r), and build a university to research gunpowder.",
 	"Gunpowder: the iron armory can now cast cannons and shot. 'man the cannon' then 'attack their camp'.",
 ]
 

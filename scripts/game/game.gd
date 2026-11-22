@@ -29,7 +29,7 @@ const SLASH_ALIASES := {
 	"map": "m", "tech": "t", "help": "h", "?": "h", "stop": "cancel",
 }
 const CHAT_HINTS := {
-	"r": ["Research · /r", "Press Enter to browse research. The stable and university each teach their own."],
+	"r": ["Research · /r", "Press Enter to browse research. The armory, stable and university each teach their own. It runs by itself, with no villagers."],
 	"l": ["Ledger · /l", "Press Enter to see supplies, food, housing and crew status."],
 	"p": ["People and crews · /p", "Press Enter to list crews. Type [b]@Name[/b] to address one."],
 	"s": ["Scout reports · /s", "Press Enter to read reports. To send a scout, type [b]send a scout east[/b]."],
@@ -1693,7 +1693,7 @@ func _menu_help() -> void:
    gather wood · gather 30 wood then build a hut · pick berries · work the farms · hunt
    build a hut · build a palisade · continue construction · finish the wall · make 32 arrows · arm 6 with spears · to arms! · fall back · back to work
    send two scouts east · scout their camp · attack their camp · guard the mark · follow me · hold
-   tame 3 horses · mount up · smelt bronze · upgrade the armory · research gunpowder · man the cannon
+   tame 3 horses · mount up · smelt bronze · research the bronze armory · research gunpowder · man the cannon
    promote (makes a captain) · dismiss · status · then chains steps
    Name, run the village · take twenty and run a mine here · set up a garrison at the mark · raise an army
    call this East Hill names the spot you just marked (R), or where you stand. Then: hold East Hill

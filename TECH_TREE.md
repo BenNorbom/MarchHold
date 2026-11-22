@@ -62,14 +62,14 @@ flowchart TB
   stable --> mounted
   quarry --> mine --> ores --> smelter1
   smelter1 -->|"bronze"| armory2 --> b_items
-  armory1 -.->|upgrade| armory2
+  armory1 -.->|"research (/r)"| armory2
   smelter1 -.->|upgrade| smelter2
   smelter2 -->|"iron"| armory3 --> i_items
-  armory2 -.->|upgrade| armory3
+  armory2 -.->|"research (/r)"| armory3
   armory3 --> univ --> research --> cannon
 ```
 
-Red buildings are the ones that open the next age. Dotted arrows are upgrades in place.
+Red buildings are the ones that open the next age. Dotted arrows are upgrades in place. The armory tiers are research: finishing one upgrades every armory at once, and research runs by itself with no villagers.
 
 ## Resources
 

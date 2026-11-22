@@ -58,7 +58,7 @@ Slash commands work instantly and never need Terra:
 | `/l` | Ledger: stores, people, food, housing, crews |
 | `/p` | People and crews |
 | `/s` | Scout reports, newest first |
-| `/r` | Research menu: mounted archery (stable) and gunpowder (university). `/r gunpowder` starts one directly |
+| `/r` | Research menu: bronze and iron armory (armory), mounted archery (stable) and gunpowder (university). `/r gunpowder` starts one directly. Research is paid up front and runs by itself, with no villagers |
 | `/m` | Field map |
 | `/t` | Tech tree |
 | `/h` | Help |
@@ -69,7 +69,7 @@ Orders the game understands without Terra, for example:
 gather wood · gather 30 wood then build a hut · pick berries · work the farms · hunt
 build a hut · build a palisade · make 32 arrows · arm 6 with spears · to arms! · fall back
 send two scouts east · scout their camp · attack their camp · guard the mark · follow me · hold
-tame 3 horses · mount up · smelt bronze · upgrade the armory · research gunpowder · man the cannon
+tame 3 horses · mount up · smelt bronze · research the bronze armory · research gunpowder · man the cannon
 promote · dismiss · status · cancel
 continue construction · finish the wall · gather wood here · back to work
 ```
@@ -81,7 +81,7 @@ A typed hotkey runs when you press Enter. After pressing B or C, or entering a b
 | | Keys |
 |---|---|
 | `/b b` Basic structures | **H** hut · **F** farm · **S** stockpile · **A** armory · **P** palisade · **G** palisade gate · **W** watch post · **Q** quarry |
-| `/b v` Advanced structures | **W** stone wall · **G** stone gate · **T** tower · **H** stable · **M** mine · **S** smelter · **U** university · **A** upgrade armory · **F** iron furnace · **R** gunpowder |
+| `/b v` Advanced structures | **W** stone wall · **G** stone gate · **T** tower · **H** stable · **M** mine · **S** smelter · **U** university · **F** iron furnace · **R** gunpowder |
 | `/c b` Basic weapons | **W** wooden spear · **D** wooden shield · **B** bow · **A** arrows · **R** ram · bronze: **E** spear, **S** sword, **H** shield, **M** armor, **P** pike, **L** lance |
 | `/c v` Advanced weapons | iron: **E** spear, **S** sword, **H** shield, **M** armor, **P** pike, **L** lance · **C** cannon · **T** cannon shot |
 
@@ -100,7 +100,7 @@ MarchHold keeps account credentials encrypted on your PC. When you submit a free
 ## How the game works
 
 - **Growth.** Villagers are born when the village is *fed* (1 food stored per person, 75% of the birth rate) or *well fed* (3 food per person, full rate) and there's free housing. Births keep building up while housing is full (up to half a birth per adult), so a new hut or a death is filled at once. The campfire houses 8 and each hut 6, up to 200 people. The campfire stores 150 food and each stockpile 50 more.
-- **Ages.** Wood (start) → Stone (build a quarry by a rock outcrop) → Bronze (smelt bronze from bronze ore and coal) → Iron (upgrade the smelter to an iron furnace) → Gunpowder (university research). The armory upgrades in place from wood to bronze to iron.
+- **Ages.** Wood (start) → Stone (build a quarry by a rock outcrop) → Bronze (smelt bronze from bronze ore and coal) → Iron (upgrade the smelter to an iron furnace) → Gunpowder (university research). Researching the bronze and then the iron armory (`/r`) upgrades every armory at once, including ones built later.
 - **Scouting.** You only know what you've seen. Scouts report when they return, and if they die, what they saw dies with them. Watch posts and towers ring the alarm when enemies appear.
 - **Combat.** Pikes beat cavalry. Cavalry runs down archers. Shields and armor blunt arrows. Sword and shield beat pikes up close. A raised shield protects you from blows and arrows from the front. Blocking costs stamina, and a well-timed parry staggers the attacker. Cannons smash walls but scatter in the open, reload slowly and need a crew of three. Horses pull cannons faster.
 

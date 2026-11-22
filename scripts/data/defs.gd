@@ -105,21 +105,29 @@ const BUILDINGS := {
 		"workers": 5, "near": "deposit", "near_dist": 22.0, "desc": "Placed on a bronze ore, coal or iron ore deposit."},
 	"smelter": {"name": "Smelter", "age": 1, "cost": {"stone": 125, "wood": 50}, "work": 100, "hp": 320,
 		"size": Vector2(6, 6), "workers": 3, "desc": "Bronze ore + coal -> bronze. Upgrades to an iron furnace."},
+	# Built in the field by villagers. When finished the site turns into a free battering ram (needs a crew, see "man").
+	# needs: research required first. becomes: the engine it turns into.
+	# keeps_arms: builders do NOT have to put their weapons down for this. See MERGE_NOTES.md: the stow-gear branch must honour it.
+	"ram": {"name": "Battering ram", "age": 2, "needs": "armory_bronze", "cost": {"wood": 40, "bronze": 5}, "work": 60,
+		"hp": 150, "size": Vector2(3, 6.5), "becomes": "ram", "keeps_arms": true,
+		"desc": "Villagers build a ram in the field. Needs the bronze armory."},
 	"university": {"name": "University", "age": 3, "cost": {"stone": 300, "wood": 200, "iron": 50}, "work": 200,
 		"hp": 650, "size": Vector2(12, 9), "desc": "Researches gunpowder."},
 }
 
 # Upgrades happen in place. tier is the building's tier after the upgrade.
 const UPGRADES := {
-	"armory_bronze": {"name": "Bronze armory", "building": "armory", "from": 0, "tier": 1, "age": 2,
-		"cost": {"wood": 75, "bronze": 65}, "work": 90, "desc": "Bronze spears, swords, shields, armor, pikes, lances, rams."},
-	"armory_iron": {"name": "Iron armory", "building": "armory", "from": 1, "tier": 2, "age": 3,
-		"cost": {"stone": 100, "iron": 75}, "work": 120, "desc": "Iron gear. With gunpowder: cannons and shot."},
 	"iron_furnace": {"name": "Iron furnace", "building": "smelter", "from": 0, "tier": 1, "age": 2,
 		"cost": {"stone": 150, "bronze": 50}, "work": 120, "opens_age": 3, "desc": "Smelts iron. Opens the Iron age."},
 }
 
+# Research runs by itself inside its building once paid for: nobody has to work on it.
+# armory_tier: every armory (and every one built later) becomes this tier. requires: research needed first.
 const RESEARCH := {
+	"armory_bronze": {"name": "Bronze armory", "building": "armory", "age": 2, "cost": {"wood": 75, "bronze": 65},
+		"time": 90.0, "armory_tier": 1, "desc": "All armories make bronze spears, swords, shields, armor, pikes, lances and rams."},
+	"armory_iron": {"name": "Iron armory", "building": "armory", "age": 3, "cost": {"stone": 100, "iron": 75},
+		"time": 120.0, "armory_tier": 2, "requires": "armory_bronze", "desc": "All armories make iron gear. With gunpowder: cannons and shot."},
 	"mounted_archery": {"name": "Mounted archery", "building": "stable", "age": 1, "cost": {"food": 60, "wood": 50},
 		"time": 60.0, "desc": "Riders can shoot their bows from the saddle."},
 	"gunpowder": {"name": "Gunpowder", "building": "university", "age": 3, "cost": {"food": 100, "coal": 40, "iron": 20},
@@ -242,8 +250,8 @@ const HOTKEYS := {
 			"p": "build:palisade", "g": "build:palisade_gate", "w": "build:watch_post", "q": "build:quarry"}},
 		"v": {"name": "Advanced structures", "keys": {
 			"w": "build:stone_wall", "g": "build:stone_gate", "t": "build:tower", "h": "build:stable", "m": "build:mine",
-			"s": "build:smelter", "u": "build:university",
-			"a": "upgrade:armory", "f": "upgrade:smelter", "r": "research:gunpowder"}},
+			"s": "build:smelter", "u": "build:university", "b": "build:ram",
+			"f": "upgrade:smelter", "r": "research:gunpowder"}},
 	},
 	"c": {
 		"b": {"name": "Basic weapons", "keys": {
@@ -502,7 +510,7 @@ static func describe_step(s: Dictionary) -> String:
 		"smelt":
 			txt = ("smelt %d %s" % [amount, subj]) if amount > 0 else ("keep smelting " + subj)
 		"research":
-			txt = "research " + subj
+			txt = "research " + RESEARCH.get(subj, {}).get("name", subj).to_lower()
 		"tame":
 			txt = ("bring in %d wild horses" % amount) if amount > 0 else "keep bringing in wild horses"
 		"scout":

@@ -417,6 +417,10 @@ static func _parse_part(p: String, out: Dictionary):
 	if has_word(p, "research") or has_word(p, "study") or p.contains("learn gunpowder"):
 		if p.contains("archery") or p.contains("mounted") or p.contains("horse archer"):
 			return _step("research", "mounted_archery")
+		if has_word(p, "armory") or has_word(p, "armoury"):
+			return _step("research", "armory_iron" if has_word(p, "iron") else "armory_bronze")
+		if has_word(p, "bronze") or has_word(p, "iron"):
+			return null
 		return _step("research", "gunpowder") if p.contains("gunpowder") or p.contains("powder") else null
 	if has_word(p, "upgrade") or p.contains("improve the"):
 		if has_word(p, "armory") or has_word(p, "armoury"):
@@ -443,6 +447,8 @@ static func _parse_part(p: String, out: Dictionary):
 	var build := find_in(p, BUILD_WORDS)
 	var item2 := find_in(p, ITEM_WORDS)
 	var making := has_word(p, "make") or has_word(p, "craft") or has_word(p, "forge") or has_word(p, "cast") or has_word(p, "build") or has_word(p, "produce")
+	if item2 == "ram" and build == "" and has_word(p, "build") and not (has_word(p, "make") or has_word(p, "craft") or has_word(p, "produce")):
+		return _step("build", "ram", 0, "", count)    # built in the field by villagers; "make a ram" is the armory's
 	if making and item2 != "" and (build == "" or p.find(item2.split("_")[0]) < p.find(build.split("_")[0])):
 		return _step("craft", item2, number_in(p), "", count)
 	if build != "" and (making or has_word(p, "construct") or p.contains("put up") or has_word(p, "raise") or has_word(p, "erect") or p.contains("set up") or p.strip_edges().begins_with("a ")):
