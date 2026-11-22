@@ -384,11 +384,9 @@ func first_step_problem(faction: int, s: Dictionary) -> String:
 				why = "there's no site placed for the %s." % Defs.building_name(subj).to_lower()
 		"scout", "guard", "hold", "attack":
 			var where: String = s.get("where", "")
-			var needs_enemy_camp: bool = (where == "enemy" and s["action"] != "scout") or (where == "" and s["action"] == "attack")
+			# An unseen enemy camp is no reason to refuse: attack marches to the best guess.
 			if where == "marked" and not fac(faction).has_mark:
 				why = "mark a spot first (look at the ground and press R)."
-			elif needs_enemy_camp and known_enemy_camp(faction) == null:
-				why = "we don't know where their camp is. Scout first."
 		"gather":
 			var g: Dictionary = Defs.GATHER[subj]
 			if g.has("building") and not g.has("node"):
@@ -452,6 +450,31 @@ func orderable_unit(faction: int, id: int) -> Unit:
 	if u and not u.dead and u.kind == "villager" and u.faction == faction and not u.child:
 		return u
 	return null
+
+
+## The villagers an address means: a selection, one person, a crew, or a post's members.
+func people_in(faction: int, req: Dictionary) -> Array:
+	var out := []
+	var ids := []
+	if req.has("units"):
+		ids = req["units"]
+	elif req.has("post"):
+		var p: Post = posts.get(int(req["post"]))
+		if p and p.faction == faction:
+			ids = p.members
+	elif req.get("individual", false) and req.has("unit"):
+		ids = [req["unit"]]
+	elif req.has("crew") or req.has("unit"):
+		var c := _addressed_crew(faction, req)
+		if c:
+			ids = c.members
+		elif req.has("unit"):
+			ids = [req["unit"]]
+	for id in ids:
+		var u := orderable_unit(faction, int(id))
+		if u and not out.has(u):
+			out.append(u)
+	return out
 
 
 func _addressed_crew(faction: int, req: Dictionary) -> Crew:
@@ -779,6 +802,11 @@ func settle(faction: int, req: Dictionary, steps: Array) -> Dictionary:
 		if p == null:
 			return {"ok": false, "error": "Say which captain: look at them, or start with their name."}
 		match s["action"]:
+			"assign":
+				var added := assign_to_post(p, subj, int(s["count"]))
+				if added == 0:
+					return {"ok": false, "error": "%s: there's nobody %s to take on." % [post_label(p), "free" if subj == "" else "on " + str(Defs.GATHER[subj]["name"])]}
+				post(faction, "%d joined %s. They'll take up whatever work is short." % [added, post_label(p)], "info")
 			"forbid":
 				p.forbid[subj] = true
 			"allow":
@@ -814,6 +842,23 @@ func command(faction: int, req: Dictionary) -> Dictionary:
 		var e2 := step_problem(faction, s)
 		if e2 != "":
 			return {"ok": false, "error": e2}
+	if steps[0]["action"] == "free":
+		# "Take 2 off wood" happens at once; what follows (put them on stone) goes to exactly those people.
+		var source: String = steps[0]["subject"]
+		var rest := steps.slice(1)
+		if not rest.is_empty():
+			var why := first_step_problem(faction, rest[0])
+			if why != "":
+				return {"ok": false, "error": why}
+		var freed := free_workers(faction, source, int(steps[0]["count"]))
+		var from_what := "their work" if source == "" else "gathering " + str(Defs.GATHER[source]["name"])
+		if freed.is_empty():
+			return {"ok": false, "error": "Nobody is %s." % ("working" if source == "" else from_what)}
+		post(faction, "%d taken off %s." % [freed.size(), from_what.trim_prefix("gathering ")], "info")
+		if rest.is_empty():
+			return {"ok": true, "crews": []}
+		steps = rest
+		req = {"units": freed.map(func(u): return u.id)}
 	if steps[0]["action"] in Defs.SETTINGS:
 		return settle(faction, req, steps)
 	var laid: Array = []
@@ -1494,12 +1539,22 @@ func brief(faction: int, addressed: String, crew_id: int, individual: bool = fal
 	for p in posts_of(faction):
 		post_rows.append(post_status(p))
 	var known := {}
-	var camp = known_enemy_camp(faction)
-	if camp != null:
-		var d := int((camp as Vector2).distance_to(home_pos(faction)))
-		known["enemy_camp"] = "%d m %s of home" % [d, Terrain.compass_name((camp as Vector2) - home_pos(faction))]
-	else:
-		known["enemy_camp"] = "unknown (send a scout)"
+	var ground := enemy_ground(faction)
+	var camp: Vector2 = ground["pos"]
+	var camp_off := camp - home_pos(faction)
+	known["enemy_camp"] = "%d m %s of home%s" % [int(camp_off.length()), Terrain.compass_name(camp_off), "" if ground["sure"] else " (best guess, not yet seen; attack still works and troops will find it)"]
+	var sighted := []
+	for k in f.intel:
+		var e: Dictionary = f.intel[k]
+		if e.get("kind", "") == "building" and int(e.get("faction", -1)) not in [-1, faction] and t - float(e["t"]) < 120.0:
+			sighted.append("%s %d m %s of home" % [Defs.building_name(e["type"]).to_lower(), int((e["pos"] - home_pos(faction)).length()), Terrain.compass_name(e["pos"] - home_pos(faction))])
+	if not sighted.is_empty():
+		known["enemy_buildings_seen"] = sighted.slice(0, 6)
+	var workers := {"idle": idle_adults(faction, home_pos(faction)).size()}
+	for u: Unit in gatherers_of(faction, ""):
+		var task: Dictionary = crew_of(u).steps[crew_of(u).idx]
+		workers[task["subject"]] = int(workers.get(task["subject"], 0)) + 1
+	known["workers"] = workers
 	var reports := []
 	for r in f.reports.slice(0, 3):
 		reports.append("%s (%d s ago)" % [r["text"], int(t - float(r["t"]))])

@@ -32,7 +32,7 @@ func _initialize() -> void:
 
 func _run_tests() -> void:
 	var only := OS.get_environment("MH_TEST")
-	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "births", "crews", "selection", "walls", "combat", "research", "shield", "parser", "schema", "chatgpt", "terra_orders", "hotkeys", "removed_buildings", "rings", "settlements", "path_queue", "rivals", "menu", "gathering", "construction", "back_to_work", "back_to_work_returns_gear", "ram_keeps_arms", "delegation", "posts", "post_orders", "places", "mandate_building", "threats", "post_review", "towers", "stables_militia", "duel"]
+	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "births", "crews", "selection", "walls", "attack_hunts_people", "combat", "research", "shield", "parser", "schema", "chatgpt", "terra_orders", "hotkeys", "removed_buildings", "rings", "settlements", "path_queue", "rivals", "menu", "gathering", "construction", "back_to_work", "back_to_work_returns_gear", "ram_keeps_arms", "delegation", "order_moves", "posts", "post_orders", "places", "mandate_building", "threats", "post_review", "towers", "stables_militia", "duel"]
 	if only == "absence":
 		tests.append(only)
 	var t0 := Time.get_ticks_msec()
@@ -598,6 +598,99 @@ func grown_village(m, size: int) -> Array:
 	m.fac(0).stock["food"] = 140.0
 	m._refresh_counts(m.fac(0))
 	return m.idle_adults(0, home)
+
+
+func test_order_moves() -> void:
+	var r: Dictionary = Parser.parse("take 2 people off wood and put them on stone")
+	check(r["ok"] and r["steps"].size() == 2 and r["steps"][0]["action"] == "free" and r["steps"][0]["subject"] == "wood"
+		and r["steps"][0]["count"] == 2 and r["steps"][1]["action"] == "gather" and r["steps"][1]["subject"] == "stone",
+		"take 2 off wood, put them on stone (%s)" % str(r["steps"]))
+	r = Parser.parse("move 3 villagers from stone to wood")
+	check(r["ok"] and r["steps"][0]["action"] == "free" and r["steps"][0]["subject"] == "stone" and r["steps"][0]["count"] == 3
+		and r["steps"][1]["subject"] == "wood", "move 3 from stone to wood (%s)" % str(r["steps"]))
+	r = Parser.parse("switch everyone off berries onto wood")
+	check(r["ok"] and r["steps"][0]["subject"] == "berries" and r["steps"][0]["count"] == 0 and r["steps"][1]["subject"] == "wood", "everyone off berries onto wood")
+	r = Parser.parse("put 2 on stone")
+	check(r["ok"] and r["steps"].size() == 1 and r["steps"][0]["action"] == "gather", "a plain 'put 2 on stone' is still one gather")
+	check(r["steps"][0]["count"] == 2 and r["steps"][0]["amount"] == 0 and r["steps"][0]["subject"] == "stone", "'put 2 on stone' means two people (%s)" % str(r["steps"]))
+	r = Parser.parse("gather 10 stone then gather wood")
+	check(r["ok"] and not r["steps"].any(func(s): return s["action"] == "free"), "two jobs in a row are not a move")
+	var g: Dictionary = Parser.assign_in("add 3 villagers to Captain Hal")
+	check(g.get("count") == 3 and g.get("name") == "hal" and g.get("subject") == "", "add 3 villagers to Captain Hal (%s)" % str(g))
+	g = Parser.assign_in("give Hal two more men")
+	check(g.get("count") == 2 and g.get("name") == "hal", "give Hal two more men (%s)" % str(g))
+	g = Parser.assign_in("send 4 people from wood to Captain Hal")
+	check(g.get("count") == 4 and g.get("subject") == "wood" and g.get("name") == "hal", "send people from wood to a captain (%s)" % str(g))
+	g = Parser.assign_in("reinforce Hal")
+	check(g.get("name") == "hal", "reinforce Hal (%s)" % str(g))
+	check(Parser.assign_in("gather wood").is_empty() and Parser.assign_in("give Hal a spear").is_empty(), "other orders are not 'add people to a captain'")
+
+	# Moving workers takes exactly those people off the named work.
+	var m = new_match(515)
+	var adults: Array = grown_village(m, 12)
+	var four: Array = adults.slice(0, 4)
+	var ids := four.map(func(u): return u.id)
+	r = m.command(0, {"units": ids, "steps": [step("gather", "wood")]})
+	check(r["ok"], "a wood crew is started: %s" % r.get("error", ""))
+	var wood_crew = m.crew_of(four[0])
+	r = m.command(0, {"steps": [step("free", "wood", 0, "", 2), step("gather", "stone")]})
+	check(r["ok"] and not r["crews"].is_empty(), "taking 2 off wood and putting them on stone works: %s" % r.get("error", ""))
+	var stone_crew = m.crews.get(r["crews"][0]) if r["ok"] and not r["crews"].is_empty() else null
+	check(wood_crew.members.size() == 2, "two are left on wood (%d)" % wood_crew.members.size())
+	check(stone_crew != null and stone_crew.members.size() == 2 and stone_crew.members.all(func(id): return ids.has(id)), "exactly two of the wood gatherers are now on stone")
+	check(m.command(0, {"steps": [step("free", "farm", 1), step("gather", "wood")]})["ok"] == false, "nobody to take off farming is an honest refusal")
+
+	# A captain can be given more people, and they take up the captain's work.
+	var m2 = new_match(414)
+	var people: Array = grown_village(m2, 30)
+	m2.command(0, {"unit": people[0].id, "individual": true, "steps": [step("mandate", "village")]})
+	run(m2, 8.0)
+	var rr: Dictionary = m2.command(0, {"unit": people[1].id, "individual": true, "steps": [step("mandate", "industry", 0, "home", 4)]})
+	check(rr["ok"], "an industry captain is named: %s" % rr.get("error", ""))
+	if not rr["ok"]:
+		return
+	var works = m2.posts[rr["post"]]
+	var before: int = works.members.size()
+	var got: Dictionary = m2.command(0, {"post": works.id, "steps": [step("assign", "", 0, "", 3)]})
+	check(got["ok"], "three more people are added to the captain: %s" % got.get("error", ""))
+	check(works.members.size() == before + 3 and works.target >= works.members.size(), "they join the post (%d -> %d, target %d)" % [before, works.members.size(), works.target])
+	run(m2, 6.0)
+	check(works.members.size() >= before + 3, "the village doesn't take them back (%d)" % works.members.size())
+	var busy := 0
+	for u in m2.post_members(works):
+		var c = m2.crew_of(u)
+		if c and c.post == works.id:
+			busy += 1
+	check(busy >= 1 or works.members.size() >= 4, "the captain puts them to work (%d busy)" % busy)
+
+	# The same things typed in the chat box.
+	var game = chat_game(m2)
+	var captain_unit = m2.unit(works.captain)
+	var count_before: int = works.members.size()
+	game._on_chat("add 2 villagers to Captain %s" % captain_unit.name)
+	check(works.members.size() == count_before + 2, "typing 'add 2 villagers to Captain X' adds them (%d -> %d)" % [count_before, works.members.size()])
+	var plain: Array = m2.idle_adults(0, m2.home_pos(0)).filter(func(u): return u.post != works.id)
+	var joiner = plain[0] if not plain.is_empty() else m2.post_members(m2.posts.values().filter(func(p): return p.id != works.id)[0])[1]
+	game.addressee = {"unit": joiner.id, "individual": true}
+	game.address_label = joiner.name
+	game._on_chat("join @%s" % captain_unit.name)
+	check(joiner.post == works.id, "'join @Captain' puts someone under the captain (post %d)" % joiner.post)
+	game.addressee = {}
+	var crew_owner = new_match(77)
+	var crew_game = chat_game(crew_owner)
+	var cw: Array = crew_owner.idle_adults(0, crew_owner.home_pos(0))
+	crew_owner.command(0, {"units": cw.slice(0, 4).map(func(u): return u.id), "steps": [step("gather", "wood")]})
+	crew_game._on_chat("take 2 people off wood and put them on stone")
+	var on_stone := 0
+	var on_wood := 0
+	for u in cw:
+		var uc = crew_owner.crew_of(u)
+		if uc and uc.idx < uc.steps.size():
+			if uc.steps[uc.idx]["subject"] == "stone":
+				on_stone += 1
+			elif uc.steps[uc.idx]["subject"] == "wood":
+				on_wood += 1
+	check(on_stone == 2 and on_wood == 2, "typed in chat, two move from wood to stone (%d stone, %d wood)" % [on_stone, on_wood])
 
 
 func test_posts() -> void:
@@ -1260,6 +1353,49 @@ func test_walls() -> void:
 		check(m.solid_for(1, c), "palisade blocks the enemy")
 
 
+func test_attack_hunts_people() -> void:
+	# Attackers beside a building go for an enemy villager they can see, not the building.
+	var m = new_match(21)
+	var hut = m.add_building(1, "hut", m.home_pos(0) + Vector2(150, 0), 0.0, true)
+	var squad := []
+	for k in 3:
+		var a = m.spawn_unit(0, "villager", hut.pos + Vector2(-8, k * 2.0))
+		a.weapon = "wood_spear"
+		squad.append(a)
+	var c = m.make_crew(0, squad)
+	c.steps = [step("attack", "", 0, "enemy")]
+	c.state = {"target": hut.pos, "foe": 1}
+	c.idx = 0
+	for a in squad:
+		m._set_task(a, "attack")
+		a.enemy_bld = hut.id
+	var runner = m.spawn_unit(1, "villager", squad[0].pos + Vector2(-50, 0))
+	runner.name = "Runner"
+	m.rebuild_unit_hash()
+	run(m, 1.5)
+	check(squad.any(func(a): return a.enemy == runner.id), "attackers go after the villager they can see (%s)" % str(squad.map(func(a): return a.enemy)))
+	# Walled in, the same villager is left alone.
+	var m2 = new_match(21)
+	var hut2 = m2.add_building(1, "hut", m2.home_pos(0) + Vector2(150, 0), 0.0, true)
+	var squad2 := []
+	for k in 3:
+		var a2 = m2.spawn_unit(0, "villager", hut2.pos + Vector2(-8, k * 2.0))
+		a2.weapon = "wood_spear"
+		squad2.append(a2)
+	var c2 = m2.make_crew(0, squad2)
+	c2.steps = [step("attack", "", 0, "enemy")]
+	c2.state = {"target": hut2.pos, "foe": 1}
+	c2.idx = 0
+	for a2 in squad2:
+		m2._set_task(a2, "attack")
+		a2.enemy_bld = hut2.id
+	var inside = m2.spawn_unit(1, "villager", squad2[0].pos + Vector2(-50, 0))
+	m2.add_building(1, "stone_wall", squad2[0].pos + Vector2(-25, 0), 1.5708, true)
+	m2.rebuild_unit_hash()
+	run(m2, 1.5)
+	check(not squad2.any(func(a): return a.enemy == inside.id), "a villager shut in behind a wall is not hunted")
+
+
 func test_combat() -> void:
 	var m = new_match(11)
 	var f = m.fac(0)
@@ -1568,6 +1704,10 @@ func test_parser() -> void:
 	for text in places:
 		r = P.parse(text)
 		check(r["ok"] and r["steps"][0]["where"] == places[text], "gather place: " + text)
+	r = P.parse("attack the village")
+	check(r.get("ok", false) and r["steps"][0]["where"] == "enemy", "attack the village means their village")
+	r = P.parse("attack the enemy town hall")
+	check(r.get("ok", false) and r["steps"][0]["where"] == "enemy", "attack the enemy town hall")
 	r = P.parse("attack their camp")
 	check(r.get("ok", false) and r["steps"][0]["action"] == "attack" and r["steps"][0]["where"] == "enemy", "attack their camp")
 
@@ -2114,6 +2254,20 @@ func test_settlements() -> void:
 			sides[e["faction"]] = int(e["total"])
 	check(sides.size() == 2 and sides.get(2) == 1 and sides.get(5) == 1, "a mixed group is reported by side (%s)" % str(sides))
 	check(m.known_camps(0).is_empty(), "no rival camp is known before it has been seen")
+	# Attacking an unseen camp marches to the best guess instead of asking for a scout.
+	var raw = m.make_crew(0, m.idle_adults(0, m.home_pos(0)).slice(0, 2))
+	var blind: Dictionary = m.command(0, {"crew": raw.id, "steps": [step("attack", "", 0, "enemy")]})
+	check(blind.get("ok", false), "an attack on an unseen camp is not refused (%s)" % str(blind))
+	check(not m.enemy_ground(0)["sure"], "an unseen camp is only a guess")
+	# Armed troops report what they see to their own side.
+	var armed_u = m.unit(raw.members[0])
+	armed_u.weapon = "wood_spear"
+	var rb = m.home_of(3)
+	armed_u.pos = rb.pos + Vector2(8, 0)
+	m.rebuild_unit_hash()
+	m.update_vision()
+	check(not m.known_camps(0).is_empty(), "a soldier beside a rival camp reveals it")
+	m.fac(0).intel.clear()
 	# An army whose target falls comes home, still together.
 	var camp = m.home_of(3)
 	m.fac(0).intel["b%d" % camp.id] = {"kind": "building", "type": "campfire", "pos": camp.pos, "faction": 3, "t": 0.0}

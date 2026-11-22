@@ -263,6 +263,66 @@ func _pull_workers(faction: int, p: Vector2, n: int, exclude: Crew) -> Array:
 	return out
 
 
+## Everyone in the faction's crews who is gathering `subject` ("" = anything), latest joiners first.
+## Captains' own loose crews are left alone. Work a captain handed out counts: the order overrides it.
+func gatherers_of(faction: int, subject: String) -> Array:
+	var out := []
+	for c: Crew in crews.values():
+		if c.faction != faction or c.captain or c.idx >= c.steps.size():
+			continue
+		var s: Dictionary = c.steps[c.idx]
+		if s["action"] != "gather" or (subject != "" and s["subject"] != subject):
+			continue
+		for i in range(c.members.size() - 1, -1, -1):
+			var u := unit(c.members[i])
+			if u and not u.dead and not u.child:
+				out.append(u)
+	return out
+
+
+## "Take n people off wood": they stop and are free again. n = 0 means everyone gathering it.
+func free_workers(faction: int, subject: String, n: int) -> Array:
+	var taken := gatherers_of(faction, subject)
+	if n > 0:
+		taken = taken.slice(0, n)
+	for u: Unit in taken:
+		_remember_worker(u)
+		release_member(u)
+	return taken
+
+
+## "Put n more people under this captain": free hands first, then people on the named work.
+## They join the post, so the captain gives them whatever job is short, within about a second.
+func assign_to_post(p: Post, subject: String, n: int) -> int:
+	var f := p.faction
+	var pool := []
+	if subject == "":
+		for u in idle_adults(f, p.center):
+			if u.post != p.id:
+				pool.append(u)
+	if n == 0 and subject == "":
+		pass      # everyone who is free
+	else:
+		for u in gatherers_of(f, subject):
+			if u.post != p.id and not pool.has(u):
+				pool.append(u)
+	if n > 0:
+		pool = pool.slice(0, n)
+	put_in_post(p, pool)
+	return pool.size()
+
+
+## Make these people members of the post, ending whatever they were doing for someone else.
+func put_in_post(p: Post, people: Array) -> void:
+	for u: Unit in people:
+		if u.crew >= 0:
+			_remember_worker(u)
+			release_member(u)
+		join_post(p, u)
+	if p.target > 0:
+		p.target = maxi(p.target, p.members.size())
+
+
 func _is_food_worker(u: Unit) -> bool:
 	var c := crew_of(u)
 	if c == null or c.idx >= c.steps.size():
@@ -514,7 +574,7 @@ func resolve_where(c: Crew, where: String, default_dist: float = 140.0):
 		"marked":
 			return f.mark if f.has_mark else null
 		"enemy":
-			return known_enemy_camp(c.faction)
+			return enemy_ground(c.faction)["pos"]
 	if where.begins_with(Defs.PLACE):
 		var place: Dictionary = places_of(c.faction).get(where.substr(Defs.PLACE.length()), {})
 		return place.get("pos")
@@ -524,6 +584,7 @@ func resolve_where(c: Crew, where: String, default_dist: float = 140.0):
 
 
 ## Every living rival's camp this faction has seen: [{"faction", "pos", "t"}, ...].
+## Only campfires count; the rival AI relies on that. Use known_enemy_ground for orders.
 func known_camps(faction: int) -> Array:
 	var out := []
 	var f := fac(faction)
@@ -549,6 +610,28 @@ func known_enemy(faction: int) -> Dictionary:
 
 func known_enemy_camp(faction: int):
 	return known_enemy(faction).get("pos")
+
+
+## Where to send the player's troops against a rival: the camp if seen, otherwise the
+## nearest rival building seen, otherwise the best guess. Returns {"pos", "faction", "sure"}.
+func enemy_ground(faction: int) -> Dictionary:
+	var camp := known_enemy(faction)
+	if not camp.is_empty():
+		return {"pos": camp["pos"], "faction": camp["faction"], "sure": true}
+	var home := home_pos(faction)
+	var best := {}
+	for k in fac(faction).intel:
+		var e: Dictionary = fac(faction).intel[k]
+		if e.get("kind", "") != "building":
+			continue
+		var who := int(e.get("faction", -1))
+		if who < 0 or who == faction or not factions[who].alive:
+			continue
+		if best.is_empty() or (e["pos"] as Vector2).distance_squared_to(home) < (best["pos"] as Vector2).distance_squared_to(home):
+			best = {"pos": e["pos"], "faction": who, "sure": true}
+	if not best.is_empty():
+		return best
+	return {"pos": _enemy_guess(faction), "faction": -1, "sure": false}
 
 
 func _begin_step(c: Crew) -> void:
@@ -708,12 +791,17 @@ func _prepare_step(c: Crew, s: Dictionary) -> String:
 			c.state["target"] = p
 		"attack":
 			var where: String = s.get("where", "")
-			var p = resolve_where(c, where if where != "" else "enemy", 380.0 * terrain.size_scale)
-			if p == null:
-				return "we don't know where their camp is. Scout first." if where in ["", "enemy"] else "mark a spot first (look at the ground and press R)."
-			c.state["target"] = p
+			var ground := {}
 			if where in ["", "enemy"]:
-				c.state["foe"] = known_enemy(c.faction).get("faction", -1)
+				ground = enemy_ground(c.faction)
+			var p = ground["pos"] if not ground.is_empty() else resolve_where(c, where, 380.0 * terrain.size_scale)
+			if p == null:
+				return "mark a spot first (look at the ground and press R)."
+			c.state["target"] = p
+			if not ground.is_empty():
+				c.state["foe"] = ground["faction"]
+				if not ground["sure"] and c.faction == 0:
+					post(0, "We haven't seen their camp yet, so we're marching to where it should be. Troops will spot it on the way.")
 		"follow":
 			if unit(f.commander) == null:
 				return "there's no one to follow."
