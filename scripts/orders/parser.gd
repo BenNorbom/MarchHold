@@ -417,6 +417,10 @@ static func _parse_part(p: String, out: Dictionary):
 	if has_word(p, "research") or has_word(p, "study") or p.contains("learn gunpowder"):
 		if p.contains("archery") or p.contains("mounted") or p.contains("horse archer"):
 			return _step("research", "mounted_archery")
+		if has_word(p, "armory") or has_word(p, "armoury"):
+			return _step("research", "armory_iron" if has_word(p, "iron") else "armory_bronze")
+		if has_word(p, "bronze") or has_word(p, "iron"):
+			return null
 		return _step("research", "gunpowder") if p.contains("gunpowder") or p.contains("powder") else null
 	if has_word(p, "upgrade") or p.contains("improve the"):
 		if has_word(p, "armory") or has_word(p, "armoury"):

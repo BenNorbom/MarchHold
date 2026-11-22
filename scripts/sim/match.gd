@@ -78,6 +78,7 @@ func tick(dt: float = Defs.TICK) -> void:
 	update_engagements()
 	upkeep_t += dt
 	if upkeep_t >= 1.0:
+		_update_research(upkeep_t)
 		upkeep(upkeep_t)
 		upkeep_t = 0.0
 		check_morale()
@@ -324,6 +325,8 @@ func step_problem(faction: int, s: Dictionary) -> String:
 			var rd: Dictionary = Defs.RESEARCH.get(subj, {})
 			if not rd.is_empty() and f.age < int(rd["age"]):
 				return "%s needs the %s age and a %s." % [rd["name"], Defs.AGES[rd["age"]], Defs.building_name(rd["building"]).to_lower()]
+			if not rd.is_empty() and rd.has("requires") and not f.researched.has(rd["requires"]):
+				return "%s needs the %s first." % [rd["name"], Defs.RESEARCH[rd["requires"]]["name"].to_lower()]
 		"gather":
 			if subj in Defs.DEPOSITS and f.age < 1:
 				return "Mining needs the Stone age. %s" % Defs.AGE_HOW[1]
@@ -334,7 +337,7 @@ func step_problem(faction: int, s: Dictionary) -> String:
 			if subj == "cannon" and f.age < 4:
 				return "Cannons need gunpowder."
 			if subj == "ram" and f.age < 2:
-				return "Rams need a bronze armory."
+				return "Rams need the bronze armory. Research it with /r."
 	return ""
 
 
@@ -357,10 +360,7 @@ func first_step_problem(faction: int, s: Dictionary) -> String:
 			elif subj == "iron" and buildings_of(faction, "smelter").all(func(b): return b.tier < 1):
 				why = "the smelter has to be upgraded to an iron furnace first."
 		"research":
-			if fac(faction).researched.has(subj):
-				why = "we already know %s." % Defs.RESEARCH[subj]["name"].to_lower()
-			elif not has_building(faction, Defs.RESEARCH[subj]["building"]):
-				why = "we need a %s first." % Defs.building_name(Defs.RESEARCH[subj]["building"]).to_lower()
+			why = research_problem(faction, subj)
 		"tame":
 			if buildings_of(faction, "stable").is_empty():
 				why = "we need a stable to keep horses in."
@@ -834,6 +834,10 @@ func command(faction: int, req: Dictionary) -> Dictionary:
 		for id in laid:
 			remove_site(id)
 		return {"ok": false, "error": e3}
+	if steps.size() == 1 and steps[0]["action"] == "research":
+		# Research takes no villagers: it is paid for and runs in the building.
+		var why := start_research(faction, steps[0]["subject"])
+		return {"ok": why == "", "error": why.substr(0, 1).to_upper() + why.substr(1), "crews": []}
 	var targets := []
 	var first: Dictionary = steps[0]
 	if req.get("all", false):
@@ -1414,6 +1418,12 @@ func research_menu(faction: int) -> Array:
 			lock = "Needs a %s." % Defs.building_name(r["building"]).to_lower()
 		elif fac(faction).age < int(r["age"]):
 			lock = "Needs the %s age." % Defs.AGES[r["age"]]
+		elif r.has("requires") and not fac(faction).researched.has(r["requires"]):
+			lock = "Needs the %s first." % Defs.RESEARCH[r["requires"]]["name"].to_lower()
+		elif is_researching(faction, id):
+			lock = "Being researched (%d%%)." % int(100.0 * _research_progress(faction, id))
+		elif _free_lab(faction, r["building"]) == null:
+			lock = "The %s is busy with other research." % Defs.building_name(r["building"]).to_lower()
 		out.append({"kind": "research", "id": id, "name": r["name"], "cost": r["cost"],
 			"desc": r["desc"], "locked": lock, "missing": missing_cost(faction, r["cost"])})
 	return out

@@ -109,15 +109,17 @@ const BUILDINGS := {
 
 # Upgrades happen in place. tier is the building's tier after the upgrade.
 const UPGRADES := {
-	"armory_bronze": {"name": "Bronze armory", "building": "armory", "from": 0, "tier": 1, "age": 2,
-		"cost": {"wood": 75, "bronze": 65}, "work": 90, "desc": "Bronze spears, swords, shields, armor, pikes, lances, rams."},
-	"armory_iron": {"name": "Iron armory", "building": "armory", "from": 1, "tier": 2, "age": 3,
-		"cost": {"stone": 100, "iron": 75}, "work": 120, "desc": "Iron gear. With gunpowder: cannons and shot."},
 	"iron_furnace": {"name": "Iron furnace", "building": "smelter", "from": 0, "tier": 1, "age": 2,
 		"cost": {"stone": 150, "bronze": 50}, "work": 120, "opens_age": 3, "desc": "Smelts iron. Opens the Iron age."},
 }
 
+# Research runs by itself inside its building once paid for: nobody has to work on it.
+# armory_tier: every armory (and every one built later) becomes this tier. requires: research needed first.
 const RESEARCH := {
+	"armory_bronze": {"name": "Bronze armory", "building": "armory", "age": 2, "cost": {"wood": 75, "bronze": 65},
+		"time": 90.0, "armory_tier": 1, "desc": "All armories make bronze spears, swords, shields, armor, pikes, lances and rams."},
+	"armory_iron": {"name": "Iron armory", "building": "armory", "age": 3, "cost": {"stone": 100, "iron": 75},
+		"time": 120.0, "armory_tier": 2, "requires": "armory_bronze", "desc": "All armories make iron gear. With gunpowder: cannons and shot."},
 	"mounted_archery": {"name": "Mounted archery", "building": "stable", "age": 1, "cost": {"food": 60, "wood": 50},
 		"time": 60.0, "desc": "Riders can shoot their bows from the saddle."},
 	"gunpowder": {"name": "Gunpowder", "building": "university", "age": 3, "cost": {"food": 100, "coal": 40, "iron": 20},
@@ -241,7 +243,7 @@ const HOTKEYS := {
 		"v": {"name": "Advanced structures", "keys": {
 			"w": "build:stone_wall", "g": "build:stone_gate", "t": "build:tower", "h": "build:stable", "m": "build:mine",
 			"s": "build:smelter", "u": "build:university",
-			"a": "upgrade:armory", "f": "upgrade:smelter", "r": "research:gunpowder"}},
+			"f": "upgrade:smelter", "r": "research:gunpowder"}},
 	},
 	"c": {
 		"b": {"name": "Basic weapons", "keys": {
@@ -500,7 +502,7 @@ static func describe_step(s: Dictionary) -> String:
 		"smelt":
 			txt = ("smelt %d %s" % [amount, subj]) if amount > 0 else ("keep smelting " + subj)
 		"research":
-			txt = "research " + subj
+			txt = "research " + RESEARCH.get(subj, {}).get("name", subj).to_lower()
 		"tame":
 			txt = ("bring in %d wild horses" % amount) if amount > 0 else "keep bringing in wild horses"
 		"scout":

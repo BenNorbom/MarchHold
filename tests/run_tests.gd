@@ -1179,6 +1179,49 @@ func test_research() -> void:
 	check(pr.get("ok", false) and pr["steps"][0]["action"] == "research" and pr["steps"][0]["subject"] == "mounted_archery", "parser reads 'research mounted archery'")
 	check("mounted_archery" in Defs.subjects_for("research"), "schema offers mounted_archery")
 
+	# Armory tiers are research that runs by itself and upgrades every armory.
+	var m2 = new_match(15)
+	var f2 = m2.fac(0)
+	var a1 = m2.add_building(0, "armory", m2.home_pos(0) + Vector2(20, 0), 0.0, true)
+	var a2 = m2.add_building(0, "armory", m2.home_pos(0) + Vector2(-20, 0), 0.0, true)
+	for e in m2.build_menu(0):
+		check(not (e["kind"] == "upgrade" and e["id"] == "armory"), "no armory upgrade in the build menu")
+	check(not Defs.UPGRADES.has("armory_bronze") and not Defs.UPGRADES.has("armory_iron"), "armory tiers are not building upgrades")
+	var lock := {}
+	for e in m2.research_menu(0):
+		lock[e["id"]] = e["locked"]
+	check(lock.has("armory_bronze") and lock["armory_bronze"] != "", "bronze armory research is listed but locked before the Bronze age")
+	check(lock.has("armory_iron") and lock["armory_iron"] != "", "iron armory research is listed but locked")
+	f2.age = 2
+	f2.stock["wood"] = 500.0
+	f2.stock["bronze"] = 500.0
+	f2.stock["stone"] = 500.0
+	f2.stock["iron"] = 500.0
+	check(m2.start_research(0, "armory_iron") != "", "iron armory needs the bronze armory first")
+	var idle_before: int = m2.idle_adults(0, m2.home_pos(0)).size()
+	var res: Dictionary = m2.command(0, {"steps": [{"action": "research", "subject": "armory_bronze", "count": 0, "amount": 0, "where": ""}]})
+	check(res.get("ok", false), "the research order is accepted: %s" % res.get("error", ""))
+	check(m2.crews.is_empty() and m2.idle_adults(0, m2.home_pos(0)).size() == idle_before, "research takes no villagers")
+	check(f2.stock["bronze"] < 500.0, "research is paid for up front")
+	check(m2.start_research(0, "armory_bronze") != "", "the same research can't be started twice")
+	run(m2, 60.0)
+	check(not f2.researched.has("armory_bronze") and a1.tier == 0, "research takes its time")
+	run(m2, 40.0)
+	check(f2.researched.has("armory_bronze") and a1.tier == 1 and a2.tier == 1, "finished research upgrades every armory")
+	var a3 = m2.add_building(0, "armory", m2.home_pos(0) + Vector2(0, 30), 0.0, true)
+	m2._complete(a3)
+	check(a3.tier == 1, "an armory built later starts at the researched tier")
+	check(m2.armory_tier(0) == 1 and m2.craft_problem(0, "bronze_spear") == "", "bronze gear can be made")
+	check(m2.start_research(0, "armory_iron") != "", "iron armory is still locked before the Iron age")
+	f2.age = 3
+	check(m2.start_research(0, "armory_iron") == "", "iron armory research starts in the Iron age")
+	run(m2, 125.0)
+	check(a1.tier == 2 and a2.tier == 2 and a3.tier == 2, "iron research upgrades every armory again")
+	var up: Dictionary = m2.command(0, {"steps": [{"action": "upgrade", "subject": "armory", "count": 0, "amount": 0, "where": ""}]})
+	check(not up.get("ok", true) and up["error"].to_lower().contains("research"), "an armory upgrade order points at research")
+	var pa: Dictionary = Parser.parse("research the iron armory")
+	check(pa.get("ok", false) and pa["steps"][0]["subject"] == "armory_iron", "parser reads 'research the iron armory'")
+
 
 func test_towers() -> void:
 	var m = new_match(1462)
@@ -1439,7 +1482,7 @@ func test_hotkeys() -> void:
 	check(read.call("b", "b z")["error"] != "", "an unused key is explained")
 	check(read.call("b", "b h 2")["error"] != "", "a structure takes no count")
 	check(read.call("b", "v w")["error"].contains("Stone age"), "a locked key says what it needs")
-	check(read.call("b", "v a")["error"].contains("armory"), "an upgrade needs its building")
+	check(read.call("b", "v f")["error"].contains("smelter"), "an upgrade needs its building")
 	check(read.call("c", "b w")["error"].contains("armory"), "weapons need an armory")
 	m.add_building(0, "armory", m.home_pos(0) + Vector2(20, 0), 0.0, true)
 	var two: Dictionary = read.call("c", "b w 2")

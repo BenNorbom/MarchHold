@@ -124,8 +124,6 @@ static func committed(m, faction: int) -> Dictionary:
 			_add_cost(held, Defs.BUILDINGS[b.type]["cost"])
 		if b.upgrading != "" and not b.up_paid:
 			_add_cost(held, Defs.UPGRADES[b.upgrading]["cost"])
-		if b.research != "" and b.research_t <= 0.0:
-			_add_cost(held, Defs.RESEARCH[b.research]["cost"])
 	return held
 
 
@@ -262,19 +260,14 @@ static func _industry(m, p, out: Array) -> void:
 		out.append(_building(Rank.REST, "armory"))
 	if f.age >= 3 and m.buildings_of(p.faction, "university", false).is_empty():
 		out.append(_building(Rank.REST, "university"))
-	for type in ["smelter", "armory"]:
-		if not m.has_building(p.faction, type):
-			continue
-		var id: String = m._upgrade_for(p.faction, type)
-		var b = m.nearest_building(p.faction, m.home_pos(p.faction), [type])
+	if m.has_building(p.faction, "smelter"):
+		var id: String = m._upgrade_for(p.faction, "smelter")
+		var b = m.nearest_building(p.faction, m.home_pos(p.faction), ["smelter"])
 		if Defs.UPGRADES.has(id) and b.upgrading == "":
-			out.append(_want(Rank.REST, "upgrade", type, Defs.UPGRADES[id]["cost"]))
+			out.append(_want(Rank.REST, "upgrade", "smelter", Defs.UPGRADES[id]["cost"]))
 	for id in Defs.RESEARCH:
-		var r: Dictionary = Defs.RESEARCH[id]
-		if f.researched.has(id) or f.age < int(r["age"]) or not m.has_building(p.faction, r["building"]):
-			continue
-		if m.nearest_building(p.faction, p.center, [r["building"]]).research == "":
-			out.append(_want(Rank.REST, "research", id, r["cost"]))
+		if m.research_problem(p.faction, id) == "":
+			out.append(_want(Rank.REST, "research", id, Defs.RESEARCH[id]["cost"]))
 	_keep_spears(m, p, out, SPEARS_KEPT)
 	_keep_arrows(m, p, out)
 
@@ -382,9 +375,11 @@ static func _step(action: String, subject: String, amount: int = 0) -> Dictionar
 static func _start(m, p, want: Dictionary) -> bool:
 	var type: String = want["type"]
 	match want["kind"]:
-		"upgrade", "research":
-			var n := BUILDERS if want["kind"] == "upgrade" else 1
-			return _begin(m, p, "do:%s %s" % [want["kind"], type], _step(want["kind"], type), _hands(m, p, n))
+		"research":
+			# No villagers needed: it is paid for and runs in the building.
+			return m.start_research(p.faction, type) == ""
+		"upgrade":
+			return _begin(m, p, "do:upgrade %s" % type, _step("upgrade", type), _hands(m, p, BUILDERS))
 		"craft":
 			return _begin(m, p, "do:craft", _step("craft", type, int(Defs.ITEMS[type]["batch"])), _hands(m, p, 2))
 	var wall: bool = Defs.BUILDINGS[type].get("wall", false)
@@ -479,7 +474,6 @@ static func _resume(m, p) -> bool:
 	var builds: Array = Defs.MANDATES[p.mandate]["builds"]
 	var manned := {}
 	var upgrading := {}
-	var researching := {}
 	for c in m.crews.values():
 		if c.faction != p.faction:
 			continue
@@ -489,8 +483,6 @@ static func _resume(m, p) -> bool:
 				manned[id] = true
 			if s["action"] == "upgrade":
 				upgrading[s["subject"]] = true
-			elif s["action"] == "research":
-				researching[s["subject"]] = true
 	var orphans := []
 	for b in m.buildings_of(p.faction, "", false):
 		if b.pos.distance_to(p.center) > p.radius or not b.type in builds:
@@ -500,8 +492,6 @@ static func _resume(m, p) -> bool:
 				orphans.append(b)
 		elif b.upgrading != "" and not upgrading.has(b.type) and p.mandate == "industry":
 			return _begin(m, p, "do:upgrade " + b.type, _step("upgrade", b.type), _hands(m, p, BUILDERS))
-		elif b.research != "" and not researching.has(b.research) and p.mandate == "industry":
-			return _begin(m, p, "do:research " + b.research, _step("research", b.research), _hands(m, p, 1))
 	if orphans.is_empty():
 		return false
 	var step := _step("build", orphans[0].type)

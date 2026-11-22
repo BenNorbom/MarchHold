@@ -655,18 +655,10 @@ func _prepare_step(c: Crew, s: Dictionary) -> String:
 				return "we need a smelter first." if sm["tier"] == 0 else "the smelter has to be upgraded to an iron furnace first."
 			c.state["bld"] = best.id
 		"research":
-			var r: Dictionary = Defs.RESEARCH[subj]
-			if f.researched.has(subj):
-				return "we already know %s." % r["name"].to_lower()
-			var u := nearest_building(c.faction, crew_center(c), [r["building"]])
-			if u == null:
-				return "we need a %s first." % Defs.building_name(r["building"]).to_lower()
-			if f.age < int(r["age"]):
-				return "that needs the %s age." % Defs.AGES[r["age"]]
-			c.state["bld"] = u.id
-			if u.research == "":
-				u.research = subj
-				u.research_t = 0.0
+			# Nobody works on research. The crew only sets it going, and the building does the rest.
+			var why := start_research(c.faction, subj)
+			if why != "":
+				return why
 		"tame":
 			if buildings_of(c.faction, "stable").is_empty():
 				return "we need a stable to keep horses in."
@@ -725,6 +717,8 @@ func _prepare_step(c: Crew, s: Dictionary) -> String:
 
 func _upgrade_for(faction: int, building: String) -> String:
 	var f := fac(faction)
+	if building == "armory":
+		return "!armory upgrades are researched now. Type /r."
 	var b := nearest_building(faction, home_pos(faction), [building])
 	if b == null:
 		return "!we need a %s first." % building
@@ -747,10 +741,104 @@ func craft_problem(faction: int, item: String) -> String:
 	for b in buildings_of(faction, "armory"):
 		top = maxi(top, b.tier)
 	if top < int(it["tier"]):
-		return "the armory has to be upgraded to %s first." % ["wood", "bronze", "iron"][it["tier"]]
+		return "research the %s armory first (/r)." % ["wood", "bronze", "iron"][it["tier"]]
 	if it.has("research") and not f.researched.has(it["research"]):
 		return "that needs %s research at a university." % it["research"]
 	return ""
+
+
+## What the faction has paid for so far: research that is running, so it can't be started twice.
+func is_researching(faction: int, id: String) -> bool:
+	for b in own_blds[faction]:
+		if not b.dead and b.research == id:
+			return true
+	return false
+
+
+func _research_progress(faction: int, id: String) -> float:
+	for b in own_blds[faction]:
+		if not b.dead and b.research == id:
+			return b.research_t / float(Defs.RESEARCH[id]["time"])
+	return 0.0
+
+
+## The research problem in words, or "" when it can start now.
+func research_problem(faction: int, id: String) -> String:
+	var f := fac(faction)
+	var r: Dictionary = Defs.RESEARCH[id]
+	if f.researched.has(id):
+		return "we already know %s." % r["name"].to_lower()
+	if is_researching(faction, id):
+		return "%s is already being researched." % r["name"]
+	if not has_building(faction, r["building"]):
+		return "we need a %s first." % Defs.building_name(r["building"]).to_lower()
+	if f.age < int(r["age"]):
+		return "that needs the %s age." % Defs.AGES[r["age"]]
+	if r.has("requires") and not f.researched.has(r["requires"]):
+		return "that needs the %s first." % Defs.RESEARCH[r["requires"]]["name"].to_lower()
+	if _free_lab(faction, r["building"]) == null:
+		return "the %s is busy with other research." % Defs.building_name(r["building"]).to_lower()
+	return ""
+
+
+func _free_lab(faction: int, type: String) -> Building:
+	for b in buildings_of(faction, type):
+		if b.research == "":
+			return b
+	return null
+
+
+## Pays for the research and sets it going in a free building. It then runs by itself.
+func start_research(faction: int, id: String) -> String:
+	var why := research_problem(faction, id)
+	if why != "":
+		return why
+	var r: Dictionary = Defs.RESEARCH[id]
+	if not pay(faction, r["cost"]):
+		return "we need %s for that." % Defs.cost_text(missing_cost(faction, r["cost"]))
+	var lab := _free_lab(faction, r["building"])
+	lab.research = id
+	lab.research_t = 0.0
+	if faction == 0:
+		post(0, "Researching %s (%d s)." % [r["name"].to_lower(), int(r["time"])], "info")
+	return ""
+
+
+func _update_research(dt: float) -> void:
+	for b: Building in buildings:
+		if b.dead or b.research == "" or not b.complete:
+			continue
+		var r: Dictionary = Defs.RESEARCH[b.research]
+		b.research_t += dt
+		if b.research_t < float(r["time"]):
+			continue
+		var f := fac(b.faction)
+		f.researched[b.research] = true
+		b.research = ""
+		b.research_t = 0.0
+		if r.has("armory_tier"):
+			_raise_armories(b.faction, int(r["armory_tier"]))
+		if b.faction == 0:
+			post(0, "Research complete: %s. %s" % [r["name"], r["desc"]], "done")
+		sound("complete", b.pos, b.faction)
+		if r.has("opens_age"):
+			_open_age(f, int(r["opens_age"]))
+
+
+## Every armory takes the researched tier at once.
+func _raise_armories(faction: int, tier: int) -> void:
+	for a in buildings_of(faction, "armory", false):
+		if a.tier < tier:
+			a.tier = tier
+			emit({"type": "building", "id": a.id})
+
+
+func researched_armory_tier(faction: int) -> int:
+	var top := 0
+	var f := fac(faction)
+	for id in f.researched:
+		top = maxi(top, int(Defs.RESEARCH.get(id, {}).get("armory_tier", 0)))
+	return top
 
 
 func armory_tier(faction: int) -> int:
@@ -996,7 +1084,7 @@ func _step_done(c: Crew, s: Dictionary) -> bool:
 			var amt := int(s.get("amount", 0))
 			return amt > 0 and c.state["delivered"] >= amt
 		"research":
-			return f.researched.has(s["subject"]) or bld(c.state.get("bld", -1)) == null
+			return true     # set going when the step began, and it runs without the crew
 		"tame":
 			var amt := int(s.get("amount", 0))
 			return amt > 0 and c.state["delivered"] >= amt
@@ -1239,8 +1327,6 @@ func update_worker(u: Unit, dt: float) -> void:
 			_do_man(u, c, dt)
 		"smelt":
 			_do_smelt(u, c, s, dt)
-		"research":
-			_do_research(u, c, dt)
 		"tame":
 			_do_tame(u, c, s, dt)
 		"scout":
@@ -1466,7 +1552,7 @@ func _work_building(u: Unit, type: String, subj: String) -> Building:
 			continue
 		var n := 0
 		for o: Unit in units:
-			if not o.dead and o.tgt_bld == b.id and o.faction == u.faction and o.task in ["gather", "smelt", "craft", "research"]:
+			if not o.dead and o.tgt_bld == b.id and o.faction == u.faction and o.task in ["gather", "smelt", "craft"]:
 				n += 1
 		if n >= cap:
 			continue
@@ -1671,6 +1757,8 @@ func _complete(b: Building) -> void:
 			b.deposit = n.sub
 	emit({"type": "building", "id": b.id})
 	sound("complete", b.pos, b.faction)
+	if b.type == "armory":
+		b.tier = maxi(b.tier, researched_armory_tier(b.faction))
 	_refresh_counts(fac(b.faction))
 	if b.faction == 0 and not d.get("wall", false):
 		var extra := ""
@@ -1942,43 +2030,6 @@ func _do_smelt(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
 		sound("smelt", b.pos)
 		if metal == "bronze" and f.age < 2:
 			_open_age(f, 2)
-
-
-func _do_research(u: Unit, c: Crew, dt: float) -> void:
-	var b := bld(c.state.get("bld", -1))
-	if b == null or b.dead or b.research == "":
-		u.phase = "done"
-		return
-	u.tgt_bld = b.id
-	if u.phase != "work":
-		if go_to_building(u, b, dt):
-			u.phase = "work"
-		return
-	var r: Dictionary = Defs.RESEARCH[b.research]
-	var f := fac(u.faction)
-	if b.research_t <= 0.0 and not c.state.get("paid", false):
-		if not pay(u.faction, r["cost"]):
-			u.anim = Anim.IDLE
-			if u.faction == 0 and t - b.waiting_msg_t > 25.0:
-				b.waiting_msg_t = t
-				post(0, "Research is waiting for %s." % Defs.cost_text(missing_cost(0, r["cost"])), "warn")
-			return
-		c.state["paid"] = true
-	u.anim = Anim.PICK
-	# Extra scholars help a little.
-	var scholars := 0
-	for o: Unit in units_near(b.pos, b.size.length(), u.faction):
-		if o.task == "research":
-			scholars += 1
-	b.research_t += dt * (1.0 + 0.25 * mini(scholars - 1, 2)) / maxf(1.0, float(scholars))
-	if b.research_t >= float(r["time"]):
-		f.researched[b.research] = true
-		if u.faction == 0:
-			post(0, "Research complete: %s. %s" % [r["name"], r["desc"]], "done")
-		if r.has("opens_age"):
-			_open_age(f, int(r["opens_age"]))
-		b.research = ""
-		b.research_t = 0.0
 
 
 func _do_tame(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:

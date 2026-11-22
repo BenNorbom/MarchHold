@@ -295,9 +295,9 @@ func _construction(f) -> void:
 		if Defs.UPGRADES.has(up_id) and m.can_afford(fid, Defs.UPGRADES[up_id]["cost"]):
 			_order(role, [_step("upgrade", b)], 3)
 		return
-	if want == "research:gunpowder":
-		if m.can_afford(fid, Defs.RESEARCH["gunpowder"]["cost"]):
-			_order("research", [_step("research", "gunpowder")], 1)
+	if want.begins_with("research:"):
+		# Research needs no villagers: pay and it runs in the building.
+		m.start_research(fid, want.substr(9))
 		return
 	_place_and_build(f, role, want, 0.0 if want == "armory" else _weapon_reserve(f))
 
@@ -362,8 +362,8 @@ func _next_building(f) -> String:
 		return "tower"
 	if f.age >= 2:
 		var arm = m.nearest_building(fid, _home(), ["armory"])
-		if arm and arm.tier == 0 and arm.upgrading == "":
-			return "upgrade:armory"
+		if arm and m.research_problem(fid, "armory_bronze") == "":
+			return "research:armory_bronze"
 		if _count("stable") == 0:
 			return "stable"
 		if not _mine_site_exists("iron_ore") and _find_deposit("iron_ore") != null:
@@ -373,11 +373,11 @@ func _next_building(f) -> String:
 			return "upgrade:smelter"
 	if f.age >= 3:
 		var arm2 = m.nearest_building(fid, _home(), ["armory"])
-		if arm2 and arm2.tier == 1 and arm2.upgrading == "":
-			return "upgrade:armory"
+		if arm2 and m.research_problem(fid, "armory_iron") == "":
+			return "research:armory_iron"
 		if strategy in ["cannons", "turtle", "boom"] and _count("university") == 0:
 			return "university"
-		if m.has_building(fid, "university") and not f.researched.has("gunpowder") and not _busy("research"):
+		if m.research_problem(fid, "gunpowder") == "":
 			return "research:gunpowder"
 	if _count("farm") < farms_want + 1 and pop > 20:
 		return "farm"
