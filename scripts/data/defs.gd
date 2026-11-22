@@ -214,7 +214,7 @@ const GATHER_SPEED := 0.75
 const GATHER := {
 	"wood": {"name": "wood", "resource": "wood", "node": "tree", "rate": 1.0, "carry": 5},
 	"stone": {"name": "stone", "resource": "stone", "node": "rock", "building": "quarry", "rate": 0.6, "carry": 4, "building_rate": 0.5},
-	"berries": {"name": "berries", "resource": "food", "node": "berry", "rate": 1.2, "carry": 5},
+	"berries": {"name": "berries", "resource": "food", "node": "berry", "rate": 0.4, "carry": 5},
 	"hunt": {"name": "hunting", "resource": "food", "rate": 1.5, "carry": 5},
 	"farm": {"name": "farming", "resource": "food", "building": "farm", "building_rate": 0.14},
 	"bronze_ore": {"name": "bronze ore", "resource": "bronze_ore", "building": "mine", "building_rate": 0.4},

@@ -351,7 +351,7 @@ func _place_nodes() -> void:
 	for s in starts:
 		for c in 3:
 			var bp := _free_spot(s, 32.0, 62.0, 14.0)
-			for k in 5:
+			for k in 3:
 				_add("berry", "bush", bp + Vector2(rng.randf_range(-6, 6), rng.randf_range(-6, 6)), 80.0, rng.randf_range(0.8, 1.2))
 		for c in 2:
 			var rp := _free_spot(s, 55.0, 100.0, 16.0)
@@ -401,7 +401,7 @@ func _place_nodes() -> void:
 		var p := Vector2(rng.randf_range(60, size - 60), rng.randf_range(60, size - 60))
 		if _near_start(p, 140.0 * k_size):
 			continue
-		for b in rng.randi_range(3, 5):
+		for b in 3:
 			_add("berry", "bush", p + Vector2(rng.randf_range(-6, 6), rng.randf_range(-6, 6)), 80.0, rng.randf_range(0.8, 1.2))
 	# Wild horses roam the middle of the map; deer are everywhere.
 	for k in roundi(4 * k_size):
