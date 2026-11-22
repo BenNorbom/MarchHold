@@ -64,6 +64,8 @@ func tick(dt: float = Defs.TICK) -> void:
 	ticks += 1
 	paths_this_tick = 0
 	rebuild_unit_hash()
+	crowd.index(units, map_size)
+	update_engagements()
 	upkeep_t += dt
 	if upkeep_t >= 1.0:
 		upkeep(upkeep_t)
@@ -85,8 +87,12 @@ func tick(dt: float = Defs.TICK) -> void:
 				update_animal(u, dt)
 			"cannon", "ram":
 				update_engine(u, dt)
-		_unstick(u, dt)
+	crowd.separate(units, self)
+	resolve_strikes()
 	update_shots(dt)
+	for u: Unit in units:
+		if not u.dead:
+			_settle(u, dt)
 	vision_t += dt
 	if vision_t >= 0.5:
 		vision_t = 0.0
@@ -106,13 +112,15 @@ func _update_villager(u: Unit, dt: float) -> void:
 
 
 func _update_commander(u: Unit, dt: float) -> void:
-	u.cooldown = maxf(0.0, u.cooldown - dt)
 	if u.task == "player":
+		commander_update(u.faction, t)
 		return
 	# Outnumbered: fall back rather than fight alone.
 	if u.flee_t > 0.0:
 		u.flee_t -= dt
-		move_to(u, u.goal, dt, 2.0, true)
+		u.cooldown = maxf(0.0, u.cooldown - dt)
+		if move_to(u, u.goal, dt, 2.0, true):
+			u.anim = Anim.IDLE
 		return
 	var foes := 0
 	var friends := 0
@@ -127,6 +135,7 @@ func _update_commander(u: Unit, dt: float) -> void:
 			threat += o.pos
 	if foes >= 3 and foes > friends + 1:
 		var away := (u.pos - threat / foes).normalized()
+		cancel_swing(u)
 		u.goal = (u.pos + away * 45.0).clamp(Vector2(20, 20), Vector2(map_size - 20, map_size - 20))
 		u.flee_t = 5.0
 		return
@@ -145,24 +154,37 @@ func _update_commander(u: Unit, dt: float) -> void:
 		u.anim = Anim.IDLE
 
 
-func _unstick(u: Unit, dt: float) -> void:
-	if u.kind == "commander" and u.task == "player":
-		return
-	var moved := u.pos.distance_to(u.last_pos)
-	if u.anim in [Anim.WALK, Anim.RUN, Anim.CARRY, Anim.RIDE] and moved < 0.02:
-		u.stuck += dt
-		if u.stuck > 2.5:
-			u.stuck = 0.0
-			u.path = PackedVector2Array()
-			u.path_goal = Vector2(-999, -999)
-			var c := cell_of(u.pos)
-			if solid_for(clampi(u.faction, 0, 1), c):
-				u.pos = cell_center(nearest_free_cell(clampi(u.faction, 0, 1), c))
-			else:
-				u.pos += Vector2.from_angle(rng.randf() * TAU) * 1.5
-	else:
-		u.stuck = 0.0
+## After everyone has moved: how fast, and has anyone jammed or stopped?
+func _settle(u: Unit, dt: float) -> void:
+	var delta := u.pos - u.last_pos
+	u.vel = delta / dt
 	u.last_pos = u.pos
+	if not is_person(u) or (u.kind == "commander" and u.task == "player"):
+		return
+	var moved := delta.length()
+	if u.move_t != t:
+		u.stuck = 0.0
+		if u.anim in [Anim.WALK, Anim.RUN, Anim.CARRY]:
+			u.anim = Anim.IDLE    # arrived: don't march on the spot
+		return
+	if moved < 0.02 and u.anim in [Anim.WALK, Anim.RUN]:
+		u.anim = Anim.IDLE
+	if moved >= unit_speed(u) * dt * 0.25:
+		u.stuck = maxf(0.0, u.stuck - dt * 2.0)
+		return
+	u.stuck += dt
+	if u.stuck > 1.2:
+		# Jammed: plan again, try the other side and squeeze past friends for a moment.
+		u.stuck = 0.0
+		u.path = PackedVector2Array()
+		u.path_goal = Vector2(-999, -999)
+		u.side = -u.side
+		u.dodge_t = t + 1.0
+		u.ghost_t = t + 1.2
+		var c := cell_of(u.pos)
+		if solid_for(u.faction, c):
+			u.pos = cell_center(nearest_free_cell(maxi(u.faction, 0), c))
+			u.prev = u.pos
 
 
 func _cleanup() -> void:
@@ -604,57 +626,26 @@ func set_commander(faction: int, p: Vector2, facing: float, anim: int) -> void:
 	u.pos = p
 	u.facing = facing
 	u.anim = anim
+	# A lance needs a run-up, which the player's horse takes too.
+	if not u.mounted or anim == Anim.IDLE:
+		u.charge_start = Vector2.ZERO
+	elif anim == Anim.RIDE and u.charge_start == Vector2.ZERO:
+		u.charge_start = p
 
 
 func commander(faction: int) -> Unit:
 	return unit(fac(faction).commander)
 
 
-## A melee blow in front of the commander. Returns what was hit ("" for nothing).
-func commander_strike(faction: int) -> String:
+func commander_shoot(faction: int, origin: Vector3, dir: Vector3, power: float, now: float = -1.0) -> bool:
 	var u := commander(faction)
-	if u == null or u.dead or u.cooldown > 0.0:
-		return ""
-	var w := weapon_def(u)
-	u.cooldown = float(w["rate"]) * 0.8
-	var fwd := Vector2(sin(u.facing), cos(u.facing))
-	var reach: float = w["reach"] + 0.8
-	var best: Unit = null
-	var bd := INF
-	for o: Unit in units_near(u.pos, reach + 1.5, -2):
-		if o.faction == faction or o.stable >= 0 or o.dead or o.id == u.id:
-			continue
-		var to := o.pos - u.pos
-		var d := to.length()
-		if d > reach + (0.6 if o.mounted else 0.0):
-			continue
-		if d > 0.3 and fwd.dot(to / d) < 0.55:
-			continue
-		if d < bd:
-			bd = d
-			best = o
-	if best:
-		deal_damage(best, melee_damage(u, best), u, "melee")
-		sound("clash" if best.weapon != "" or best.shield != "" else "hit", best.pos)
-		return best.name if best.name != "" else best.kind
-	for b: Building in buildings:
-		if b.dead or b.faction == faction:
-			continue
-		var local := (u.pos + fwd * reach * 0.7 - b.pos).rotated(-b.rot)
-		if absf(local.x) <= b.size.x * 0.5 + 0.8 and absf(local.y) <= b.size.y * 0.5 + 0.8:
-			damage_building(b, float(w["dmg"]) * _material(b.type), u)
-			sound("chop", b.pos)
-			return Defs.building_name(b.type)
-	sound("swing", u.pos)
-	return ""
-
-
-func commander_shoot(faction: int, origin: Vector3, dir: Vector3, power: float) -> bool:
-	var u := commander(faction)
-	if u == null or u.dead or not u.bow or u.arrows <= 0:
+	var at := now if now >= 0.0 else t
+	if u == null or u.dead or not u.bow or u.arrows <= 0 or at + EPS < u.shot_t + NOCK:
 		return false
 	u.arrows -= 1
-	fire_free_arrow(u, origin, dir.normalized() * lerpf(22.0, 62.0, clampf(power, 0.0, 1.0)), armory_tier(faction))
+	u.shot_t = at
+	var p := clampf(power, 0.0, 1.0)
+	fire_free_arrow(u, origin, dir.normalized() * lerpf(22.0, 62.0, p), armory_tier(faction), lerpf(0.45, 1.0, p))
 	return true
 
 

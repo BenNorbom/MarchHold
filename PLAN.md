@@ -255,6 +255,12 @@ Arming someone takes them off work. Soldiers still eat. Captains lead squads: *"
 
 ### Combat systems
 
+- **Bodies:** people take up space. They step around each other, a limited number can fight one target, and the rest form a second rank.
+- **Blows:** each has a wind-up, an impact and a recovery on the simulation's clock, and the animation runs on the same clock. Stepping back during a wind-up dodges it. Walls stop blows and arrows.
+- **Orders:** guards and followers fight within a leash measured from their post or commander. Holders don't leave their spot.
+- **Pikes** set against a charge cancel its bonus.
+- **The commander:** every click is a blow (one can be queued). Swords sweep two, clubs interrupt a wind-up, spears and pikes outreach. Right mouse or V blocks from the front at a cost in stamina; raising the guard just as a blow lands parries and staggers the attacker.
+
 Formations (line, wedge, shield wall, loose), morale and routing, wall assaults (ladders, rams, cannons), fire against palisades, and first-person commander combat (swing, thrust, block, bow draw) carried over from the prototype.
 
 ---
@@ -355,6 +361,8 @@ The first goal was to see how far built-in tools, procedural generation and free
 - **People and animals:** procedural mannequins and quadrupeds, animated on the GPU (walking, running, chopping, hammering, fighting, shooting, riding, grazing), with tools, weapons, shields, armour, carried loads, and the commander's crown and cloak.
 - **Sound:** every effect is synthesized at startup (wind, birds, fire, chopping, hammering, bells, horns, clashes, bows and cannons).
 
+- **Battle:** per-weapon attack poses for close-up and crowd figures, flinches, falls, dropped weapons, sparks, dust and spent arrows.
+
 **Where it still looks like a placeholder:** people and horses read as mannequins up close. **Likely first purchases if needed:** rigged people with animations, horses, then a tree set. Decide after playtesting.
 
 ---
@@ -370,7 +378,7 @@ Each phase ends playable. A phase isn't done until its "done when" is demonstrat
 | 2 | **Survival economy**: food states, housing, births, berries, hunting, farms, granary, `/l` `/p` | Done |
 | 3 | **Wood and Stone ages**: armory, `/c`, weapons, bows and arrows, militia, palisades by posts, quarry, stone walls, towers, houses | Done |
 | 4 | **Scouting and knowledge**: fog of war, scouts, timestamped reports, `/s`, field map, alarms | Done |
-| 5 | **Combat**: unit stats and matchups, morale (routing, wounded retreat), commander combat, arrows | Done; formations are basic |
+| 5 | **Combat**: unit stats and matchups, morale (routing, wounded retreat), commander combat, arrows | Done; bodies, timed blows, parrying; formations are basic |
 | 6 | **AI rival v1**: rush/boom/turtle/cavalry/cannon openings, difficulty, win by commander death | Done |
 | 7 | **Intro and tutorial**: opening, "The Founding", hints, calm start | Done |
 | 8 | **Bronze and iron**: mines, smelter, armory upgrades, pikes, swords, lances, armor, rams | Done (siege ladders not yet) |

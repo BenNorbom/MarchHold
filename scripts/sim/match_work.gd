@@ -197,6 +197,7 @@ func _set_task(u: Unit, task: String) -> void:
 	_release_claim(u)
 	u.task = task
 	u.phase = ""
+	u.enemy_bld = -1
 	u.tgt_bld = -1
 	u.work_t = 0.0
 	u.path = PackedVector2Array()
@@ -539,6 +540,8 @@ func _assign_slots(c: Crew) -> void:
 		var col := i % per_row
 		var n_in_row := mini(per_row, live.size() - row * per_row)
 		live[i].slot = Vector2((col - (n_in_row - 1) * 0.5) * 1.9, -row * 2.0)
+	c.depth = maxf(0.0, float((live.size() - 1) / per_row) * 2.0)
+	c.width = maxf(2.2, (mini(per_row, live.size()) - 1) * 1.9 + 2.2)
 
 
 func _rank(u: Unit) -> int:
@@ -554,6 +557,79 @@ func slot_point(u: Unit, center: Vector2, facing_dir: Vector2) -> Vector2:
 	var fwd := facing_dir.normalized() if facing_dir.length() > 0.01 else Vector2(0, -1)
 	var right := Vector2(-fwd.y, fwd.x)
 	return center + right * u.slot.x + fwd * u.slot.y
+
+
+## The crew's centre, worked out once a tick.
+func crew_center_now(c: Crew) -> Vector2:
+	if c.center_t != t:
+		c.center_t = t
+		c.center = crew_center(c)
+	return c.center
+
+
+func post_facing(faction: int, target: Vector2) -> Vector2:
+	var home := home_pos(faction)
+	return (target - home) if target.distance_to(home) > 5.0 else Vector2(0, -1)
+
+
+## Where this unit stands when guarding or holding.
+func station(u: Unit, c: Crew) -> Vector2:
+	var target: Vector2 = c.state.get("target", u.pos)
+	var dir := post_facing(u.faction, target)
+	var spot := slot_point(u, lane_center(c, target, dir), dir)
+	if solid_for(u.faction, cell_of(spot)):
+		spot = cell_center(nearest_free_cell(maxi(u.faction, 0), cell_of(spot)))
+	return spot
+
+
+## Crews sent to the same place line up side by side instead of inside each other.
+func lane_center(c: Crew, center: Vector2, facing_dir: Vector2) -> Vector2:
+	if t - c.lane_t >= 1.0:
+		c.lane_t = t
+		c.lane = _lane_offset(c)
+	var lane := c.lane
+	if lane == 0.0 or facing_dir.length() < 0.01:
+		return center
+	var fwd := facing_dir.normalized()
+	return center + Vector2(-fwd.y, fwd.x) * lane
+
+
+func _lane_offset(c: Crew) -> float:
+	if c.idx >= c.steps.size():
+		return 0.0
+	var kind := _post_kind(c.steps[c.idx]["action"])
+	var target: Vector2 = c.state.get("target", Vector2.ZERO)
+	var sharing := []
+	for o: Crew in crews.values():
+		if o.faction != c.faction or o.members.is_empty() or o.idx >= o.steps.size():
+			continue
+		if _post_kind(o.steps[o.idx]["action"]) != kind:
+			continue
+		if kind != "follow" and (o.state.get("target", Vector2.INF) as Vector2).distance_to(target) > 8.0:
+			continue
+		sharing.append(o)
+	if sharing.size() < 2:
+		return 0.0
+	sharing.sort_custom(func(a, b): return a.id < b.id)
+	var right: float = sharing[0].width * 0.5
+	var left := -right
+	for i in sharing.size():
+		var w: float = sharing[i].width
+		var at := 0.0
+		if i > 0:
+			if i % 2 == 1:
+				at = right + w * 0.5
+				right += w
+			else:
+				at = left - w * 0.5
+				left -= w
+		if sharing[i] == c:
+			return at
+	return 0.0
+
+
+func _post_kind(action: String) -> String:
+	return "guard" if action == "hold" else action
 
 
 # --- Crew drivers --------------------------------------------------------------
@@ -666,40 +742,120 @@ func unit_speed(u: Unit) -> float:
 	return s * (1.0 - slow)
 
 
-func move_to(u: Unit, goal: Vector2, dt: float, arrive: float = 1.0, run: bool = false) -> bool:
+## Walks toward goal around anyone in the way. True once within `arrive`, or as near
+## as the crowd lets it get when `crowd_ok`.
+func move_to(u: Unit, goal: Vector2, dt: float, arrive: float = 1.0, run: bool = false, crowd_ok: bool = true) -> bool:
 	var d := u.pos.distance_to(goal)
 	if d <= arrive:
 		u.path = PackedVector2Array()
 		return true
-	if u.path.is_empty() or u.path_goal.distance_squared_to(goal) > 4.0:
+	var same_goal := u.path_goal.distance_squared_to(goal) <= 4.0
+	if u.path.is_empty() and same_goal and t < u.path_wait:
+		return false
+	if u.path.is_empty() or not same_goal:
 		u.path = find_path(u.faction, u.pos, goal)
 		u.path_i = 0
 		u.path_goal = goal
+		u.climbing = false
 		if u.path.is_empty():
 			u.path_goal = Vector2(-999, -999)
 			return false
-	var wp: Vector2 = u.path[mini(u.path_i, u.path.size() - 1)]
-	var step := unit_speed(u) * (1.35 if run else 1.0) * dt
+		var end := u.path[u.path.size() - 1]
+		if end.distance_squared_to(goal) <= 1.0:
+			u.dead_ends = 0
+		elif crowd_ok and not solid_for(u.faction, cell_of(goal)) and not _enemy_works_between(u.faction, end, goal):
+			# No way round. People clamber over their own walls and rough ground, never an enemy's walls.
+			u.path.append(goal)
+			u.climbing = true
+	var last := u.path.size() - 1
+	var i := mini(u.path_i, last)
+	var wp: Vector2 = u.path[i]
+	# Corners only need passing near, or two people would fight over the same point.
+	while i < last and u.pos.distance_squared_to(wp) < 1.2 and line_clear(u.faction, u.pos, u.path[i + 1]):
+		i += 1
+		u.path_i = i
+		wp = u.path[i]
+	var stride := unit_speed(u) * (1.35 if run else 1.0) * dt
 	var to := wp - u.pos
 	var dist := to.length()
+	u.move_t = t
+	var next_pos := wp
 	if dist > 0.001:
-		u.facing = atan2(to.x, to.y)
-	if dist <= step:
-		u.pos = wp
-		u.path_i += 1
-		if u.path_i >= u.path.size():
-			u.path = PackedVector2Array()
-			if u.pos.distance_to(goal) > arrive:
-				u.path_goal = Vector2(-999, -999)
-	else:
-		u.pos += to / dist * step
+		next_pos = crowd.step(u, to / dist, minf(stride, dist), self)
+		var in_way: Unit = crowd.blocker
+		if in_way:
+			# The route stops short of the goal and somebody is already standing at its end.
+			if i == last and dist < 2.0 and wp.distance_squared_to(u.path_goal) > 1.0:
+				u.path = PackedVector2Array()
+				_dead_end(u)
+				return false
+			# Somebody is standing on the spot: this is as close as it gets.
+			if crowd_ok and i == last and d <= arrive + 1.2 and in_way.pos.distance_squared_to(goal) < d * d and not in_way.anim in [Anim.WALK, Anim.RUN]:
+				u.path = PackedVector2Array()
+				return true
+		if next_pos != u.pos:
+			next_pos = _keep_out(u, next_pos)
+			var heading := next_pos - u.pos
+			if heading.length_squared() > 0.0001:
+				u.facing = atan2(heading.x, heading.y)
+	u.pos = next_pos
 	if u.mounted:
 		u.anim = Anim.RIDE
 	elif u.carry > 0.0:
 		u.anim = Anim.CARRY
 	else:
 		u.anim = Anim.RUN if run else Anim.WALK
-	return u.pos.distance_to(goal) <= arrive
+	var left := u.pos.distance_to(goal)
+	if u.pos.distance_squared_to(wp) < 0.0025:
+		u.path_i = i + 1
+		if i == last:
+			u.path = PackedVector2Array()
+			if left > arrive:
+				if solid_for(u.faction, cell_of(goal)) and left <= arrive + CELL * 1.5:
+					return true       # the goal is inside something: next to it will do
+				if wp.distance_squared_to(u.path_goal) > 1.0:
+					_dead_end(u)            # as far as the ground allows
+				else:
+					u.path_goal = Vector2(-999, -999)
+	return left <= arrive
+
+
+## A step that would end inside something solid slides along it instead.
+func _keep_out(u: Unit, p: Vector2) -> Vector2:
+	var to_cell := cell_of(p)
+	var from_cell := cell_of(u.pos)
+	if to_cell == from_cell or not solid_for(u.faction, to_cell) or solid_for(u.faction, from_cell):
+		return p
+	if u.climbing and u.path_i >= u.path.size() - 1:
+		return p
+	if not u.path.is_empty() and not line_clear(u.faction, u.pos, u.path[mini(u.path_i, u.path.size() - 1)]):
+		# Jostled off the route: what's ahead is now behind a corner.
+		u.path = PackedVector2Array()
+		u.path_goal = Vector2(-999, -999)
+	var by := p - u.pos
+	for alt: Vector2 in [Vector2(by.x, 0), Vector2(0, by.y)]:
+		if alt == Vector2.ZERO:
+			continue
+		var q := u.pos + alt
+		if not solid_for(u.faction, cell_of(q)):
+			return q
+	return u.pos
+
+
+## A search that can't succeed covers the whole map, so wait longer before each retry.
+func _dead_end(u: Unit) -> void:
+	u.path_wait = t + minf(4.0, 0.5 * pow(2.0, u.dead_ends))
+	u.dead_ends = mini(u.dead_ends + 1, 4)
+
+
+func _enemy_works_between(faction: int, a: Vector2, b: Vector2) -> bool:
+	for o: Building in buildings:
+		if o.dead or not o.blocking or o.faction == faction or o.faction < 0:
+			continue
+		var r := o.size.length() * 0.5
+		if Geometry2D.get_closest_point_to_segment(o.pos, a, b).distance_squared_to(o.pos) <= r * r:
+			return true
+	return false
 
 
 ## Distance from p to the edge of a building's footprint.
@@ -712,7 +868,7 @@ func dist_to_building(p: Vector2, b: Building) -> float:
 
 ## A spot just outside the footprint, spread around the building per unit.
 func approach_point(u: Unit, b: Building, pad: float) -> Vector2:
-	var dir := Vector2.from_angle(float(u.id % 23) / 23.0 * TAU)
+	var dir := Vector2.from_angle(float(u.id) * GOLDEN_ANGLE)
 	var local := dir.rotated(-b.rot)
 	var sx := (b.size.x * 0.5 + pad) / maxf(absf(local.x), 0.001)
 	var sy := (b.size.y * 0.5 + pad) / maxf(absf(local.y), 0.001)
@@ -722,8 +878,9 @@ func approach_point(u: Unit, b: Building, pad: float) -> Vector2:
 func go_to_building(u: Unit, b: Building, dt: float, pad: float = 1.4, run: bool = false) -> bool:
 	if dist_to_building(u.pos, b) <= pad + 1.0:
 		return true
-	move_to(u, approach_point(u, b, pad), dt, 0.7, run)
-	return dist_to_building(u.pos, b) <= pad + 1.0
+	var arrived := move_to(u, approach_point(u, b, pad), dt, 0.7, run)
+	var d := dist_to_building(u.pos, b)
+	return d <= pad + 1.0 or (arrived and d <= pad + 3.0)
 
 
 func face(u: Unit, p: Vector2) -> void:
@@ -779,8 +936,13 @@ func update_worker(u: Unit, dt: float) -> void:
 			_do_idle(u, dt)
 
 
+const GOLDEN_ANGLE := 2.399963
+
+
 func _ring(u: Unit, r: float) -> Vector2:
-	return Vector2.from_angle(float(u.id % 17) / 17.0 * TAU) * r
+	# Never the same spot twice, and a big group fills several rings.
+	var spread := float(u.id % 4) * 1.3 if r > 2.0 else 0.0
+	return Vector2.from_angle(float(u.id) * GOLDEN_ANGLE) * (r + spread)
 
 
 func _do_idle(u: Unit, dt: float) -> void:
@@ -846,6 +1008,9 @@ func _do_gather(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
 		u.phase = "haul"
 	match u.phase:
 		"", "find":
+			if u.carry >= float(g["carry"]):
+				u.phase = "haul"  # a fresh order doesn't send a full load back to the tree
+				return
 			var origin: Vector2 = c.state.get("origin", u.pos)
 			var limit := 3 if g["node"] != "tree" else 2
 			var n = nearest_node(g["node"], origin, 260.0, func(nd): return int(claims.get(nd.id, 0)) < limit and (g["node"] != "rock" or true))
@@ -1494,13 +1659,13 @@ func _do_scout(u: Unit, c: Crew, dt: float) -> void:
 			var home := home_pos(u.faction)
 			var away := (target - home).normalized()
 			var near := target - away * 50.0 + Vector2.from_angle(float(u.id % 7) * 0.9) * 10.0
-			if move_to(u, near, dt, 10.0, true):
+			if move_to(u, near, dt, 10.0, true) or t < u.path_wait:
 				u.scout_leg = 1
 				u.scout_dir = Vector2(-away.y, away.x) * (1.0 if u.id % 2 == 0 else -1.0)
 		1:
 			# Circle around the target at a safe distance.
 			var side := (target + u.scout_dir * 75.0 - (target - home_pos(u.faction)).normalized() * 20.0).clamp(Vector2(20, 20), Vector2(map_size - 20, map_size - 20))
-			if move_to(u, side, dt, 10.0, true):
+			if move_to(u, side, dt, 10.0, true) or t < u.path_wait:
 				u.scout_leg = 2
 		2:
 			var dest := home_pos(u.faction)
@@ -1675,6 +1840,12 @@ func kill_unit(u: Unit, why: String = "") -> void:
 	u.dead = true
 	u.dead_t = t
 	u.anim = Anim.DEAD
+	u.prev = u.pos            # the body lies still between ticks
+	u.swing_live = false
+	u.blocking = false
+	var line := crew_of(u)
+	if line:
+		_assign_slots(line)   # close the gap; the dead get no slot
 	_release_claim(u)
 	var f := fac(u.faction)
 	if u.kind == "villager" and f:

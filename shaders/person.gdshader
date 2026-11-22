@@ -4,6 +4,8 @@ render_mode cull_back;
 // UV2: x = limb (0 body, 1 head, 2 left arm, 3 right arm, 4 left leg, 5 right leg)
 //      y = region (0 skin, 1 tunic, 2 trousers, 3 leather, 4 hair, 5 wood, 6 iron, 7 bronze, 8 gold, 9 tinted)
 // INSTANCE_CUSTOM: x = animation, y = phase, z = amount, w = per-person seed
+//   A fighting pose (x >= 16, see battle_pose.gd) packs riding, lean and twist into x,
+//   and has y = right arm angle, z = left arm angle.
 // INSTANCE_COLOR: tunic / tint colour
 
 uniform sampler2D cloth_noise : filter_linear_mipmap, repeat_enable;
@@ -41,7 +43,13 @@ void vertex() {
 		float s = sin(ph);
 		float arm_l = 0.0; float arm_r = 0.0; float leg_l = 0.0; float leg_r = 0.0;
 		float lean = 0.0; float twist = 0.0; float spread = 0.0; float arm_out = 0.0; float head = 0.0;
-		if (anim == 1 || anim == 14 || anim == 15 || anim == 9) { // walk, carry
+		if (anim >= 16) { // fighting
+			int bits = anim - 16;
+			lean = float((bits >> 1) & 15) * 0.05 - 0.2;
+			twist = float((bits >> 5) & 31) * 0.05 - 0.8;
+			arm_r = ph; arm_l = amt;
+			if ((bits & 1) == 1) { leg_l = -1.2; leg_r = -1.2; spread = 0.45; }
+		} else if (anim == 1 || anim == 14 || anim == 15 || anim == 9) { // walk, carry
 			leg_l = s * 0.45 * amt; leg_r = -leg_l;
 			arm_l = -s * 0.35 * amt; arm_r = -arm_l;
 			if (anim == 9) { arm_l = -0.46; arm_r = -0.46; }

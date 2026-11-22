@@ -14,6 +14,8 @@ const MAX_PATHS_PER_TICK := 14
 
 enum Anim { IDLE, WALK, RUN, CHOP, HAMMER, DIG, PICK, MELEE, SHOOT, CARRY, RIDE, DEAD, LOAD }
 
+const Crowd = preload("res://scripts/sim/crowd.gd")
+
 
 class Unit:
 	var id := 0
@@ -74,6 +76,38 @@ class Unit:
 	var slot := Vector2.ZERO    # formation offset
 	var stuck := 0.0
 	var last_pos := Vector2.ZERO
+	# Battle
+	var vel := Vector2.ZERO     # metres per second over the last tick
+	var style := {}             # how its weapon is fought with, from Defs.MELEE
+	var style_for := "?"        # the weapon `style` was looked up for
+	var engaged := false        # in striking distance of its enemy
+	var front := true           # has a place in the front rank
+	var engage_from := Vector2.ZERO
+	var scan_t := 0.0
+	var avoid_id := -1          # a foe it couldn't get at
+	var avoid_t := 0.0
+	var swing_start := -1.0
+	var swing_hit := -1.0
+	var swing_end := -1.0
+	var swing_live := false     # wound up, not landed yet
+	var swing_tgt := -1
+	var swing_bld := -1
+	var shot_t := -99.0
+	var stun_t := 0.0
+	var hit_dir := Vector2.ZERO
+	var blocking := false
+	var guard_up_t := -99.0
+	var guard_down_t := -99.0
+	var stamina := 1.0
+	# Getting through a crowd
+	var side := 0.0
+	var boxed_t := 0.0
+	var dodge_t := 0.0
+	var ghost_t := 0.0
+	var move_t := -1.0
+	var path_wait := 0.0
+	var dead_ends := 0          # routes in a row that stopped short of the goal
+	var climbing := false       # the last leg goes over its own side's walls, or rough ground
 	var reload := 0.0
 	var in_tower := -1
 
@@ -123,6 +157,15 @@ class Crew:
 	var lost := 0
 	var done := false
 	var loop := false
+	# Formation, kept out of `state` because that is the plan.
+	var center := Vector2.ZERO
+	var center_t := -1.0
+	var depth := 0.0            # front rank to back
+	var width := 2.2
+	var lane := 0.0             # sideways shift past other crews at the same spot
+	var lane_t := -99.0
+	var wall := -1              # the enemy wall across an attack's line
+	var wall_t := -99.0
 	var origin := Vector2.ZERO
 
 
@@ -168,6 +211,8 @@ class Shot:
 	var faction := 0
 	var shooter := -1
 	var pos := Vector3.ZERO
+	var prev := Vector3.ZERO    # last tick's position, for the view
+	var arc := 0.12
 	var vel := Vector3.ZERO
 	var start := Vector3.ZERO
 	var end := Vector3.ZERO
@@ -198,6 +243,7 @@ var bld_by_id := {}
 var crews := {}
 var factions: Array = []
 var shots: Array = []
+var crowd := Crowd.new()
 var messages: Array = []
 var events: Array = []
 var next_id := 1
@@ -315,6 +361,7 @@ func spawn_unit(faction: int, kind: String, p: Vector2) -> Unit:
 	u.last_pos = p
 	u.born = t
 	u.facing = rng.randf() * TAU
+	u.side = 1.0 if u.id % 2 == 0 else -1.0
 	match kind:
 		"villager":
 			u.max_hp = Defs.VILLAGER["hp"]
@@ -516,8 +563,10 @@ func find_path(faction: int, a: Vector2, b: Vector2) -> PackedVector2Array:
 			out.append(p)
 			anchor = p
 		i += 1
-	if out.is_empty() or out[out.size() - 1].distance_to(b) > CELL * 1.5:
-		if not solid_for(pf, cell_of(b)):
+	# Finish on the goal itself, unless the route couldn't get there.
+	if not solid_for(pf, cell_of(b)):
+		var end := out[out.size() - 1] if not out.is_empty() else a
+		if line_clear(pf, end, b):
 			out.append(b)
 	return out
 

@@ -1,4 +1,4 @@
-extends "res://scripts/sim/match_work.gd"
+extends "res://scripts/sim/match_battle.gd"
 ## Combat, projectiles, siege engines, animals, vision, intelligence and alarms.
 
 const WOOD_TYPES := ["hut", "stockpile", "lodge", "farm", "armory", "palisade", "palisade_gate", "watch_post", "stable"]
@@ -40,9 +40,13 @@ func describe_person(u: Unit) -> String:
 ## Returns true when the unit spent this tick fighting or fleeing.
 func combat_update(u: Unit, dt: float, radius: float) -> bool:
 	u.cooldown = maxf(0.0, u.cooldown - dt)
+	if t < u.stun_t:
+		u.anim = Anim.IDLE
+		return true
 	if u.child or u.siege >= 0:
 		return _maybe_flee(u, dt, 10.0)
 	if u.flee_t > 0.0:
+		_drop_fight(u)
 		u.flee_t -= dt
 		var home := home_pos(u.faction)
 		move_to(u, home + _ring(u, 6.0), dt, 3.0, true)
@@ -52,18 +56,43 @@ func combat_update(u: Unit, dt: float, radius: float) -> bool:
 	# Badly hurt soldiers fall back to heal.
 	if u.kind == "villager" and u.hp < u.max_hp * 0.25 and t - u.hit_t < 4.0:
 		u.flee_t = 10.0
+		_drop_fight(u)
 		return true
+	if _swinging(u):
+		return true
+	var c := crew_of(u)
+	var order: String = c.steps[c.idx]["action"] if c and c.idx < c.steps.size() else ""
 	var foe := unit(u.enemy)
-	if foe == null or foe.dead or foe.pos.distance_to(u.pos) > radius + 8.0 or foe.stable >= 0:
-		foe = nearest_enemy(u.pos, radius, u.faction)
-		u.enemy = foe.id if foe else -1
+	if foe:
+		if u.engage_from == Vector2.ZERO:
+			u.engage_from = u.pos
+		# The leash is checked twice a second, the rest every tick.
+		var gone := foe.dead or foe.stable >= 0 or foe.faction == u.faction
+		if not gone and (ticks + u.id) % 5 == 0:
+			gone = not _may_fight(u, foe, _fight_area(u, c, order, radius), radius)
+		if gone:
+			foe = null
+			u.enemy = -1
+			u.scan_t = 0.0
+	elif u.enemy >= 0:
+		u.enemy = -1
+		u.scan_t = 0.0
+	if t + EPS >= u.scan_t:
+		foe = _pick_target(u, foe, c, order, radius)
+		var again := 0.5
+		if foe:
+			again = (2.2 if u.front else 1.0) if u.engaged else 0.8
+		u.scan_t = t + again + float(u.id % 4) * 0.1
 	if foe == null:
+		u.engaged = false
+		u.engage_from = Vector2.ZERO
 		var b := bld(u.enemy_bld)
 		if b and not b.dead:
 			_attack_building(u, b, dt)
 			return true
+		u.enemy_bld = -1
 		return false
-	_fight(u, foe, dt)
+	_fight(u, foe, dt, order, c)
 	return true
 
 
@@ -80,36 +109,71 @@ func _maybe_flee(u: Unit, dt: float, r: float) -> bool:
 	return false
 
 
-func _fight(u: Unit, foe: Unit, dt: float) -> void:
+func _fight(u: Unit, foe: Unit, dt: float, order: String, c: Crew) -> void:
 	var d := u.pos.distance_to(foe.pos)
-	var bow_range := Defs.TOWER_BOW_RANGE if u.in_tower >= 0 else Defs.BOW_RANGE
-	if u.bow and u.arrows > 0 and (u.weapon == "" or d > 6.0) and d <= bow_range:
+	if u.bow and u.arrows > 0 and (u.weapon == "" or d > 6.0) and d <= bow_range(u):
+		u.engaged = false
 		face(u, foe.pos)
 		u.anim = Anim.SHOOT
 		if u.cooldown <= 0.0:
+			if arrow_arc(u, foe) < 0.0:
+				# Behind cover: look for someone else.
+				u.cooldown = 0.5
+				u.avoid_id = foe.id
+				u.avoid_t = t + 3.0
+				u.anim = Anim.IDLE
+				return
 			u.cooldown = 2.0
+			u.shot_t = t
 			u.arrows -= 1
 			fire_arrow(u, foe, armory_tier(u.faction))
 		return
-	if u.bow and u.arrows <= 0 and u.weapon == "":
+	var holding := order == "hold"
+	if not holding and u.bow and u.arrows <= 0 and u.weapon == "":
 		# Out of arrows: go and refill at the armory.
 		var arm := nearest_building(u.faction, u.pos, ["armory"])
-		if arm and go_to_building(u, arm, dt, 1.4, true):
-			refill_quiver(u, fac(u.faction))
+		if arm:
+			if go_to_building(u, arm, dt, 1.4, true):
+				refill_quiver(u, fac(u.faction))
+			return
+	var stand := stand_distance(u, foe)
+	if d <= stand + (STAY_MARGIN if u.engaged else START_MARGIN):
+		face(u, foe.pos)
+		u.engaged = true
+		u.anim = Anim.MELEE
+		if u.front and u.cooldown <= 0.0:
+			var wall := melee_cover(u, foe)
+			if wall:
+				_go_through(u, foe, wall, holding)
+			else:
+				_begin_swing(u, foe.id, -1)
 		return
-	var w := weapon_def(u)
-	var reach: float = w["reach"] + 0.5 + (0.6 if foe.mounted else 0.0) + (1.2 if foe.kind in ["cannon", "ram"] else 0.0)
-	if d > reach:
-		if u.mounted and u.charge_start == Vector2.ZERO:
-			u.charge_start = u.pos
-		move_to(u, foe.pos, dt, reach * 0.8, true)
+	u.engaged = false
+	if not u.front:
+		# Second rank: stay ready until a place opens.
+		var wait := stand + 1.0
+		if d <= wait + 0.6:
+			face(u, foe.pos)
+			u.anim = Anim.MELEE
+			return
+		stand = wait
+	if holding and c and u.pos.distance_to(station(u, c)) > 1.5:
+		face(u, foe.pos)
+		u.anim = Anim.MELEE
 		return
-	face(u, foe.pos)
-	u.anim = Anim.MELEE
-	if u.cooldown <= 0.0:
-		u.cooldown = float(w["rate"])
-		deal_damage(foe, melee_damage(u, foe), u, "melee")
-		sound("clash" if foe.weapon != "" or foe.shield != "" else "hit", foe.pos)
+	if u.mounted and d > 6.0 and u.charge_start == Vector2.ZERO:
+		u.charge_start = u.pos
+	if order == "attack" and (ticks + u.id) % 5 == 0 and not line_clear(u.faction, u.pos, foe.pos):
+		# Storming a camp: batter the wall in the way instead of hunting for a way round.
+		var across := wall_between(u.faction, u.pos, foe.pos)
+		if across:
+			_go_through(u, foe, across, holding)
+			return
+	if move_to(u, foe.pos, dt, stand, true, false):
+		face(u, foe.pos)
+		u.anim = Anim.MELEE
+	elif t < u.path_wait:
+		_go_through(u, foe, melee_cover(u, foe), holding)
 
 
 func melee_damage(att: Unit, tgt: Unit) -> float:
@@ -124,7 +188,9 @@ func melee_damage(att: Unit, tgt: Unit) -> float:
 			dmg *= 1.5
 		elif tgt.shield == "" and not (tgt.weapon.ends_with("pike") or tgt.weapon.ends_with("spear")):
 			dmg *= 1.2
-		if w.has("charge") and att.charge_start != Vector2.ZERO and att.charge_start.distance_to(att.pos) > 10.0:
+		# A pike set against a charge takes the weight out of it.
+		var braced := tgt.weapon.ends_with("pike") and _faces(tgt, att.pos)
+		if w.has("charge") and not braced and att.charge_start != Vector2.ZERO and att.charge_start.distance_to(att.pos) > 10.0:
 			dmg *= float(w["charge"])
 		att.charge_start = Vector2.ZERO
 	if att.kind == "commander":
@@ -138,16 +204,44 @@ func melee_damage(att: Unit, tgt: Unit) -> float:
 	return dmg
 
 
-func deal_damage(tgt: Unit, dmg: float, att: Unit, kind: String) -> void:
+## Returns how it was defended: "parry", "block", "shield", "armor" or "".
+func deal_damage(tgt: Unit, dmg: float, att: Unit, kind: String, from: Vector2 = Vector2.INF) -> String:
 	if tgt.dead or dmg <= 0.0:
-		return
+		return ""
+	var origin := from
+	if origin == Vector2.INF:
+		origin = att.pos if att else tgt.pos
+	var guard := ""
+	if tgt.blocking and _faces(tgt, origin):
+		if kind == "melee" and t - tgt.guard_up_t <= PARRY_WINDOW:
+			guard = "parry"
+			dmg = 0.0
+			if att:
+				_stagger(att, Defs.PARRY_STAGGER)
+		elif kind == "melee" or (kind == "arrow" and tgt.shield != ""):
+			if tgt.stamina > 0.05:
+				guard = "block"
+				tgt.stamina = maxf(0.0, tgt.stamina - Defs.BLOCK_STAMINA - dmg * 0.005)
+				var kept: float
+				if tgt.shield != "":
+					kept = Defs.BLOCK_KEEP["shield"]
+				else:
+					kept = Defs.BLOCK_KEEP["weapon" if tgt.weapon != "" else "bare"]
+				dmg *= kept
+	if guard == "":
+		if tgt.shield != "" and kind != "ball":
+			guard = "shield"
+		elif tgt.armor != "":
+			guard = "armor"
 	tgt.hp -= dmg
 	tgt.hit_t = t
+	tgt.hit_dir = (tgt.pos - origin).normalized()
 	if att:
 		tgt.attacker = att.id
 		if tgt.enemy < 0 and armed(tgt) and att.faction != tgt.faction:
 			tgt.enemy = att.id
-	emit({"type": "hit", "id": tgt.id, "pos": tgt.pos, "kind": kind})
+	emit({"type": "hit", "id": tgt.id, "att": att.id if att else -1, "pos": tgt.pos, "from": origin, "dir": tgt.hit_dir,
+		"kind": kind, "guard": guard, "dmg": dmg, "killed": tgt.hp <= 0.0})
 	if tgt.faction >= 0 and att and att.faction != tgt.faction and is_person(tgt):
 		var f := fac(tgt.faction)
 		if t - f.attack_msg_t > 25.0 and tgt.kind != "commander":
@@ -163,10 +257,12 @@ func deal_damage(tgt: Unit, dmg: float, att: Unit, kind: String) -> void:
 		if tgt.kind == "deer":
 			tgt.dead = true
 			tgt.dead_t = t
+			tgt.prev = tgt.pos
 			emit({"type": "death", "id": tgt.id, "kind": "deer", "pos": tgt.pos, "faction": -1})
 			add_carcass(tgt.pos, 40.0)
-			return
+			return guard
 		kill_unit(tgt, kind)
+	return guard
 
 
 func _place_name(faction: int, p: Vector2) -> String:
@@ -178,21 +274,25 @@ func _place_name(faction: int, p: Vector2) -> String:
 
 
 func _attack_building(u: Unit, b: Building, dt: float) -> void:
-	var reach: float = weapon_def(u)["reach"] + 0.6
 	if u.bow and u.weapon == "":
 		# Arrows don't hurt buildings; archers hang back.
 		u.enemy_bld = -1
+		u.anim = Anim.IDLE
 		return
-	if dist_to_building(u.pos, b) > reach + 0.8:
-		move_to(u, approach_point(u, b, reach * 0.6), dt, 0.6, true)
-		return
+	var reach := maxf(float(melee_def(u)["stand"]) + 0.6, 2.0)
+	var d := dist_to_building(u.pos, b)
+	if d > reach:
+		var arrived := move_to(u, _nearest_edge(u, b, 1.2), dt, 0.6, true)
+		if not arrived or d > reach + 2.5:
+			if t < u.path_wait:
+				var across := wall_between(u.faction, u.pos, b.pos)
+				if across and across != b:
+					u.enemy_bld = across.id
+			return
 	face(u, b.pos)
 	u.anim = Anim.MELEE
 	if u.cooldown <= 0.0:
-		var w := weapon_def(u)
-		u.cooldown = float(w["rate"])
-		damage_building(b, float(w["dmg"]) * _material(b.type), u)
-		sound("chop" if b.type in WOOD_TYPES else "pick", b.pos)
+		_begin_swing(u, -1, b.id)
 
 
 func _material(type: String) -> float:
@@ -209,7 +309,7 @@ func damage_building(b: Building, dmg: float, att: Unit) -> void:
 	if b.dead:
 		return
 	b.hp -= dmg
-	emit({"type": "building_hit", "id": b.id})
+	emit({"type": "building_hit", "id": b.id, "att": att.id if att else -1})
 	var f := fac(b.faction)
 	if att and t - b.alarm_t > 20.0:
 		b.alarm_t = t
@@ -227,6 +327,22 @@ func damage_building(b: Building, dmg: float, att: Unit) -> void:
 		_refresh_counts(f)
 
 
+func _land_blow(u: Unit, tgt: Unit, share: float) -> void:
+	if tgt.dead:
+		return
+	var metal := tgt.weapon != "" or tgt.shield != ""
+	var guard := deal_damage(tgt, melee_damage(u, tgt) * share, u, "melee")
+	if guard in ["parry", "block"]:
+		sound("clash", tgt.pos)
+	else:
+		sound("clash" if metal else "hit", tgt.pos)
+
+
+func _hit_building(u: Unit, b: Building) -> void:
+	damage_building(b, float(weapon_def(u)["dmg"]) * _material(b.type), u)
+	sound("chop" if b.type in WOOD_TYPES else "pick", b.pos)
+
+
 # --- Projectiles ------------------------------------------------------------------
 
 func _height(p: Vector2) -> float:
@@ -239,16 +355,22 @@ func fire_arrow(shooter: Unit, target: Unit, tier: int) -> void:
 	s.kind = "arrow"
 	s.faction = shooter.faction
 	s.shooter = shooter.id
-	s.start = Vector3(shooter.pos.x, _height(shooter.pos) + (5.5 if shooter.in_tower >= 0 else 1.5), shooter.pos.y)
+	s.start = _muzzle(shooter)
+	s.pos = s.start
+	s.prev = s.start
+	var arc := arrow_arc(shooter, target)
+	s.arc = arc if arc >= 0.0 else ARROW_FLAT
 	var chance := clampf(1.05 - d / 75.0, 0.3, 0.95)
 	if target.kind == "deer":
 		chance = 0.85
 	s.hits = rng.randf() < chance
-	var aim := target.pos + (target.pos - target.prev) * 6.0 * (d / 40.0)
+	s.dur = clampf(d / 38.0, 0.25, 2.0) * (1.2 if s.arc > ARROW_FLAT else 1.0)
+	# It lands on a whole tick, so lead by that.
+	var flight := ceilf(s.dur / Defs.TICK) * Defs.TICK
+	var aim := target.pos + target.vel.limit_length(14.0) * flight
 	if not s.hits:
 		aim += Vector2.from_angle(rng.randf() * TAU) * rng.randf_range(1.5, 4.0)
 	s.end = Vector3(aim.x, _height(aim) + (1.1 if s.hits else 0.0), aim.y)
-	s.dur = clampf(d / 38.0, 0.25, 2.0)
 	s.target = target.id
 	s.dmg = Defs.ARROW_DMG[clampi(tier, 0, 2)]
 	shots.append(s)
@@ -265,6 +387,9 @@ func fire_ball(e: Unit, aim: Vector2, at_bld: int) -> void:
 	s.faction = e.faction
 	s.shooter = e.id
 	s.start = Vector3(e.pos.x, _height(e.pos) + 1.0, e.pos.y)
+	s.pos = s.start
+	s.prev = s.start
+	s.arc = 0.05
 	s.end = Vector3(p.x, _height(p) + 0.5, p.y)
 	s.dur = clampf(d / 120.0, 0.35, 1.6)
 	s.target_bld = at_bld
@@ -274,76 +399,135 @@ func fire_ball(e: Unit, aim: Vector2, at_bld: int) -> void:
 
 
 ## Physically simulated shot (the player's bow).
-func fire_free_arrow(shooter: Unit, origin: Vector3, vel: Vector3, tier: int) -> void:
+func fire_free_arrow(shooter: Unit, origin: Vector3, vel: Vector3, tier: int, strength: float = 1.0) -> void:
 	var s := Shot.new()
 	s.kind = "arrow"
 	s.free = true
 	s.faction = shooter.faction
 	s.shooter = shooter.id
 	s.pos = origin
+	s.prev = origin
 	s.start = origin
 	s.vel = vel
-	s.dmg = Defs.ARROW_DMG[clampi(tier, 0, 2)] * 1.2
+	s.dmg = Defs.ARROW_DMG[clampi(tier, 0, 2)] * 1.2 * strength
 	shots.append(s)
 	sound("bow", shooter.pos)
 
 
 func update_shots(dt: float) -> void:
+	# A spent shot stays for one tick, so the view can fly it all the way in.
+	shots = shots.filter(func(s): return not s.dead)
 	for s: Shot in shots:
-		if s.dead:
-			continue
 		s.t += dt
+		s.prev = s.pos
 		if s.free:
 			_free_shot(s, dt)
 			continue
 		var k := clampf(s.t / s.dur, 0.0, 1.0)
-		var flat := s.start.lerp(s.end, k)
-		var arc := (4.0 * k * (1.0 - k)) * (s.start.distance_to(s.end) * (0.12 if s.kind == "arrow" else 0.05))
-		s.pos = flat + Vector3(0, arc, 0)
+		s.pos = s.start.lerp(s.end, k) + Vector3(0, 4.0 * k * (1.0 - k) * s.start.distance_to(s.end) * s.arc, 0)
 		if k >= 1.0:
 			s.dead = true
 			if s.kind == "arrow":
-				var tgt := unit(s.target)
-				if s.hits and tgt and not tgt.dead:
-					var dmg := s.dmg
-					if tgt.shield != "":
-						dmg *= 1.0 - float(Defs.ITEMS[tgt.shield]["block_arrow"])
-					if tgt.armor != "":
-						dmg *= 1.0 - float(Defs.ITEMS[tgt.armor]["armor"])
-					if tgt.in_tower >= 0:
-						dmg *= 0.5
-					deal_damage(tgt, dmg, unit(s.shooter), "arrow")
-				emit({"type": "fx", "name": "arrow_land", "pos": Vector2(s.end.x, s.end.z), "hit": s.hits})
+				_arrow_lands(s)
 			else:
 				_ball_impact(s)
-	shots = shots.filter(func(s): return not s.dead)
+
+
+func _arrow_lands(s: Shot) -> void:
+	var tgt := unit(s.target)
+	var p := Vector2(s.end.x, s.end.z)
+	var hit := false
+	if s.hits and tgt and not tgt.dead:
+		# It has to still be there. Game doesn't dodge.
+		var room := Crowd.radius(tgt) + 0.9
+		hit = tgt.kind == "deer" or tgt.pos.distance_to(p) <= room
+	if hit:
+		var dmg := s.dmg
+		if tgt.shield != "":
+			dmg *= 1.0 - float(Defs.ITEMS[tgt.shield]["block_arrow"])
+		if tgt.armor != "":
+			dmg *= 1.0 - float(Defs.ITEMS[tgt.armor]["armor"])
+		if tgt.in_tower >= 0:
+			dmg *= 0.5
+		deal_damage(tgt, dmg, unit(s.shooter), "arrow", Vector2(s.start.x, s.start.z))
+	var at := Vector3(s.end.x, _height(p), s.end.z)
+	var drop := (s.end - s.start) - Vector3(0, 4.0 * s.start.distance_to(s.end) * s.arc, 0)
+	emit({"type": "fx", "name": "arrow_land", "pos": p, "at": at, "dir": drop, "hit": hit})
 
 
 func _free_shot(s: Shot, dt: float) -> void:
-	var old := s.pos
+	var from := s.pos
 	s.vel.y -= 9.8 * dt
-	s.pos += s.vel * dt
-	var p2 := Vector2(s.pos.x, s.pos.z)
-	var shooter := unit(s.shooter)
-	for u: Unit in units_near(p2, 3.0, -2):
-		if u.faction == s.faction or u.id == s.shooter or u.dead or u.stable >= 0:
+	var to := from + s.vel * dt
+	var a := Vector2(from.x, from.z)
+	var b := Vector2(to.x, to.z)
+	var flat := b - a
+	var len2 := flat.length_squared()
+	var first := 2.0
+	var victim: Unit = null
+	# Test the whole of this tick's flight, not just where it ends.
+	for u: Unit in units_near((a + b) * 0.5, sqrt(len2) * 0.5 + 2.0, -2):
+		if u.faction == s.faction or u.id == s.shooter or u.stable >= 0:
 			continue
-		var top := _height(u.pos) + (2.6 if u.mounted else 1.85)
-		var seg_closest := Geometry3D.get_closest_point_to_segment(Vector3(u.pos.x, s.pos.y, u.pos.y), old, s.pos)
-		var hd := Vector2(seg_closest.x, seg_closest.z).distance_to(u.pos)
-		if hd < (0.9 if u.mounted else 0.55) and seg_closest.y > _height(u.pos) and seg_closest.y < top:
-			var dmg := s.dmg
-			if u.shield != "":
-				dmg *= 1.0 - float(Defs.ITEMS[u.shield]["block_arrow"]) * 0.7
-			if u.armor != "":
-				dmg *= 1.0 - float(Defs.ITEMS[u.armor]["armor"])
-			deal_damage(u, dmg, shooter, "arrow")
-			s.dead = true
-			emit({"type": "fx", "name": "arrow_land", "pos": u.pos, "hit": true})
-			return
-	if s.pos.y < _height(p2) or s.t > 6.0 or not terrain.in_bounds(p2, 1.0):
+		var near := clampf((u.pos - a).dot(flat) / len2, 0.0, 1.0) if len2 > 0.0001 else 0.0
+		var side := (a + flat * near).distance_squared_to(u.pos)
+		var r := Crowd.radius(u) + 0.15
+		if side > r * r:
+			continue
+		var entry := maxf(0.0, near - sqrt(r * r - side) / maxf(sqrt(len2), 0.01))
+		if entry >= first:
+			continue
+		var ground := _height(u.pos)
+		var top := 1.85
+		if u.mounted:
+			top = 2.6
+		elif u.child:
+			top = 1.3
+		elif u.kind != "villager" and u.kind != "commander":
+			top = 1.6
+		for k: float in [entry, near]:
+			var y := lerpf(from.y, to.y, k)
+			if y > ground - 0.1 and y < ground + top:
+				first = entry
+				victim = u
+				break
+	var stopped := 2.0
+	var wall := first_building(a, b)
+	if not wall.is_empty():
+		var k: float = wall[1]
+		if lerpf(from.y, to.y, k) < _height((wall[0] as Building).pos) + cover_height(wall[0]):
+			stopped = k
+	var samples := maxi(1, int(ceil(sqrt(len2) / 1.5)))
+	for i in range(1, samples + 1):
+		var k := float(i) / samples
+		if k >= stopped:
+			break
+		var p := from.lerp(to, k)
+		if p.y < _height(Vector2(p.x, p.z)):
+			stopped = k
+			break
+	if victim and first < stopped:
+		s.pos = from.lerp(to, first)
+		var dmg := s.dmg
+		if victim.shield != "":
+			dmg *= 1.0 - float(Defs.ITEMS[victim.shield]["block_arrow"]) * 0.7
+		if victim.armor != "":
+			dmg *= 1.0 - float(Defs.ITEMS[victim.armor]["armor"])
+		deal_damage(victim, dmg, unit(s.shooter), "arrow", Vector2(s.start.x, s.start.z))
 		s.dead = true
-		emit({"type": "fx", "name": "arrow_land", "pos": p2, "hit": false})
+		sound("arrow_land", victim.pos)
+		emit({"type": "fx", "name": "arrow_land", "pos": victim.pos, "at": s.pos, "dir": s.vel, "hit": true})
+		return
+	if stopped <= 1.0:
+		s.pos = from.lerp(to, stopped)
+		s.dead = true
+		var p2 := Vector2(s.pos.x, s.pos.z)
+		sound("arrow_land", p2)
+		emit({"type": "fx", "name": "arrow_land", "pos": p2, "at": s.pos, "dir": s.vel, "hit": false})
+		return
+	s.pos = to
+	if s.t > 6.0 or not terrain.in_bounds(b, 1.0):
+		s.dead = true
 
 
 func _ball_impact(s: Shot) -> void:
@@ -364,7 +548,7 @@ func _ball_impact(s: Shot) -> void:
 		var dmg: float = Defs.CANNON["dmg_unit"] * clampf(fall, 0.2, 1.0)
 		if u.armor != "":
 			dmg *= 1.0 - float(Defs.ITEMS[u.armor]["armor"]) * 0.5
-		deal_damage(u, dmg, e, "ball")
+		deal_damage(u, dmg, e, "ball", p)
 
 
 # --- Siege engines ----------------------------------------------------------------
@@ -448,7 +632,11 @@ func _engine_move(e: Unit, goal: Vector2, dt: float, speed: float, arrive: float
 	if e.pos.distance_to(goal) <= arrive:
 		e.anim = Anim.IDLE
 		return
-	if e.path.is_empty() or e.path_goal.distance_squared_to(goal) > 9.0:
+	var same_goal := e.path_goal.distance_squared_to(goal) <= 9.0
+	if e.path.is_empty() and same_goal and t < e.path_wait:
+		e.anim = Anim.IDLE
+		return
+	if e.path.is_empty() or not same_goal:
 		e.path = find_path(e.faction, e.pos, goal)
 		e.path_i = 0
 		e.path_goal = goal
@@ -466,6 +654,8 @@ func _engine_move(e: Unit, goal: Vector2, dt: float, speed: float, arrive: float
 		e.path_i += 1
 		if e.path_i >= e.path.size():
 			e.path = PackedVector2Array()
+			if wp.distance_squared_to(e.path_goal) > 1.0:
+				_dead_end(e)
 	else:
 		e.pos += to / dist * step
 	e.anim = Anim.WALK
@@ -531,43 +721,60 @@ func _do_military(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
 				_do_idle(u, dt)
 				return
 			var dir := Vector2(sin(cmd.facing), cos(cmd.facing))
-			var spot := slot_point(u, cmd.pos - dir * 5.0, dir)
-			if u.pos.distance_to(spot) > 1.5:
-				move_to(u, spot, dt, 1.0, u.pos.distance_to(spot) > 10.0)
-			else:
+			var spot := slot_point(u, lane_center(c, cmd.pos - dir * 5.0, dir), dir)
+			var arrived := u.pos.distance_to(spot) <= 1.5
+			if not arrived:
+				arrived = move_to(u, spot, dt, 1.0, u.pos.distance_to(spot) > 10.0)
+			if arrived:
 				u.anim = Anim.IDLE
 				u.facing = cmd.facing
 		"guard", "hold":
-			var home := home_pos(u.faction)
-			var dir := (target - home) if target.distance_to(home) > 5.0 else Vector2(0, -1)
-			var spot := slot_point(u, target, dir)
+			var dir := post_facing(u.faction, target)
+			var spot := station(u, c)
 			if u.bow:
 				var tw := nearest_building(u.faction, spot, ["tower"])
 				if tw and tw.pos.distance_to(spot) < 12.0:
 					spot = tw.pos + _ring(u, 1.2)
-			if u.pos.distance_to(spot) > 1.2:
-				move_to(u, spot, dt, 0.8)
-			else:
+			var at_post := u.pos.distance_to(spot) <= 1.2
+			if not at_post:
+				at_post = move_to(u, spot, dt, 0.8)
+			if at_post:
 				u.anim = Anim.IDLE
 				face(u, spot + dir * 10.0)
 			var tw2 := nearest_building(u.faction, u.pos, ["tower"])
-			u.in_tower = tw2.id if (tw2 and u.bow and tw2.pos.distance_to(u.pos) < 3.5) else -1
+			u.in_tower = tw2.id if (tw2 and u.bow and dist_to_building(u.pos, tw2) < 2.2) else -1
 		"attack":
-			var center := crew_center(c)
+			var center := crew_center_now(c)
 			var dir := target - center
-			if center.distance_to(target) < 30.0:
+			var in_way := wall_ahead(c, center, target)
+			# A deep or offset crew's centre never gets as close as its front does.
+			if in_way or center.distance_to(target) < 30.0 + c.depth + absf(c.lane):
+				if u.bow and u.weapon == "":
+					u.anim = Anim.IDLE
+					face(u, target)
+					return
 				if u.enemy_bld < 0:
-					var b := _nearest_enemy_building(u.faction, target, 70.0)
+					var b := in_way
+					if in_way:
+						# Each takes the piece on their own line, so the breach is a wide one.
+						var mine := wall_between(u.faction, u.pos, target)
+						if mine and mine.pos.distance_to(in_way.pos) < 14.0:
+							b = mine
+					else:
+						b = _nearest_enemy_building(u.faction, target, 70.0)
 					if b:
 						u.enemy_bld = b.id
 					else:
 						u.anim = Anim.IDLE
 				return
 			var lead := target + (center - target).normalized() * maxf(0.0, center.distance_to(target) - 25.0)
-			var spot := slot_point(u, center + dir.normalized() * 8.0, dir)
+			# Slots run back from the front rank, so aim the front ahead by half the depth:
+			# otherwise a deep crew's centre, and then the crew, creeps backwards.
+			var spot := slot_point(u, center + dir.normalized() * (8.0 + c.depth * 0.5), dir)
 			if center.distance_to(target) < 60.0:
-				spot = slot_point(u, lead, dir)
-			move_to(u, spot, dt, 1.0)
+				spot = slot_point(u, lane_center(c, lead, dir), dir)
+			if move_to(u, spot, dt, 1.0):
+				u.anim = Anim.IDLE
 
 
 func _nearest_enemy_building(faction: int, p: Vector2, r: float) -> Building:

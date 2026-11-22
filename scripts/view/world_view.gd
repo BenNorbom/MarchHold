@@ -5,6 +5,7 @@ extends Node3D
 const Defs = preload("res://scripts/data/defs.gd")
 const Terrain = preload("res://scripts/world/terrain.gd")
 const PeopleView = preload("res://scripts/view/people_view.gd")
+const BattleFx = preload("res://scripts/view/battle_fx.gd")
 const UiTheme = preload("res://scripts/ui/ui_theme.gd")
 
 const CHUNK := 32              # terrain cells per chunk side (64 m)
@@ -23,6 +24,8 @@ var splat_img: Image
 var splat_tex: ImageTexture
 var terrain_mat: ShaderMaterial
 var people: PeopleView
+var battle_fx: BattleFx
+var tick_alpha := 0.0           # how far this frame is between two sim ticks
 var node_slots := {}            # resource node id -> [[MultiMesh, index], ...]
 var bush_slots := {}            # the same for bush leaves, which outlast their berries
 var bld_nodes := {}             # building id -> {"root", "mesh", "body", "tier", "len", "h", "fire"}
@@ -66,6 +69,9 @@ func setup(match_ref, materials, mesh_lib, q: int) -> void:
 	people = PeopleView.new()
 	add_child(people)
 	people.setup(m, mats, meshes, q)
+	battle_fx = BattleFx.new()
+	add_child(battle_fx)
+	battle_fx.setup(mats, meshes)
 	_projectiles()
 	for b in m.buildings:
 		_sync_building(b)
@@ -740,11 +746,13 @@ func puff(p: Vector3, big: bool) -> void:
 
 
 func _update_shots() -> void:
+	var alpha := tick_alpha
 	var na := 0
 	var nb := 0
 	for s in m.shots:
-		if s.dead:
-			continue
+		if s.t == 0.0:
+			continue      # loosed since the last tick
+		var at: Vector3 = s.prev.lerp(s.pos, alpha)
 		if s.kind == "arrow":
 			if na >= arrow_mm.instance_count:
 				continue
@@ -752,16 +760,16 @@ func _update_shots() -> void:
 			if s.free:
 				dir = s.vel
 			else:
-				var k := clampf(s.t / s.dur, 0.0, 1.0)
-				dir = (s.end - s.start) + Vector3(0, (4.0 - 8.0 * k) * s.start.distance_to(s.end) * 0.12, 0)
+				var k := clampf((s.t - Defs.TICK * (1.0 - alpha)) / s.dur, 0.0, 1.0)
+				dir = (s.end - s.start) + Vector3(0, (4.0 - 8.0 * k) * s.start.distance_to(s.end) * s.arc, 0)
 			if dir.length() < 0.01:
 				dir = Vector3.FORWARD
-			arrow_mm.set_instance_transform(na, Transform3D(Basis.looking_at(-dir.normalized(), Vector3.UP if absf(dir.normalized().y) < 0.98 else Vector3.RIGHT), s.pos))
+			arrow_mm.set_instance_transform(na, Transform3D(Basis.looking_at(-dir.normalized(), Vector3.UP if absf(dir.normalized().y) < 0.98 else Vector3.RIGHT), at))
 			na += 1
 		else:
 			if nb >= ball_mm.instance_count:
 				continue
-			ball_mm.set_instance_transform(nb, Transform3D(Basis(), s.pos))
+			ball_mm.set_instance_transform(nb, Transform3D(Basis(), at))
 			nb += 1
 	arrow_mm.visible_instance_count = na
 	ball_mm.visible_instance_count = nb
@@ -878,9 +886,17 @@ func handle_events(events: Array) -> void:
 					add_child(mi)
 					node_slots[n.id] = []
 					carcasses[n.id] = mi
+			"hit":
+				people.on_hit(ev)
+				battle_fx.hit(ev, m.terrain.pos3(ev["pos"]))
+			"death":
+				if ev["kind"] != "deer":
+					battle_fx.fallen(m.terrain.pos3(ev["pos"]))
 			"fx":
 				var p: Vector2 = ev["pos"]
-				if ev["name"] == "muzzle":
+				if ev["name"] == "arrow_land":
+					battle_fx.arrow_landed(ev["at"], ev["dir"], ev["hit"])
+				elif ev["name"] == "muzzle":
 					puff(m.terrain.pos3(p, 1.2), true)
 				elif ev["name"] == "impact":
 					puff(m.terrain.pos3(p, 0.3), true)
@@ -890,11 +906,13 @@ var carcasses := {}
 
 
 func update_frame(delta: float, alpha: float, cam: Vector3) -> void:
+	tick_alpha = alpha
 	cam_pos = cam
 	_update_grass(cam)
 	_update_shots()
 	_update_engines(alpha)
 	people.update_frame(delta, alpha, cam, hidden_unit)
+	battle_fx.update_frame(delta, cam)
 	_update_selection_rings(alpha)
 	for id in carcasses.keys():
 		var n = m.terrain.nodes[id]

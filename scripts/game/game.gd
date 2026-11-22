@@ -12,6 +12,7 @@ const Materials = preload("res://scripts/view/materials.gd")
 const Meshes = preload("res://scripts/view/meshes.gd")
 const WorldView = preload("res://scripts/view/world_view.gd")
 const Commander = preload("res://scripts/view/commander.gd")
+const BattleHud = preload("res://scripts/ui/battle_hud.gd")
 const Hud = preload("res://scripts/ui/hud.gd")
 const Terra = preload("res://scripts/orders/terra.gd")
 const Parser = preload("res://scripts/orders/parser.gd")
@@ -36,6 +37,11 @@ const CHAT_HINTS := {
 	"h": ["Slash commands", "[b]/b[/b] Build   [b]/c[/b] Craft   [b]/l[/b] Ledger   [b]/p[/b] People   [b]/s[/b] Scouts\n[b]/m[/b] Map   [b]/t[/b] Tech   [b]/cancel[/b] Stop orders   [b]/h[/b] Help"],
 	"cancel": ["Stop orders · /cancel", "Press Enter to stop the addressed crew. With no addressee, all crews stop."],
 }
+
+# Sounds a battle makes by the hundred: only so many, nearest first.
+const BATTLE_SOUNDS := ["clash", "hit", "swing", "bow", "arrow_land"]
+const BATTLE_VOICES := 4          # per burst
+const BATTLE_BURST := 0.15        # seconds
 
 var opts := {}
 var m
@@ -78,6 +84,10 @@ var selected: Array[int] = []
 var look_bld := -1
 var ready_done := false
 var start_ms := 0
+var fight_hud
+var guard_taught := false
+var voices := 0
+var voices_t := 0.0
 
 
 func start(options: Dictionary) -> void:
@@ -108,6 +118,9 @@ func start(options: Dictionary) -> void:
 	view.hidden_unit = me.id
 	hud = Hud.new()
 	add_child(hud)
+	fight_hud = BattleHud.new()
+	hud.root.add_child(fight_hud)
+	hud.root.move_child(fight_hud, 0)     # under the menus
 	_update_hud()
 	hud.map_view.setup(m, view.map_image())
 	hud.chat_submitted.connect(_on_chat)
@@ -178,8 +191,12 @@ func _process(delta: float) -> void:
 			n += 1
 		if n >= 4:
 			acc = 0.0
+		# Your own blows land between ticks, on the frame they connect.
+		cmd.now = m.t + acc
+		m.commander_update(0, cmd.now)
 	var alpha := clampf(acc / Defs.TICK, 0.0, 1.0)
 	view.handle_events(m.events)
+	_battle_events(m.events)
 	_sound_events(m.events)
 	m.events.clear()
 	for msg in m.messages:
@@ -194,6 +211,7 @@ func _process(delta: float) -> void:
 	_update_hud()
 	_update_look()
 	_update_selection()
+	_update_fight_hud()
 	if placing:
 		_update_place()
 	if map_open:
@@ -208,8 +226,12 @@ func _process(delta: float) -> void:
 
 
 func _sound_events(events: Array) -> void:
+	var crowded := []
 	for ev in events:
 		if ev["type"] != "sound":
+			continue
+		if ev["name"] in BATTLE_SOUNDS:
+			crowded.append(ev)
 			continue
 		var name: String = ev["name"]
 		var p: Vector2 = ev["pos"]
@@ -226,6 +248,97 @@ func _sound_events(events: Array) -> void:
 			elif name in ["chop", "pick", "hammer", "anvil"]:
 				vol2 = -12.0
 			Sfx.play(name, m.terrain.pos3(p, 1.0), vol2)
+	_battle_sounds(crowded)
+
+
+func _battle_sounds(list: Array) -> void:
+	if m.t - voices_t >= BATTLE_BURST or m.t < voices_t:
+		voices_t = m.t
+		voices = 0
+	if list.is_empty() or voices >= BATTLE_VOICES:
+		return
+	var here := Vector2(cmd.position.x, cmd.position.z)
+	var near := []
+	for ev in list:
+		near.append([here.distance_squared_to(ev["pos"]), ev])
+	near.sort_custom(func(a, b): return a[0] < b[0])
+	for e in near:
+		if voices >= BATTLE_VOICES:
+			return
+		voices += 1
+		Sfx.play(e[1]["name"], m.terrain.pos3(e[1]["pos"], 1.0), -8.0, randf_range(0.85, 1.15))
+
+
+# --- Your own fighting ---------------------------------------------------------------
+
+## An angle clockwise from straight ahead, for a point on the ground.
+func _bearing(p: Vector2) -> float:
+	var f: float = cmd.facing()
+	return Vector2(sin(f), cos(f)).angle_to(p - Vector2(cmd.position.x, cmd.position.z))
+
+
+func _battle_events(events: Array) -> void:
+	var me = m.commander(0)
+	if me == null:
+		return
+	for ev in events:
+		if ev["type"] == "building_hit" and ev.get("att", -1) == me.id:
+			fight_hud.landed(false, "")
+			cmd.on_landed(false)
+		if ev["type"] != "hit":
+			continue
+		var guard: String = ev["guard"]
+		if ev["att"] == me.id:
+			fight_hud.landed(ev["killed"], guard)
+			cmd.on_landed(ev["killed"])
+			Sfx.play("hit", null, -6.0 if ev["killed"] else -11.0, 0.8 if ev["killed"] else 1.1)
+		elif ev["id"] == me.id:
+			cmd.on_struck(ev["dir"], ev["dmg"], guard)
+			if guard == "parry":
+				fight_hud.parried()
+				Sfx.play("clash", null, -2.0, 1.35)
+			else:
+				fight_hud.hurt(_bearing(ev["from"]), ev["dmg"])
+				Sfx.play("clash" if guard == "block" else "hit", null, -4.0, 0.8)
+
+
+func _update_fight_hud() -> void:
+	var me = m.commander(0)
+	var active: bool = me != null and not me.dead and not over_shown and not placing and not hud.menu_open
+	fight_hud.visible = active
+	if not active:
+		return
+	var tgt = null
+	if cmd.can_shoot():
+		var looked = m.unit(look_unit)
+		if looked and m.is_hostile(0, looked):
+			tgt = looked
+	else:
+		var found: Array = m.commander_targets(me)
+		if not found.is_empty() and found[0].faction >= 0:
+			tgt = found[0]
+	fight_hud.in_reach = tgt != null
+	fight_hud.target_hp = clampf(tgt.hp / tgt.max_hp, 0.0, 1.0) if tgt else -1.0
+	var threats := []
+	for o in m.units_near(me.pos, 7.0, -3, 0):
+		if o.swing_live and o.swing_tgt == me.id and o.swing_hit > cmd.now - Defs.TICK:
+			threats.append([_bearing(o.pos), o.swing_hit - cmd.now])
+	fight_hud.threats = threats
+	if not threats.is_empty() and not guard_taught:
+		guard_taught = true
+		hud.show_toast("Hold right mouse or V to block. Raise it as the marker turns blue to parry.")
+	fight_hud.guarding = me.blocking
+	fight_hud.has_shield = me.shield != ""
+	fight_hud.stamina = me.stamina
+	fight_hud.health = me.hp / me.max_hp
+	fight_hud.draw_power = cmd.draw_power()
+
+
+## Villagers are picked by clicking, except in a fight, where a click is a blow.
+func _click_selects(shift: bool) -> bool:
+	if shift and not cmd.sprinting:
+		return true
+	return not (m.commander_engaged(0) or (cmd.can_shoot() and m.commander_aims_at_foe(0)))
 
 
 func _update_hud() -> void:
@@ -384,6 +497,14 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if hud.chat_open:
 		return
+	# Letting go always counts, whatever is open.
+	if event is InputEventKey and not event.echo and event.keycode == KEY_V:
+		cmd.set_guard(event.pressed and not paused and not placing and not hud.menu_open)
+		get_viewport().set_input_as_handled()
+		return
+	if event is InputEventMouseButton and not event.pressed and event.button_index == MOUSE_BUTTON_RIGHT:
+		cmd.set_guard(false)
+		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		var k: int = event.keycode
 		if paused:
@@ -458,7 +579,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			if event.pressed:
 				if placing:
 					_place_click()
-				elif not _click_select(event.shift_pressed):
+				elif not (_click_selects(event.shift_pressed) and _click_select(event.shift_pressed)):
 					cmd.primary_pressed()
 			else:
 				cmd.primary_released()
@@ -468,6 +589,8 @@ func _unhandled_input(event: InputEvent) -> void:
 					_finish_wall()
 				else:
 					_cancel_place()
+			else:
+				cmd.set_guard(true)
 		elif event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed and placing:
 			place_rot += deg_to_rad(15.0)
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN and event.pressed and placing:
@@ -591,8 +714,6 @@ func _update_selection() -> void:
 
 
 func _on_attack_result(text: String) -> void:
-	if text.begins_with("hit:"):
-		return
 	hud.show_toast(text)
 
 
@@ -1332,7 +1453,7 @@ func _menu_tech() -> void:
 
 func _menu_help() -> void:
 	var t := """[b]Moving[/b]  WASD · Shift sprint · Space jump · mouse to look
-[b]Fighting[/b]  Left click to strike (hold and release with a bow) · Q switch bow/weapon · G or E at the armory: take gear · F at the stable: ride
+[b]Fighting[/b]  Left click to strike (hold and release with a bow) · hold right mouse or V to block; raise it just as a blow lands (blue marker) to parry · a sword sweeps two, a club interrupts, a spear outreaches · with enemies near, a click strikes and Shift+click still selects · Q switch bow/weapon · G or E at the armory: take gear · F at the stable: ride
 [b]Selecting[/b]  Look at a villager and [b]click[/b] to select them; [b]Shift+click[/b] adds or drops more. Orders you type then go to exactly the selected people, as one crew. [b]Esc[/b] clears the selection.
 [b]Talking[/b]  Look at a villager and press [b]Enter[/b] (or T) to address their crew. In chat, [b]Tab[/b] cycles through individual members and back to the crew. [b]@Name[/b] addresses someone's crew by name, [b]@all[/b] addresses everyone. Idle villagers take orders with no addressee.
 [b]Marking[/b]  R marks the spot you look at; orders can then say 'there' or 'the mark'.

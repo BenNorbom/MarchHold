@@ -155,6 +155,25 @@ const ITEMS := {
 		"cost": {"iron": 2, "coal": 2}, "batch": 8, "time": 10.0},
 }
 
+# How each kind of weapon is fought with.
+# stand: centre-to-centre distance to fight at. wind: wind-up before an AI blow lands.
+# quick: the same for the commander. arc: half angle of the commander's blow, radians.
+# places: how many can fight one target at once. cleave: how many the commander's blow hits.
+const MELEE := {
+	"fists": {"stand": 0.9, "wind": 0.3, "quick": 0.15, "arc": 0.6, "places": 6},
+	"club": {"stand": 1.2, "wind": 0.4, "quick": 0.22, "arc": 0.6, "places": 6},
+	"sword": {"stand": 1.2, "wind": 0.3, "quick": 0.16, "arc": 1.0, "places": 6, "cleave": 2},
+	"spear": {"stand": 1.9, "wind": 0.3, "quick": 0.2, "arc": 0.4, "places": 8},
+	"pike": {"stand": 3.0, "wind": 0.3, "quick": 0.3, "arc": 0.35, "places": 12},
+	"lance": {"stand": 2.1, "wind": 0.3, "quick": 0.24, "arc": 0.5, "places": 6},
+}
+const COMMANDER_SWING := 0.8      # share of the weapon's rate
+const CLEAVE_SHARE := 0.6
+const CLUB_STAGGER := 0.35        # seconds the commander's club interrupts for
+const PARRY_STAGGER := 1.1
+const BLOCK_KEEP := {"shield": 0.1, "weapon": 0.35, "bare": 0.6}   # damage that gets through a block
+const BLOCK_STAMINA := 0.08
+
 const FISTS := {"dmg": 3.0, "reach": 1.5, "rate": 1.0}
 const ARROW_DMG := [8.0, 11.0, 14.0]
 const BOW_RANGE := 55.0
@@ -386,3 +405,12 @@ static func describe_step(s: Dictionary) -> String:
 	if count > 0:
 		txt += " (%d people)" % count
 	return txt
+
+
+static func weapon_family(weapon: String) -> String:
+	if weapon == "club":
+		return "club"
+	for family in ["sword", "spear", "pike", "lance"]:
+		if weapon.ends_with(family):
+			return family
+	return "fists"
