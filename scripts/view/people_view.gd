@@ -2,6 +2,7 @@ extends Node3D
 ## Nearby villagers use articulated rigs. Distant people, animals and props are batched.
 
 const Rig = preload("res://scripts/view/villager_rig.gd")
+const Defs = preload("res://scripts/data/defs.gd")
 const Anim = preload("res://scripts/sim/match_base.gd").Anim
 
 const MAX_PEOPLE := 560
@@ -10,7 +11,6 @@ const ITEMS := ["club", "wood_spear", "bronze_spear", "iron_spear", "bronze_swor
 	"bronze_lance", "iron_lance", "bow", "axe", "hammer", "pick", "hoe", "basket", "bundle_wood", "bundle_stone",
 	"bundle_food", "wood_shield", "bronze_shield", "iron_shield", "bronze_helmet", "iron_helmet", "bronze_armor",
 	"iron_armor", "crown", "cloak"]
-const AABB_ALL := AABB(Vector3(-60, -60, -60), Vector3(1150, 320, 1150))
 
 var m
 var meshes
@@ -27,6 +27,7 @@ var spare_rigs := [[], [], []]
 var detail_radius: float
 var detail_limit: int
 var refresh := 0.0
+var bounds: AABB
 
 
 func setup(match_ref, mats, mesh_lib, quality: int) -> void:
@@ -35,15 +36,19 @@ func setup(match_ref, mats, mesh_lib, quality: int) -> void:
 	detail_limit = [4, 12, 20][quality]
 	meshes = mesh_lib
 	view_dist = [200.0, 300.0, 380.0][quality]
-	body_mm = _make(meshes.person(), MAX_PEOPLE, true)
+	bounds = AABB(Vector3(-60, -60, -60), Vector3(m.map_size + 126, 320, m.map_size + 126))
+	var sides: int = m.factions.size()
+	var people_cap := MAX_PEOPLE if sides == 2 else maxi(MAX_PEOPLE, sides * (Defs.POP_HARD_CAP + 10))
+	var item_cap := 260 if sides == 2 else maxi(260, sides * 100)
+	body_mm = _make(meshes.person(), people_cap, true)
 	var crowd_material: ShaderMaterial = mats.get_mat("person").duplicate()
 	crowd_material.set_shader_parameter("painted_crowd", true)
 	for mesh: ArrayMesh in [preload("res://assets/people/villager_crowd.res"), preload("res://assets/people/farmer_crowd.res"), preload("res://assets/people/child_crowd.res")]:
-		crowd_meshes.append(_make(mesh, MAX_PEOPLE, true, crowd_material))
+		crowd_meshes.append(_make(mesh, people_cap, true, crowd_material))
 	for name in ITEMS:
-		var cap := MAX_PEOPLE if name in ["bundle_wood", "wood_spear", "club", "bow", "axe", "wood_shield"] else 260
+		var cap := people_cap if name in ["bundle_wood", "wood_spear", "club", "bow", "axe", "wood_shield"] else item_cap
 		if name in ["crown", "cloak"]:
-			cap = 4
+			cap = maxi(4, sides)     # one for every commander
 		item_mm[name] = _make(meshes.item(name), cap, name != "crown")
 	horse_mm = _make(meshes.quadruped(false), MAX_ANIMALS, true)
 	deer_mm = _make(meshes.quadruped(true), MAX_ANIMALS, true)
@@ -61,7 +66,7 @@ func _make(mesh: Mesh, cap: int, shadows: bool, material: Material = null) -> Mu
 	mi.multimesh = mm
 	if material:
 		mi.material_override = material
-	mi.custom_aabb = AABB_ALL
+	mi.custom_aabb = bounds
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mi)
 	return mm

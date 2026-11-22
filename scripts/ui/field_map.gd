@@ -108,7 +108,7 @@ func _draw() -> void:
 				draw_rect(Rect2(p - Vector2(sz, sz) * 0.5, Vector2(sz, sz)), Color(0.6, 0.12, 0.1))
 				if e["type"] == "campfire":
 					draw_circle(p, 8, Color(0.6, 0.12, 0.1))
-					draw_string(font, p + Vector2(10, 5), "Rook's camp (%s)" % _ago(e["t"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color(0.5, 0.08, 0.05))
+					draw_string(font, p + Vector2(10, 5), "%s's camp (%s)" % [m.fac(e["faction"]).short_name, _ago(e["t"])], HORIZONTAL_ALIGNMENT_LEFT, -1, 15, Color(0.5, 0.08, 0.05))
 			"units":
 				if e.get("faction", -1) == 0 or m.t - float(e["t"]) > 300.0:
 					continue

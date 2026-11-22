@@ -39,7 +39,7 @@ const CHAT_HINTS := {
 
 var opts := {}
 var m
-var ai
+var rivals: Array = []
 var mats
 var meshes
 var view
@@ -89,11 +89,15 @@ func start(options: Dictionary) -> void:
 	var is_tutorial: bool = opts.get("tutorial", false)
 	m = Match.new()
 	var map_id: String = Defs.MAP_REFERENCE if is_tutorial else str(opts.get("map", Defs.MAP_REFERENCE))
-	m.setup({"seed": seed_in, "map": map_id})
-	ai = Rival.new()
-	ai.setup(m, {"faction": 1, "difficulty": 0 if is_tutorial else int(opts.get("difficulty", 1)),
-		"strategy": "boom" if is_tutorial else str(opts.get("strategy", "random")), "seed": seed_in,
-		"calm_start": bool(opts.get("calm_start", false)), "passive": is_tutorial, "max_pop": 14 if is_tutorial else 200})
+	var settlements := 2 if is_tutorial else 1 + int(opts.get("opponents", 1))
+	m.setup({"seed": seed_in, "map": map_id, "settlements": settlements})
+	rivals.clear()
+	for id in range(1, m.factions.size()):
+		var rival = Rival.new()
+		rival.setup(m, {"faction": id, "difficulty": 0 if is_tutorial else int(opts.get("difficulty", 1)),
+			"strategy": "boom" if is_tutorial else str(opts.get("strategy", "random")), "seed": seed_in,
+			"calm_start": bool(opts.get("calm_start", false)), "passive": is_tutorial, "max_pop": 14 if is_tutorial else 200})
+		rivals.append(rival)
 	var quality := int(Settings.get_val("quality", 1))
 	mats = Materials.new()
 	meshes = Meshes.new(mats)
@@ -142,7 +146,14 @@ func _welcome() -> void:
 	if tutorial:
 		tutorial.begin()
 		return
-	hud.log_line("You stand at your campfire with six villagers. Commander Rook has made camp somewhere across the valley.", "system")
+	if rivals.size() == 1:
+		hud.log_line("You stand at your campfire with six villagers. Commander Rook has made camp somewhere across the valley.", "system")
+	else:
+		var names: Array[String] = []
+		for rival in rivals:
+			names.append(m.fac(rival.fid).short_name)
+		hud.log_line("You stand at your campfire with six villagers. %d rival commanders have made camp across the land: %s and %s. Be the last one standing." % [
+			rivals.size(), ", ".join(names.slice(0, -1)), names[-1]], "system")
 	hud.log_line("Look at a villager and press Enter to give orders. Type /b to build, /h for help.", "system")
 	if not terra.available():
 		hud.log_line("Simple orders work offline. Choose a Terra connection in Settings for orders in your own words.", "hint")
@@ -172,7 +183,7 @@ func _process(delta: float) -> void:
 		while acc >= Defs.TICK and n < 4:
 			acc -= Defs.TICK
 			m.tick(Defs.TICK)
-			ai.update(Defs.TICK)
+			run_rivals(Defs.TICK)
 			if tutorial:
 				tutorial.tick(Defs.TICK)
 			n += 1
@@ -205,6 +216,11 @@ func _process(delta: float) -> void:
 	peak_pop = maxi(peak_pop, m.fac(0).pop)
 	if m.over and not over_shown:
 		_show_end()
+
+
+func run_rivals(dt: float) -> void:
+	for rival in rivals:
+		rival.update(dt)
 
 
 func _sound_events(events: Array) -> void:
@@ -1353,7 +1369,7 @@ func _menu_help() -> void:
    join @Name moves the addressed villager or crew to that person's crew.
    Terra starts orders when you send them. For construction, you choose each site.
 
-[b]Winning[/b]  Kill Commander Rook (he wears a crown). If you fall, the match is lost.
+[b]Winning[/b]  Kill every rival commander (they wear crowns). If you fall, the match is lost.
 [b]Growing[/b]  People are born only when the village is [i]well fed[/i] and there is free housing."""
 	_open_menu("help", "Help", t, "Esc to close")
 
@@ -1379,10 +1395,20 @@ func _show_end() -> void:
 	var secs := int(m.t) % 60
 	var body := ""
 	if win:
-		body = "Commander Rook has fallen after %d:%02d.\n\n" % [mins, secs]
+		var last_words := "Commander Rook has fallen" if rivals.size() == 1 else "The last rival commander has fallen"
+		body = "%s after %d:%02d.\n\n" % [last_words, mins, secs]
 	else:
 		body = "You were killed after %d:%02d. Your people scatter.\n\n" % [mins, secs]
-	body += "Peak population %d · enemies killed %d · births %d · %s age reached.\nRook played a %s opening." % [peak_pop, f.kills, f.births, Defs.AGES[f.age], ai.strategy]
+	body += "Peak population %d · enemies killed %d · births %d · %s age reached." % [peak_pop, f.kills, f.births, Defs.AGES[f.age]]
+	if rivals.size() == 1:
+		body += "\nRook played a %s opening." % rivals[0].strategy
+	else:
+		var lines: Array[String] = []
+		for rival in rivals:
+			var side = m.fac(rival.fid)
+			lines.append("%s (%s, %s)" % [side.short_name, rival.strategy,
+				"standing" if side.alive else "fell at %d:%02d" % [int(side.out_t) / 60, int(side.out_t) % 60]])
+		body += "\nRivals: %s." % ", ".join(lines)
 	hud.show_end(win, body)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	cmd.look_enabled = false

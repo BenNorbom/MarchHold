@@ -22,7 +22,7 @@ func _initialize() -> void:
 
 func _run_tests() -> void:
 	var only := OS.get_environment("MH_TEST")
-	var tests := ["defs", "validation", "terrain", "map_sizes", "rings", "settlements", "path_queue", "economy", "crews", "selection", "walls", "combat", "parser", "schema", "chatgpt", "terra_orders", "duel"]
+	var tests := ["defs", "validation", "terrain", "map_sizes", "rings", "settlements", "path_queue", "rivals", "menu", "economy", "crews", "selection", "walls", "combat", "parser", "schema", "chatgpt", "terra_orders", "duel"]
 	var t0 := Time.get_ticks_msec()
 	for name in tests:
 		if only != "" and only != name:
@@ -578,6 +578,39 @@ func test_path_queue() -> void:
 			in_order = false
 		last[u.faction] = u.id
 	check(in_order, "whoever waited longest goes first")
+
+
+func test_rivals() -> void:
+	var m = Match.new()
+	m.setup({"seed": 4242, "settlements": 4, "map": "medium"})
+	var target: Vector2 = m._enemy_guess(0)
+	check(target.distance_to(m.home_pos(0)) >= Defs.RING_SPACING * 0.8, "scouts look away from home")
+	for k in m.kcells_in(target, 30.0):
+		m.fac(0).knowledge[k] = 5.0
+	check(m._enemy_guess(0).distance_to(target) > 30.0, "scouts move on to ground nobody has seen")
+	var ais := []
+	for id in range(1, 4):
+		var ai = Rival.new()
+		ai.setup(m, {"faction": id, "difficulty": 2, "seed": 4242})
+		ais.append(ai)
+	run(m, 45.0, ais)
+	for id in range(1, 4):
+		check(not m.crews_of(id).is_empty(), "rival %d put its people to work" % id)
+		check(m.fac(id).pop >= Defs.START_VILLAGERS, "rival %d kept its people" % id)
+	check(m.crews_of(0).is_empty(), "no AI gives the player's people orders")
+
+
+func test_menu() -> void:
+	var menu = load("res://scripts/ui/main_menu.gd").new()
+	root.add_child(menu)
+	for k in range(1, Defs.MAX_SETTLEMENTS):
+		menu.map_pick.select(0)
+		menu.opponents.select(k - 1)
+		menu._fit_map()
+		var id: String = menu.map_pick.get_selected_metadata()
+		check(id == Defs.map_for(k + 1, "small"), "%d opponents move the map up to %s" % [k, id])
+		check(not menu.map_pick.is_item_disabled(menu.map_pick.selected), "%d opponents leave the picked map enabled" % k)
+	menu.free()
 
 
 func test_duel() -> void:

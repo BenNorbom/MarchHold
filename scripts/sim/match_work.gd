@@ -515,10 +515,33 @@ func _enemy_guess(faction: int):
 	var e = known_enemy_camp(faction)
 	if e != null:
 		return e
-	# The camps face each other across the middle of the map.
 	var home := home_pos(faction)
 	var c := Vector2(map_size, map_size) * 0.5
+	if factions.size() > 2:
+		return _unexplored_on_ring(faction, home, c)
+	# Two camps face each other across the middle of the map.
 	return (c * 2.0 - home).clamp(Vector2(40, 40), Vector2(map_size - 40, map_size - 40))
+
+
+## With several camps, all anyone knows is that they stand on a ring. Go to the nearest
+## part of it this faction hasn't seen, or failing that the part seen longest ago.
+func _unexplored_on_ring(faction: int, home: Vector2, c: Vector2) -> Vector2:
+	var known := fac(faction).knowledge
+	var r: float = map_size * 0.5 - float(terrain.config["margin"])
+	var from := (home - c).angle()
+	var best := c
+	var best_seen := INF
+	# Outwards from home to either side, starting past the home kit.
+	for k in range(2, 13):
+		for side in [1.0, -1.0]:
+			var p := c + Vector2.from_angle(from + side * k * TAU / 24.0) * r
+			if p.distance_to(home) < Defs.RING_SPACING * 0.8:
+				continue
+			var seen: float = known[kcell(p)]
+			if seen < best_seen:
+				best_seen = seen
+				best = p
+	return best
 
 
 func _advance(c: Crew) -> void:

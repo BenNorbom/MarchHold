@@ -14,6 +14,7 @@ var credits_panel: PanelContainer
 var terra_status: Label
 var difficulty: OptionButton
 var map_pick: OptionButton
+var opponents: OptionButton
 var map_note: Label
 var strategy: OptionButton
 var seed_edit: LineEdit
@@ -110,14 +111,14 @@ func _build_match_panel() -> void:
 	match_panel.theme_type_variation = "MenuPanel"
 	match_panel.set_anchors_preset(Control.PRESET_CENTER)
 	match_panel.custom_minimum_size = Vector2(560, 420)
-	match_panel.position = Vector2(-280, -150)
+	match_panel.position = Vector2(-280, -190)
 	match_panel.visible = false
 	add_child(match_panel)
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 12)
 	match_panel.add_child(v)
 	var t2 := Label.new()
-	t2.text = "New match — you against Commander Rook"
+	t2.text = "New match"
 	t2.theme_type_variation = "Title"
 	v.add_child(t2)
 	var g := GridContainer.new()
@@ -133,6 +134,14 @@ func _build_match_panel() -> void:
 		difficulty.add_item(d)
 	difficulty.selected = int(Settings.get_val("difficulty", 1))
 	g.add_child(difficulty)
+	var rivals_label := Label.new()
+	rivals_label.text = "Opponents"
+	g.add_child(rivals_label)
+	opponents = OptionButton.new()
+	for k in range(1, Defs.MAX_SETTLEMENTS):
+		opponents.add_item(str(k))
+	opponents.selected = clampi(int(Settings.get_val("opponents", 1)), 1, Defs.MAX_SETTLEMENTS - 1) - 1
+	g.add_child(opponents)
 	var map_label := Label.new()
 	map_label.text = "Map size"
 	g.add_child(map_label)
@@ -150,8 +159,9 @@ func _build_match_panel() -> void:
 			map_pick.select(map_pick.item_count - 1)
 	map_pick.item_selected.connect(func(_i: int): _update_map_note())
 	g.add_child(map_pick)
+	opponents.item_selected.connect(func(_i: int): _fit_map())
 	var l2 := Label.new()
-	l2.text = "Rook's opening"
+	l2.text = "Rival openings"
 	g.add_child(l2)
 	strategy = OptionButton.new()
 	for s in ["Random", "Rush", "Boom", "Turtle", "Cavalry", "Cannons"]:
@@ -167,14 +177,14 @@ func _build_match_panel() -> void:
 	l4.text = ""
 	g.add_child(l4)
 	calm = CheckBox.new()
-	calm.text = "Calm start: Rook won't attack for 10 minutes"
+	calm.text = "Calm start: no rival attacks for 10 minutes"
 	calm.button_pressed = bool(Settings.get_val("calm_start", false))
 	g.add_child(calm)
 	map_note = Label.new()
 	map_note.theme_type_variation = "Small"
 	map_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.add_child(map_note)
-	_update_map_note()
+	_fit_map()
 	var h := HBoxContainer.new()
 	h.alignment = BoxContainer.ALIGNMENT_END
 	h.add_theme_constant_override("separation", 12)
@@ -192,9 +202,26 @@ func _build_match_panel() -> void:
 	v.add_child(h)
 
 
+## Greys out maps too small for the opponents picked, and moves up to one that fits.
+func _fit_map() -> void:
+	var settlements := opponents.selected + 2
+	var wanted: String = Defs.map_for(settlements, map_pick.get_selected_metadata())
+	for i in map_pick.item_count:
+		var id: String = map_pick.get_item_metadata(i)
+		map_pick.set_item_disabled(i, int(Defs.MAP_SIZES[id]["settlements"]) < settlements)
+		if id == wanted:
+			map_pick.select(i)
+	_update_map_note()
+
+
 func _update_map_note() -> void:
 	var info: Dictionary = Defs.MAP_SIZES[map_pick.get_selected_metadata()]
-	map_note.text = "The camps start at least %d m apart. Kill the crowned commander to win." % info["min_start"]
+	var count := opponents.selected + 2
+	if count == 2:
+		map_note.text = "The camps start at least %d m apart. Kill the crowned commander to win." % info["min_start"]
+	else:
+		var apart: float = 2.0 * (float(info["size"]) * 0.5 - float(info["margin"])) * sin(PI / count)
+		map_note.text = "Free-for-all: neighbouring camps start about %d m apart. The last crowned commander standing wins." % snappedi(int(apart), 10)
 
 
 func _show_match() -> void:
@@ -205,12 +232,13 @@ func _show_match() -> void:
 func _start() -> void:
 	Settings.data["difficulty"] = difficulty.selected
 	Settings.data["map"] = map_pick.get_selected_metadata()
+	Settings.data["opponents"] = opponents.selected + 1
 	Settings.data["calm_start"] = calm.button_pressed
 	Settings.save_all()
 	var s := seed_edit.text.strip_edges()
 	var seed_val := int(s) if s.is_valid_int() else (hash(s) % 900000 + 1000 if s != "" else 0)
 	start_match.emit({"difficulty": difficulty.selected, "map": map_pick.get_selected_metadata(), "strategy": strategy.get_item_text(strategy.selected).to_lower(),
-		"seed": absi(seed_val), "calm_start": calm.button_pressed})
+		"seed": absi(seed_val), "opponents": opponents.selected + 1, "calm_start": calm.button_pressed})
 
 
 func _show_settings() -> void:

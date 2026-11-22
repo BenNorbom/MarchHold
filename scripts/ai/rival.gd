@@ -1,5 +1,5 @@
 extends RefCounted
-## Commander Rook: a utility AI with build-order templates. It plays through the
+## A rival commander (one per AI settlement): a utility AI with build-order templates. It plays through the
 ## same validated command interface as the player and only knows what its own
 ## scouts, buildings and commander have seen.
 
@@ -37,6 +37,9 @@ func setup(match_ref, opts: Dictionary) -> void:
 	calm_until = 600.0 if opts.get("calm_start", false) else 0.0
 	max_pop = int(opts.get("max_pop", 200))
 	next_attack = _first_attack_time()
+	if m.factions.size() > 2:
+		# Seven rivals thinking on the same tick would be a spike.
+		think_t = fid * 0.17
 
 
 func _first_attack_time() -> float:
