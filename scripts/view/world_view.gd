@@ -11,7 +11,8 @@ const CHUNK := 32              # terrain cells per chunk side (64 m)
 const TREE_CHUNK := 256.0
 const GRASS_TILE := 16.0
 const SPLAT_TEXEL := 2.0       # metres per splat map pixel
-const LANDMARK_RANGE := 40.0   # names show from a little beyond quarry and mine placement reach
+const LANDMARK_RANGE := 160.0  # names show from this far, unless a hill is in the way
+const LANDMARK_CHECK := 0.2    # seconds between checks for hills in the way
 
 var m                           # Match
 var mats
@@ -45,6 +46,7 @@ var selected_ids: Array[int] = []
 var select_mm: MultiMesh
 var landmark_labels: Node3D
 var landmark_font: Font
+var landmark_wait := 0.0
 
 
 func setup(match_ref, materials, mesh_lib, q: int) -> void:
@@ -446,6 +448,17 @@ func _add_landmark_label(title: String, at: Vector3) -> void:
 
 func _show_landmark_labels() -> void:
 	landmark_labels.visible = bool(Settings.get_val("resource_labels", true))
+
+
+## Labels draw through everything so leaves can't hide them; hills still must.
+func _update_landmark_labels(delta: float, cam: Vector3) -> void:
+	landmark_wait -= delta
+	if landmark_wait > 0.0 or not landmark_labels.visible:
+		return
+	landmark_wait = LANDMARK_CHECK
+	for label: Label3D in landmark_labels.get_children():
+		var at := label.position
+		label.visible = cam.distance_to(at) < LANDMARK_RANGE and m.terrain.clear_line(cam, at)
 
 
 func _mm(mesh: Mesh, list: Array, slots = null) -> MultiMesh:
@@ -892,6 +905,7 @@ var carcasses := {}
 func update_frame(delta: float, alpha: float, cam: Vector3) -> void:
 	cam_pos = cam
 	_update_grass(cam)
+	_update_landmark_labels(delta, cam)
 	_update_shots()
 	_update_engines(alpha)
 	people.update_frame(delta, alpha, cam, hidden_unit)

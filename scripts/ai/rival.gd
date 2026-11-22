@@ -352,8 +352,10 @@ func _find_site(type: String):
 				best = n
 		if best == null:
 			return null
+		# Campward side first, so the quarry stays out of the line of a wall ring.
+		var inward: float = (home - best.pos).angle()
 		for k in 16:
-			var p: Vector2 = best.pos + Vector2.from_angle(k * TAU / 16.0) * 10.0
+			var p: Vector2 = best.pos + Vector2.from_angle(inward + k * TAU / 16.0) * 10.0
 			if m.site_problem(fid, "quarry", p, rot) == "":
 				return [p, rot]
 		return null
@@ -378,6 +380,10 @@ func _find_site(type: String):
 			ang = atan2(dir.y, dir.x) + rng.randf_range(-0.7, 0.7)
 		var p := home + Vector2.from_angle(ang) * rng.randf_range(r0, r1)
 		var rr := ang + PI * 0.5
+		# Placement rules allow building over an outcrop, which would bury the camp's stone.
+		var keep_off: float = 7.0 + (Defs.BUILDINGS[type]["size"] as Vector2).length() * 0.5
+		if m.nearest_node("rock", p, keep_off, func(n): return n.sub == "outcrop") != null:
+			continue
 		if m.site_problem(fid, type, p, rr) == "":
 			return [p, rr]
 	return null
