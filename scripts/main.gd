@@ -266,7 +266,7 @@ func _smoke() -> void:
 	say.call("to arms")
 	say.call("cancel")
 	say.call("what is the meaning of the weather")
-	for cmdtxt in ["/l", "/p", "/s", "/t", "/h", "/c", "/b hut", "/c arrows 2"]:
+	for cmdtxt in ["/l", "/p", "/s", "/t", "/h", "/c", "/r", "/b hut", "/c arrows 2"]:
 		say.call(cmdtxt)
 		await get_tree().process_frame   # /b and /c reopen the chat as a picker
 		if g.hud.chat_open:
@@ -325,6 +325,8 @@ func _take_shot() -> void:
 				game._toggle_map()
 			"build":
 				game.open_chat("/b b", true)
+			"research":
+				game.open_chat("/r ", true)
 			"ledger":
 				game._menu_ledger()
 			"chat":

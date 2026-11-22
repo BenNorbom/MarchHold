@@ -7,10 +7,23 @@ const Defs = preload("res://scripts/data/defs.gd")
 const MAX_BATCHES := 99
 
 
+## The page a command has when it has only one, such as /r. Otherwise "".
+static func only_page(command: String) -> String:
+	var pages: Array = Defs.HOTKEYS[command].keys()
+	return pages[0] if pages.size() == 1 else ""
+
+
+## What follows the command in the chat line for this page: "/b v" but just "/r".
+static func draft(command: String, page: String) -> String:
+	return "/%s " % command if only_page(command) != "" else "/%s %s" % [command, page]
+
+
 ## With B or C the keys need no spaces: "bh" is page b, key h.
-static func split_keys(args: PackedStringArray) -> PackedStringArray:
+static func split_keys(command: String, args: PackedStringArray) -> PackedStringArray:
 	var keys := "".join(args).to_lower()
-	if keys == "" or not keys[0] in Defs.HOTKEY_PAGES:
+	if only_page(command) != "":
+		return PackedStringArray([keys]) if keys.length() == 1 else args
+	if keys == "" or not keys[0] in Defs.HOTKEYS[command]:
 		return args
 	if keys.length() == 1:
 		return PackedStringArray([keys])
@@ -18,17 +31,31 @@ static func split_keys(args: PackedStringArray) -> PackedStringArray:
 
 
 ## {page, key, batches, entry, error}, or {} when the words are a name such as "hut".
+## Crafting takes its count first, so the key can act the moment it's typed: /c 2 b a.
 static func read(m, command: String, args: PackedStringArray) -> Dictionary:
 	var pick := {"page": "", "key": "", "batches": 1, "entry": {}, "error": ""}
-	if args.is_empty():
+	var words := Array(args)
+	if command == "c" and not words.is_empty() and str(words[0]).is_valid_int():
+		var count := int(words.pop_front())
+		if count < 1 or count > MAX_BATCHES:
+			pick["error"] = "Batches go from 1 to %d, as in /c 2 b a." % MAX_BATCHES
+			return pick
+		pick["batches"] = count
+	var sole := only_page(command)
+	if sole != "":
+		# One page: the first word is the key, or it's a name such as "gunpowder".
+		if not words.is_empty() and str(words[0]).length() != 1:
+			return {}
+		words.push_front(sole)
+	if words.is_empty():
 		return pick
-	var page := args[0].to_lower()
-	if not page in Defs.HOTKEY_PAGES:
+	var page := str(words[0]).to_lower()
+	if not Defs.HOTKEYS[command].has(page):
 		return {}
 	pick["page"] = page
-	if args.size() == 1:
+	if words.size() == 1:
 		return pick
-	var key := args[1].to_lower()
+	var key := str(words[1]).to_lower()
 	pick["key"] = key
 	var slots: Dictionary = Defs.HOTKEYS[command][page]["keys"]
 	if not slots.has(key):
@@ -36,13 +63,14 @@ static func read(m, command: String, args: PackedStringArray) -> Dictionary:
 		return pick
 	var e := entry(m, command, page, key)
 	pick["entry"] = e
-	if args.size() > 2:
-		if command == "c" and args.size() == 3 and args[2].is_valid_int() and int(args[2]) >= 1 and int(args[2]) <= MAX_BATCHES:
-			pick["batches"] = int(args[2])
+	if words.size() > 2:
+		var last := str(words[2])
+		if command == "c" and words.size() == 3 and last.is_valid_int() and int(last) >= 1 and int(last) <= MAX_BATCHES:
+			pick["batches"] = int(last)   # still read when Enter sends the line, as with a recalled order
 		elif command == "c":
-			pick["error"] = "Batches go from 1 to %d, as in /c %s %s 2." % [MAX_BATCHES, page, key]
+			pick["error"] = "Batches go from 1 to %d, as in /c 2 %s %s." % [MAX_BATCHES, page, key]
 		else:
-			pick["error"] = "One key builds one structure, as in /b %s %s." % [page, key]
+			pick["error"] = "One key does one thing, as in %s%s." % [draft(command, page), key]
 	if e["locked"] != "":
 		pick["error"] = e["locked"]
 	return pick
@@ -86,8 +114,10 @@ static func entry(m, command: String, page: String, key: String) -> Dictionary:
 			out.merge({"name": r["name"], "cost": r["cost"], "desc": r["desc"]}, true)
 			if m.fac(0).researched.has(id):
 				out["locked"] = "%s is already researched." % r["name"]
-			elif not m.has_building(0, r["building"]):
-				out["locked"] = "Needs a %s." % Defs.building_name(r["building"]).to_lower()
+			else:
+				for e: Dictionary in m.research_menu(0):
+					if e["id"] == id:
+						out["locked"] = e["locked"]   # no building yet, or too early an age
 	out["missing"] = m.missing_cost(0, out["cost"])
 	return out
 

@@ -29,7 +29,6 @@ const SLASH_ALIASES := {
 	"map": "m", "tech": "t", "help": "h", "?": "h", "stop": "cancel",
 }
 const CHAT_HINTS := {
-	"r": ["Research · /r", "Press Enter to browse research. The armory, stable and university each teach their own. It runs by itself, with no villagers."],
 	"l": ["Ledger · /l", "Press Enter to see supplies, food, housing and crew status."],
 	"p": ["People and crews · /p", "Press Enter to list crews. Type [b]@Name[/b] to address one."],
 	"s": ["Scout reports · /s", "Press Enter to read reports. To send a scout, type [b]send a scout east[/b]."],
@@ -81,7 +80,7 @@ var menu_items: Array = []
 var people_page := 0
 var people_pages := 1
 var chat_hint_command := ""
-var picker_quick := false     # opened with B or C: a key acts without Enter
+var picker_quick := false     # opened with B or C: keys may run together ("bh") and a wrong one is dropped
 var map_open := false
 var map_refresh_t := 0.0
 var look_unit := -1
@@ -938,26 +937,29 @@ func _on_chat_changed(text: String) -> void:
 
 func _update_picker(command: String, args: PackedStringArray) -> void:
 	chat_hint_command = command
-	# An order recalled with Up waits for Enter like a typed one.
-	var quick: bool = picker_quick and hud.history_i < 0
-	var pick: Dictionary = Hotkeys.read(m, command, Hotkeys.split_keys(args) if quick else args)
-	if quick and pick.get("key", "") != "":
+	# Whatever the way in, a key acts the moment it's complete. Only an order recalled with Up
+	# waits for Enter. Keys typed as "bh" are for B and C, so a name like "bronze" is left alone.
+	var acts: bool = hud.history_i < 0
+	var packed: bool = picker_quick and acts
+	var pick: Dictionary = Hotkeys.read(m, command, Hotkeys.split_keys(command, args) if packed else args)
+	if acts and pick.get("key", "") != "":
 		if pick["error"] == "":
 			_take_pick(pick)
 			return
-		hud.set_draft("/%s %s" % [command, pick["page"]])
+		if packed:
+			hud.set_draft(Hotkeys.draft(command, pick["page"]))
 	var page: String = pick.get("page", "")
 	if page == "":
 		hud.show_picker_pages(command)
 	else:
-		hud.show_picker_entries(command, pick, Hotkeys.page_entries(m, command, page), quick)
+		hud.show_picker_entries(command, pick, Hotkeys.page_entries(m, command, page), acts)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
 func _on_picker_page(page: String) -> void:
 	if not hud.chat_open or not Defs.HOTKEYS.has(chat_hint_command):
 		return
-	var draft := "/%s %s " % [chat_hint_command, page]
+	var draft := Hotkeys.draft(chat_hint_command, page) + " "
 	hud.set_draft(draft)
 	_on_chat_changed(draft)
 
@@ -969,12 +971,12 @@ func _on_picker_key(key: String) -> void:
 	# The page comes from what's typed, so read it the same way the popup did.
 	var args: PackedStringArray = hud.chat_edit.text.strip_edges().split(" ", false).slice(1)
 	if picker_quick:
-		args = Hotkeys.split_keys(args)
+		args = Hotkeys.split_keys(command, args)
 	var shown: Dictionary = Hotkeys.read(m, command, args)
 	var page: String = shown.get("page", "")
 	if page == "":
 		return
-	var chosen := PackedStringArray([page, key])
+	var chosen := PackedStringArray([key]) if Hotkeys.only_page(command) != "" else PackedStringArray([page, key])
 	if shown["key"] == key and shown["batches"] > 1:
 		chosen.append(str(shown["batches"]))
 	var pick: Dictionary = Hotkeys.read(m, command, chosen)
@@ -1403,13 +1405,16 @@ func _slash(text: String) -> void:
 	var c: String = SLASH_ALIASES.get(token, token)
 	var arg := " ".join(parts.slice(1)).strip_edges()
 	match c:
-		"b", "c":
+		"b", "c", "r":
 			var pick: Dictionary = Hotkeys.read(m, c, parts.slice(1))
 			if pick.is_empty():
-				if c == "b":
-					_build_by_name(arg)
-				else:
-					_craft_by_name(arg)
+				match c:
+					"b":
+						_build_by_name(arg)
+					"c":
+						_craft_by_name(arg)
+					"r":
+						_research_by_name(arg)
 			elif pick["key"] == "":
 				# Deferred: the line edit stops editing once this submit returns.
 				_open_picker.call_deferred(c, pick["page"])
@@ -1423,11 +1428,6 @@ func _slash(text: String) -> void:
 			_menu_people()
 		"s":
 			_menu_reports()
-		"r":
-			if arg != "":
-				_research_by_name(arg)
-			else:
-				_menu_research()
 		"m":
 			_toggle_map()
 		"t":
@@ -1453,7 +1453,7 @@ func _open_picker(command: String, page: String) -> void:
 		return
 	picker_quick = true
 	cmd.move_enabled = false
-	hud.open_chat(address_label if address_label != "" else "your people", "/%s %s" % [command, page], chat_crew >= 0)
+	hud.open_chat(address_label if address_label != "" else "your people", Hotkeys.draft(command, page), chat_crew >= 0)
 
 
 func _open_menu(kind: String, title: String, body: String, footer: String = "Number keys or click to choose · Esc to close") -> void:
@@ -1470,22 +1470,6 @@ func _close_menu() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	cmd.look_enabled = true
 	cmd.move_enabled = not hud.chat_open
-
-
-func _menu_research() -> void:
-	var all: Array = m.research_menu(0)
-	menu_items = all.filter(func(e): return e["locked"] == "")
-	var lines: Array[String] = []
-	for i in menu_items.size():
-		var entry: Dictionary = menu_items[i]
-		lines.append("[url=%d][b]%d. %s[/b] · %s[/url]" % [i + 1, i + 1, entry["name"], Defs.cost_text(entry["cost"])])
-		lines.append(entry["desc"])
-	for entry in all:
-		if entry["locked"] != "":
-			lines.append("%s · %s" % [entry["name"], entry["locked"]])
-	var body := "
-".join(lines) if not lines.is_empty() else "Everything is researched."
-	_open_menu("research", "Research", body)
 
 
 func _research_by_name(arg: String) -> void:
@@ -1516,13 +1500,6 @@ func _menu_select(i: int) -> void:
 				var c = m.crews[row["crew"]]
 				_open_crew_chat(c, c.leader)
 		return
-	if menu_kind != "research":
-		return
-	if i < 1 or i > menu_items.size():
-		return
-	var e: Dictionary = menu_items[i - 1]
-	_close_menu()
-	_choose_order_entry(e)
 
 
 func _choose_order_entry(e: Dictionary, batches: int = 1) -> void:
@@ -1684,9 +1661,9 @@ func _menu_help() -> void:
 
 [b]Slash commands[/b] (instant, no Terra needed)
    /b  build · b basic or v advanced, then one key: /b b h is a hut (or press B, B, H) · /b hut works too
-   /c  craft weapons the same way: /c b w is spears (or C, B, W) · /c b w 2 or /c spears 2 makes two batches
+   /c  craft weapons the same way: /c b w is spears (or C, B, W) · /c 2 b w or /c spears 2 makes two batches
    /l  ledger (or Tab outside chat) · /p people and crews · /s scout reports
-   /r  research menu · /r gunpowder researches it directly
+   /r  research, picked the same way: /r b bronze armory · /r i iron armory · /r m mounted archery · /r g gunpowder
    /m  field map (or M) · /t tech tree · /h this help · /cancel stop a crew
 
 [b]Orders you can type[/b]

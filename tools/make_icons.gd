@@ -63,7 +63,11 @@ func _draw_icon(kind: String, id: String) -> void:
 		"upgrade":
 			mesh = meshes.building(id, 1)
 		"research":
-			mesh = _keg()
+			var armory_tier := int(Defs.RESEARCH[id].get("armory_tier", 0))
+			if armory_tier > 0:
+				mesh = meshes.building("armory", armory_tier)
+			else:
+				mesh = _stirrup() if id == "mounted_archery" else _keg()
 		"craft":
 			if id == "ram":
 				mesh = meshes.ram()
@@ -79,7 +83,7 @@ func _draw_icon(kind: String, id: String) -> void:
 				if not id.ends_with("shield") and not id.ends_with("armor") and id != "bow":
 					upright = -PI / 4.0   # long things lie corner to corner
 	var img := _render(mesh, eye.normalized(), upright)
-	if kind == "upgrade":
+	if kind == "upgrade" or (kind == "research" and Defs.RESEARCH[id].has("armory_tier")):
 		_up_arrow(img)
 	var err := img.save_png("%s/%s_%s.png" % [OUT, kind, id])
 	if err != OK:
@@ -194,6 +198,30 @@ func _shot() -> ArrayMesh:
 	_paint(g, Color(0.36, 0.37, 0.41))
 	for p in [Vector3(-0.5, 0, 0.29), Vector3(0.5, 0, 0.29), Vector3(0, 0, -0.58), Vector3(0, 0.82, 0)]:
 		g.sphere(p, 0.5, 12, 18)
+	return g.finish()
+
+
+## Mounted archery: a stirrup on its strap, with an arrow behind it.
+func _stirrup() -> ArrayMesh:
+	var g := Geo.new()
+	var up := Vector3.UP
+	_paint(g, WOOD)
+	g.cylinder(Vector3(-1.0, -0.9, -0.25), Vector3(0.95, 1.1, -0.25), 0.045, 0.045, 6)
+	_paint(g, PALE)
+	g.box(Vector3(-0.95, -0.85, -0.25), Vector3(0.3, 0.3, 0.03), 1.0, false)
+	_paint(g, IRON)
+	g.cone(Vector3(0.93, 1.08, -0.25), Vector3(1.3, 1.45, -0.25), 0.14, 4)
+	_paint(g, LEATHER)
+	g.cylinder(up * 1.0, up * 2.0, 0.1, 0.1, 8)
+	g.box(up * 1.55, Vector3(0.3, 0.2, 0.2), 1.0, false)
+	_paint(g, IRON)
+	var arch: Array[Vector3] = []
+	for i in 17:
+		var a := PI * i / 16.0
+		arch.append(Vector3(0.62 * cos(a), 0.95 * sin(a) - 0.1, 0))
+	for i in 16:
+		g.cylinder(arch[i], arch[i + 1], 0.085, 0.085, 7)
+	g.box(Vector3(0, -0.14, 0), Vector3(1.4, 0.12, 0.34), 1.0, false)
 	return g.finish()
 
 

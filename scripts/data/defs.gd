@@ -242,8 +242,8 @@ const DEPOSITS := ["bronze_ore", "coal", "iron_ore"]
 
 # --- Hotkeys ---------------------------------------------------------------------
 # /b or /c, then a page (b basic, v advanced), then one key. Shown in this order.
+# /r has a single page, so it takes just the key: /r g.
 # Every structure, upgrade, research and item has exactly one key.
-const HOTKEY_PAGES := ["b", "v"]
 const HOTKEYS := {
 	"b": {
 		"b": {"name": "Basic structures", "keys": {
@@ -252,7 +252,12 @@ const HOTKEYS := {
 		"v": {"name": "Advanced structures", "keys": {
 			"w": "build:stone_wall", "g": "build:stone_gate", "t": "build:tower", "h": "build:stable", "m": "build:mine",
 			"s": "build:smelter", "u": "build:university", "b": "build:ram",
-			"f": "upgrade:smelter", "r": "research:gunpowder"}},
+			"f": "upgrade:smelter"}},
+	},
+	"r": {
+		"r": {"name": "Research", "keys": {
+			"b": "research:armory_bronze", "i": "research:armory_iron",
+			"m": "research:mounted_archery", "g": "research:gunpowder"}},
 	},
 	"c": {
 		"b": {"name": "Basic weapons", "keys": {
