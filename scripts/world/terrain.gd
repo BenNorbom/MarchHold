@@ -40,6 +40,8 @@ var forest := PackedFloat32Array()
 var starts: Array[Vector2] = []
 var kit := Vector2.ZERO        # how far each camp's own deposits and deer are
 var nodes: Array = []           # Array[RNode]
+var deposits: Array = []        # the deposit and outcrop nodes, also found in nodes
+var outcrops: Array = []
 var herds: Array = []           # {kind, pos, count}
 var rng := RandomNumberGenerator.new()
 
@@ -291,6 +293,10 @@ func _add(kind: String, sub: String, p: Vector2, amount: float, scale: float = 1
 	n.scale = scale
 	n.rot = rng.randf() * TAU
 	nodes.append(n)
+	if kind == "deposit":
+		deposits.append(n)
+	elif sub == "outcrop":
+		outcrops.append(n)
 	return n
 
 
@@ -323,6 +329,8 @@ func _too_close_to_nodes(p: Vector2, r: float) -> bool:
 
 func _place_nodes() -> void:
 	nodes.clear()
+	deposits.clear()
+	outcrops.clear()
 	herds.clear()
 	var k_size := size_scale
 	var k_area := k_size * k_size

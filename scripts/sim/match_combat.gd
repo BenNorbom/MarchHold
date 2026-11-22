@@ -5,6 +5,7 @@ const WOOD_TYPES := ["hut", "stockpile", "lodge", "farm", "armory", "palisade", 
 const STONE_TYPES := ["stone_wall", "stone_gate", "tower"]
 
 var vision_t := 0.0
+var armed_filter: Callable = armed      # one Callable, not a new lambda for every villager every tick
 
 
 # --- Fighting -----------------------------------------------------------------
@@ -72,7 +73,7 @@ func _maybe_flee(u: Unit, dt: float, r: float) -> bool:
 		u.flee_t -= dt
 		move_to(u, home_pos(u.faction) + _ring(u, 5.0), dt, 3.0, true)
 		return true
-	var foe := nearest_enemy(u.pos, r, u.faction, func(o): return armed(o))
+	var foe := nearest_enemy(u.pos, r, u.faction, armed_filter)
 	if foe:
 		u.flee_t = 6.0
 		u.carry = 0.0
@@ -648,10 +649,11 @@ func update_animal(a: Unit, dt: float) -> void:
 	# Wild animals: flee from people, otherwise graze near the herd.
 	var flee_r := 18.0 if a.kind == "deer" else 12.0
 	var threat: Unit = null
-	for o: Unit in units_near(a.pos, flee_r, -2):
-		if is_person(o) and o.faction >= 0:
-			threat = o
-			break
+	if sides_near(a.pos, flee_r, rivals_mask(-1)):
+		for o: Unit in units_near(a.pos, flee_r, -2):
+			if is_person(o) and o.faction >= 0:
+				threat = o
+				break
 	if threat:
 		var away := (a.pos - threat.pos).normalized()
 		a.goal = a.pos + away * 25.0
@@ -734,7 +736,9 @@ func update_vision() -> void:
 		var d: Dictionary = Defs.BUILDINGS[b.type]
 		var r := float(d.get("sight", 18.0))
 		var f: Faction = factions[b.faction]
-		var cells := kcells_in(b.pos, r)
+		if b.sight_cells.is_empty():
+			b.sight_cells = kcells_in(b.pos, r)
+		var cells := b.sight_cells
 		for k in cells:
 			f.visible[k] = 1
 			f.knowledge[k] = t
@@ -757,7 +761,8 @@ func update_vision() -> void:
 ## Records what is visible from p. Scouts keep it to themselves until they report.
 func _sight(f: Faction, p: Vector2, r: float, scout) -> Array:
 	var foes := []
-	for o: Unit in units_near(p, r, -2):
+	var around: Array = units_near(p, r, -2) if sides_near(p, r, rivals_mask(f.id) | WILD_HORSE) else []
+	for o: Unit in around:
 		if o.faction == f.id:
 			continue
 		if o.faction < 0:
@@ -785,9 +790,7 @@ func _sight(f: Faction, p: Vector2, r: float, scout) -> Array:
 				scout.sightings[key] = entry
 			else:
 				f.intel[key] = entry
-	for b: Building in buildings:
-		if b.dead or b.faction == f.id or b.pos.distance_squared_to(p) > r * r:
-			continue
+	for b: Building in foreign_buildings_near(f.id, p, r):
 		var e := {"kind": "building", "type": b.type, "pos": b.pos, "faction": b.faction, "t": t, "complete": b.complete, "id": b.id}
 		if scout:
 			scout.sightings["b%d" % b.id] = e

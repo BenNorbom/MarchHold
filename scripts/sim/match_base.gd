@@ -10,6 +10,8 @@ const CELL := 2.0                    # path grid cell in metres
 const KCELL := 8.0                   # knowledge grid cell in metres
 const BUCKET := 16.0
 const NODE_BUCKET := 32.0
+const BLD_BUCKET := 32.0
+const WILD_HORSE := 1 << 30         # in a bucket's mask, beside one bit per faction
 const STEEP := 38.0
 const MAX_PATHS_PER_TICK := 14
 
@@ -109,6 +111,7 @@ class Building:
 	var alarm_t := -99.0
 	var waiting_msg_t := -99.0
 	var line := -1
+	var sight_cells := PackedInt32Array()      # what it watches, worked out once
 
 
 class Crew:
@@ -216,6 +219,10 @@ var ulist: Array = []
 var uhead := PackedInt32Array()
 var unext := PackedInt32Array()
 var node_buckets: Array = []
+var uside := PackedInt32Array()      # unit bucket -> which sides have someone in it
+var bld_buckets := {}                # cell -> buildings centred there, oldest first
+var own_blds: Array = []             # faction -> its buildings, oldest first
+var own_by_type: Array = []          # faction -> type -> the same
 
 
 # --- Setup ------------------------------------------------------------------------
@@ -243,6 +250,14 @@ func _init_world(tr: Terrain, faction_count: int) -> void:
 		_bucket_node(n)
 	uhead.resize(bucket_n * bucket_n)
 	uhead.fill(-1)
+	uside.resize(bucket_n * bucket_n)
+	uside.fill(0)
+	bld_buckets.clear()
+	own_blds.clear()
+	own_by_type.clear()
+	for f in faction_count:
+		own_blds.append([])
+		own_by_type.append({})
 
 
 func _bucket_node(n) -> void:
@@ -352,6 +367,7 @@ func add_building(faction: int, type: String, p: Vector2, rot: float, complete: 
 		b.paid = true
 	buildings.append(b)
 	bld_by_id[b.id] = b
+	_index_building(b)
 	if complete:
 		_block(b)
 	emit({"type": "building", "id": b.id})
@@ -362,6 +378,7 @@ func remove_building(b: Building, reason: String = "") -> void:
 	if b.dead:
 		return
 	b.dead = true
+	_unindex_building(b)
 	_unblock(b)
 	emit({"type": "building_gone", "id": b.id, "reason": reason})
 	for u: Unit in units:
@@ -374,31 +391,68 @@ func remove_building(b: Building, reason: String = "") -> void:
 			u.in_tower = -1
 
 
-func buildings_of(faction: int, type: String = "", complete_only: bool = true) -> Array:
+func _bld_bucket(p: Vector2) -> Vector2i:
+	return Vector2i(int(floor(p.x / BLD_BUCKET)), int(floor(p.y / BLD_BUCKET)))
+
+
+func _index_building(b: Building) -> void:
+	var k := _bld_bucket(b.pos)
+	if not bld_buckets.has(k):
+		bld_buckets[k] = []
+	bld_buckets[k].append(b)
+	own_blds[b.faction].append(b)
+	var typed: Dictionary = own_by_type[b.faction]
+	if not typed.has(b.type):
+		typed[b.type] = []
+	typed[b.type].append(b)
+
+
+func _unindex_building(b: Building) -> void:
+	var k := _bld_bucket(b.pos)
+	if bld_buckets.has(k):
+		bld_buckets[k].erase(b)
+	own_blds[b.faction].erase(b)
+	own_by_type[b.faction].get(b.type, []).erase(b)
+
+
+## Living buildings centred within r of p that aren't this faction's, oldest first.
+func foreign_buildings_near(faction: int, p: Vector2, r: float) -> Array:
 	var out := []
-	for b: Building in buildings:
-		if b.dead or b.faction != faction:
-			continue
-		if type != "" and b.type != type:
-			continue
-		if complete_only and not b.complete:
-			continue
-		out.append(b)
+	var r2 := r * r
+	var k0 := _bld_bucket(p - Vector2(r, r))
+	var k1 := _bld_bucket(p + Vector2(r, r))
+	for j in range(k0.y, k1.y + 1):
+		for i in range(k0.x, k1.x + 1):
+			var list = bld_buckets.get(Vector2i(i, j))
+			if list == null:
+				continue
+			for b: Building in list:
+				if b.faction != faction and b.pos.distance_squared_to(p) <= r2:
+					out.append(b)
+	if out.size() > 1:
+		out.sort_custom(func(a, b): return a.id < b.id)
+	return out
+
+
+func buildings_of(faction: int, type: String = "", complete_only: bool = true) -> Array:
+	var list: Array = own_blds[faction] if type == "" else own_by_type[faction].get(type, [])
+	var out := []
+	for b: Building in list:
+		if b.complete or not complete_only:
+			out.append(b)
 	return out
 
 
 func has_building(faction: int, type: String) -> bool:
-	for b: Building in buildings:
-		if not b.dead and b.faction == faction and b.type == type and b.complete:
+	for b: Building in own_by_type[faction].get(type, []):
+		if b.complete:
 			return true
 	return false
 
 
 func home_of(faction: int) -> Building:
-	for b: Building in buildings:
-		if not b.dead and b.faction == faction and b.type == "campfire":
-			return b
-	return null
+	var fires: Array = own_by_type[faction].get("campfire", [])
+	return fires[0] if not fires.is_empty() else null
 
 
 func home_pos(faction: int) -> Vector2:
@@ -407,14 +461,16 @@ func home_pos(faction: int) -> Vector2:
 
 
 func nearest_building(faction: int, p: Vector2, types: Array, complete_only: bool = true) -> Building:
+	if faction < 0:
+		return null
+	var one := types.size() == 1
+	var list: Array = own_by_type[faction].get(types[0], []) if one else own_blds[faction]
 	var best: Building = null
 	var bd := INF
-	for b: Building in buildings:
-		if b.dead or b.faction != faction:
-			continue
+	for b: Building in list:
 		if complete_only and not b.complete:
 			continue
-		if not types.is_empty() and not b.type in types:
+		if not one and not types.is_empty() and not b.type in types:
 			continue
 		var d := b.pos.distance_squared_to(p)
 		if d < bd:
@@ -562,17 +618,24 @@ func _gate_owner(b: Building) -> int:
 func rebuild_unit_hash() -> void:
 	ulist.clear()
 	uhead.fill(-1)
+	uside.fill(0)
 	for u: Unit in units:
 		if not u.dead:
 			ulist.append(u)
 	unext.resize(ulist.size())
 	for i in ulist.size():
-		var p: Vector2 = ulist[i].pos
+		var u: Unit = ulist[i]
+		var p: Vector2 = u.pos
 		var bi := clampi(int(p.x / BUCKET), 0, bucket_n - 1)
 		var bj := clampi(int(p.y / BUCKET), 0, bucket_n - 1)
 		var k := bj * bucket_n + bi
 		unext[i] = uhead[k]
 		uhead[k] = i
+		if u.kind == "horse":
+			if u.faction < 0:
+				uside[k] |= WILD_HORSE
+		elif u.faction >= 0:
+			uside[k] |= 1 << u.faction
 
 
 ## Living units within r of p. faction_mode: -2 any, -3 enemies of `of` (people/siege only), or a faction id.
@@ -598,18 +661,54 @@ func units_near(p: Vector2, r: float, faction_mode: int = -2, of: int = -1) -> A
 	return out
 
 
+## A quick look at the buckets: false means none of those sides is within r of p.
+func sides_near(p: Vector2, r: float, sides: int) -> bool:
+	var last := bucket_n - 1
+	var i0 := clampi(int((p.x - r) / BUCKET), 0, last)
+	var i1 := clampi(int((p.x + r) / BUCKET), 0, last)
+	for bj in range(clampi(int((p.y - r) / BUCKET), 0, last), clampi(int((p.y + r) / BUCKET), 0, last) + 1):
+		var row := bj * bucket_n
+		for k in range(row + i0, row + i1 + 1):
+			if uside[k] & sides:
+				return true
+	return false
+
+
+## The bits of every faction but this one.
+func rivals_mask(faction: int) -> int:
+	var all := (1 << factions.size()) - 1
+	return all if faction < 0 else all & ~(1 << faction)
+
+
 func nearest_enemy(p: Vector2, r: float, faction: int, filter: Callable = Callable()) -> Unit:
+	var rivals := rivals_mask(faction)
+	if not sides_near(p, r, rivals):
+		return null
 	var best: Unit = null
 	var bd := INF
-	for u: Unit in units_near(p, r, -3, faction):
-		if u.stable >= 0:
-			continue
-		if filter.is_valid() and not filter.call(u):
-			continue
-		var d := u.pos.distance_squared_to(p)
-		if d < bd:
-			bd = d
-			best = u
+	var r2 := r * r
+	var filtered := filter.is_valid()
+	var last := bucket_n - 1
+	var i0 := clampi(int((p.x - r) / BUCKET), 0, last)
+	var i1 := clampi(int((p.x + r) / BUCKET), 0, last)
+	for bj in range(clampi(int((p.y - r) / BUCKET), 0, last), clampi(int((p.y + r) / BUCKET), 0, last) + 1):
+		var row := bj * bucket_n
+		for k in range(row + i0, row + i1 + 1):
+			if uside[k] & rivals == 0:
+				continue
+			var i := uhead[k]
+			while i != -1:
+				var u: Unit = ulist[i]
+				i = unext[i]
+				if u.faction == faction or u.faction < 0 or u.dead or u.stable >= 0:
+					continue
+				var d := u.pos.distance_squared_to(p)
+				if d > r2 or d >= bd or u.kind == "horse" or u.kind == "deer":
+					continue
+				if filtered and not filter.call(u):
+					continue
+				bd = d
+				best = u
 	return best
 
 

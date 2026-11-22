@@ -122,7 +122,8 @@ func _update_commander(u: Unit, dt: float) -> void:
 	var foes := 0
 	var friends := 0
 	var threat := Vector2.ZERO
-	for o: Unit in units_near(u.pos, 26.0, -2):
+	var around: Array = units_near(u.pos, 26.0, -2) if sides_near(u.pos, 26.0, rivals_mask(u.faction)) else []
+	for o: Unit in around:
 		if o.dead or o.stable >= 0 or not is_person(o) or o.id == u.id:
 			continue
 		if o.faction == u.faction and armed(o):

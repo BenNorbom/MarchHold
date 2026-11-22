@@ -308,8 +308,8 @@ func _find_deposit(dep: String):
 	_mine_dep = dep
 	var best = null
 	var bd := 330.0
-	for n in m.terrain.nodes:
-		if n.kind != "deposit" or n.sub != dep:
+	for n in m.terrain.deposits:
+		if n.sub != dep:
 			continue
 		var d: float = n.pos.distance_to(_home())
 		if d < bd:
@@ -346,8 +346,8 @@ func _find_site(type: String):
 	if type == "quarry":
 		var best = null
 		var bd := 400.0
-		for n in m.terrain.nodes:
-			if n.kind == "rock" and n.sub == "outcrop" and n.pos.distance_to(home) < bd:
+		for n in m.terrain.outcrops:
+			if n.pos.distance_to(home) < bd:
 				bd = n.pos.distance_to(home)
 				best = n
 		if best == null:
