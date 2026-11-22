@@ -27,6 +27,7 @@ Start with **The Founding** (tutorial) from the main menu. Terra, your steward, 
 | Shift / Space | Sprint / jump |
 | Enter or T | Talk to your selected villagers, or the crew or villager you're looking at (or to your people) |
 | Left mouse | Select the villager you're looking at (Shift+click adds or drops more); otherwise strike, or with a bow hold to draw and release to shoot |
+| Right mouse | Hold to raise your shield. While placing: finish a wall or cancel |
 | Q | Switch between bow and weapon (rotates a building while placing) |
 | E / G | Talk to the person you look at; take gear at the armory |
 | F | Take or leave a horse at your stable |
@@ -55,6 +56,7 @@ Slash commands work instantly and never need Terra:
 | `/l` | Ledger: stores, people, food, housing, crews |
 | `/p` | People and crews |
 | `/s` | Scout reports, newest first |
+| `/r` | Research menu: mounted archery (stable) and gunpowder (university). `/r gunpowder` starts one directly |
 | `/m` | Field map |
 | `/t` | Tech tree |
 | `/h` | Help |
@@ -81,10 +83,10 @@ MarchHold keeps account credentials encrypted on your PC. When you submit a free
 
 ## How the game works
 
-- **Growth.** Villagers are born only when the village is *well fed* (3 food stored per person) and there's free housing. The campfire houses 8, each hut 5 and each house 10, up to 200 people.
+- **Growth.** Villagers are born only when the village is *well fed* (3 food stored per person) and there's free housing. The campfire houses 8, each hut 6 and each house 10, up to 200 people.
 - **Ages.** Wood (start) → Stone (build a quarry by a rock outcrop) → Bronze (smelt bronze from bronze ore and coal) → Iron (upgrade the smelter to an iron furnace) → Gunpowder (university research). The armory upgrades in place from wood to bronze to iron.
 - **Scouting.** You only know what you've seen. Scouts report when they return, and if they die, what they saw dies with them. Watch posts and towers ring the alarm when enemies appear.
-- **Combat.** Pikes beat cavalry. Cavalry runs down archers. Shields and armor blunt arrows. Sword and shield beat pikes up close. Cannons smash walls but scatter in the open, reload slowly and need a crew of three. Horses pull cannons faster.
+- **Combat.** Pikes beat cavalry. Cavalry runs down archers. Shields and armor blunt arrows. Sword and shield beat pikes up close. Your raised shield stops far more from the front (not cannonballs), but slows you and drops while you swing. Cannons smash walls but scatter in the open, reload slowly and need a crew of three. Horses pull cannons faster.
 
 The full design is in [PLAN.md](PLAN.md) and the tech tree in [TECH_TREE.md](TECH_TREE.md).
 

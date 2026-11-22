@@ -43,6 +43,8 @@ class Unit:
 	var carry := 0.0
 	var weapon := ""
 	var shield := ""
+	var shield_up := false
+	var block_t := -99.0        # when a raised shield last stopped something
 	var armor := ""
 	var bow := false
 	var arrows := 0

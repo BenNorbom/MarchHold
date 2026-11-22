@@ -2,13 +2,14 @@ shader_type spatial;
 render_mode cull_back;
 
 // UV2: x = limb (0 body, 1 head, 2 left arm, 3 right arm, 4 left leg, 5 right leg)
-//      y = region (0 skin, 1 tunic, 2 trousers, 3 leather, 4 hair, 5 wood, 6 iron, 7 bronze, 8 gold, 9 tinted)
+//      y = region (0 skin, 1 tunic, 2 trousers, 3 leather, 4 hair, 5 wood, 6 iron, 7 bronze, 8 gold, 9 tinted, 13 side colour)
 // INSTANCE_CUSTOM: x = animation, y = phase, z = amount, w = per-person seed
 // INSTANCE_COLOR: tunic / tint colour
 
 uniform sampler2D cloth_noise : filter_linear_mipmap, repeat_enable;
 uniform sampler2D bark_tex : source_color, filter_linear_mipmap, repeat_enable;
 uniform bool painted_crowd = false;
+uniform vec3 crowd_dye : source_color = vec3(0.5); // side colour of a painted crowd
 uniform bool is_animal = false;
 
 varying vec3 base_color;
@@ -32,6 +33,7 @@ void vertex() {
 	float amt = INSTANCE_CUSTOM.z;
 	float seed = INSTANCE_CUSTOM.w;
 	vec3 v = VERTEX;
+	float rest_y = v.y;
 	vec3 n = NORMAL;
 	if (!is_animal && anim != 13) {
 		vec3 hip = vec3(0.0, 0.95, 0.0);
@@ -135,7 +137,16 @@ void vertex() {
 	NORMAL = normalize(n);
 	lp = v;
 	if (painted_crowd) {
-		base_color = COLOR.rgb;
+		// The crowd meshes have no masks, so find garments by limb and rest height.
+		float garment;
+		if (limb == 0) { garment = 1.0; }
+		else if (limb == 1) { garment = 0.0; }
+		else if (limb <= 3) { garment = smoothstep(1.0, 1.14, rest_y); }
+		else { garment = smoothstep(0.42, 0.62, rest_y); }
+		float folds = clamp(0.5 + 0.9 * sqrt(dot(COLOR.rgb, vec3(0.30, 0.59, 0.11))), 0.0, 1.15);
+		float red_trim = smoothstep(0.35, 0.5, COLOR.r) * (1.0 - smoothstep(0.05, 0.09, COLOR.g));
+		base_color = mix(COLOR.rgb, vec3(0.16, 0.08, 0.035), red_trim);
+		base_color = mix(base_color, crowd_dye * mix(1.0, 0.88, seed) * folds, garment);
 		rough = 0.9;
 		metal = 0.0;
 	} else {

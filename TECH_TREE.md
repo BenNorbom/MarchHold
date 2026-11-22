@@ -17,7 +17,7 @@ flowchart TB
 
   subgraph WOOD["Wood age · start"]
     fire(["Campfire<br/>housing 8"]):::bld
-    hut(["Hut<br/>+5 housing"]):::bld
+    hut(["Hut<br/>+6 housing"]):::bld
     stock(["Stockpile"]):::bld
     lodge(["Hunter's lodge"]):::bld
     farm(["Farm"]):::bld
@@ -35,6 +35,7 @@ flowchart TB
     granary(["Granary"]):::bld
     stable(["Stable"]):::bld
     ladders["Siege ladders"]:::item
+    mounted["Mounted archery research<br/>~60 s"]:::item
   end
 
   subgraph BRONZE["Bronze age · ~10–13 min"]
@@ -61,6 +62,7 @@ flowchart TB
   armory1 --> palisade & post & w_items
   armory1 --> quarry
   quarry --> swall & tower & house & granary & stable & ladders
+  stable --> mounted
   quarry --> mine --> ores --> smelter1
   smelter1 -->|"bronze"| armory2 --> b_items
   armory1 -.->|upgrade| armory2

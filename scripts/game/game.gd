@@ -22,18 +22,19 @@ const Hints = preload("res://scripts/game/hints.gd")
 const MENU_COLUMNS := 3
 const SLASH_ALIASES := {
 	"build": "b", "craft": "c", "make": "c", "ledger": "l",
-	"people": "p", "crews": "p", "scouts": "s", "reports": "s",
+	"people": "p", "crews": "p", "scouts": "s", "reports": "s", "research": "r",
 	"map": "m", "tech": "t", "help": "h", "?": "h", "stop": "cancel",
 }
 const CHAT_HINTS := {
 	"b": ["Build · /b", "Type [b]/b hut[/b] or choose a structure below."],
 	"c": ["Craft · /c", "Choose a recipe or type [b]/c spears 2[/b] for two batches."],
+	"r": ["Research · /r", "Choose a research below. The stable and the university each teach their own."],
 	"l": ["Ledger · /l", "Press Enter to see supplies, food, housing and crew status."],
 	"p": ["People and crews · /p", "Press Enter to list crews. Type [b]@Name[/b] to address one."],
 	"s": ["Scout reports · /s", "Press Enter to read reports. To send a scout, type [b]send a scout east[/b]."],
 	"m": ["Field map · /m", "Press Enter to toggle the map of places your people have seen."],
 	"t": ["Tech tree · /t", "Press Enter to see the unlocks for each age."],
-	"h": ["Slash commands", "[b]/b[/b] Build   [b]/c[/b] Craft   [b]/l[/b] Ledger   [b]/p[/b] People   [b]/s[/b] Scouts\n[b]/m[/b] Map   [b]/t[/b] Tech   [b]/cancel[/b] Stop orders   [b]/h[/b] Help"],
+	"h": ["Slash commands", "[b]/b[/b] Build   [b]/c[/b] Craft   [b]/l[/b] Ledger   [b]/p[/b] People   [b]/s[/b] Scouts\n[b]/r[/b] Research   [b]/m[/b] Map   [b]/t[/b] Tech   [b]/cancel[/b] Stop orders   [b]/h[/b] Help"],
 	"cancel": ["Stop orders · /cancel", "Press Enter to stop the addressed crew. With no addressee, all crews stop."],
 }
 
@@ -165,7 +166,7 @@ func _process(delta: float) -> void:
 		return
 	var me = m.commander(0)
 	if me and not me.dead:
-		m.set_commander(0, Vector2(cmd.position.x, cmd.position.z), cmd.facing(), cmd.anim)
+		m.set_commander(0, Vector2(cmd.position.x, cmd.position.z), cmd.facing(), cmd.anim, cmd.shield_up())
 	if not m.over:
 		acc += delta
 		var n := 0
@@ -240,7 +241,7 @@ func _update_hud() -> void:
 	else:
 		held = Defs.item_name(me.weapon).capitalize() if me.weapon != "" else "Bare hands"
 		if me.shield != "":
-			held += " · " + Defs.item_name(me.shield)
+			held += " · " + Defs.item_name(me.shield) + (" (raised)" if cmd.shield_up() else "")
 		if me.bow:
 			held += " · bow (%d)" % me.arrows
 	if me.armor != "":
@@ -462,12 +463,18 @@ func _unhandled_input(event: InputEvent) -> void:
 					cmd.primary_pressed()
 			else:
 				cmd.primary_released()
-		elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
-			if placing:
+		elif event.button_index == MOUSE_BUTTON_RIGHT:
+			if not event.pressed:
+				cmd.lower_shield()
+			elif placing:
 				if Defs.BUILDINGS[place_type].get("wall", false) and wall_points.size() >= 1:
 					_finish_wall()
 				else:
 					_cancel_place()
+			else:
+				var why: String = cmd.raise_shield()
+				if why != "":
+					hud.show_toast(why)
 		elif event.button_index == MOUSE_BUTTON_WHEEL_UP and event.pressed and placing:
 			place_rot += deg_to_rad(15.0)
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN and event.pressed and placing:
@@ -687,6 +694,8 @@ func _on_chat_changed(text: String) -> void:
 				body = "Build an armory with [b]/b armory[/b] to unlock these recipes."
 				recipes = recipes.filter(func(e): return Defs.ITEMS[e["id"]]["tier"] == 0)
 			choices = _chat_hint_grid(recipes, has_armory)
+		"r":
+			choices = _chat_hint_grid(m.research_menu(0))
 		"t":
 			body += "\n" + m.next_age_text(0)
 	hud.show_chat_hint(hint[0], body, choices)
@@ -1066,6 +1075,11 @@ func _slash(text: String) -> void:
 			_menu_people()
 		"s":
 			_menu_reports()
+		"r":
+			if arg != "":
+				_research_by_name(arg)
+			else:
+				_menu_research()
 		"m":
 			_toggle_map()
 		"t":
@@ -1176,6 +1190,38 @@ func _menu_craft() -> void:
 		"Number keys or click: one batch · type '/c arrows 3' for three batches · Esc to close", true)
 
 
+func _menu_research() -> void:
+	var all: Array = m.research_menu(0)
+	if all.is_empty():
+		_open_menu("none", "Research", "Everything is researched.", "Esc to close")
+		return
+	var ready := _by_shortfall(all.filter(func(e): return e["locked"] == ""))
+	var locked := all.filter(func(e): return e["locked"] != "")
+	menu_items = ready
+	var cells: Array[String] = []
+	for i in ready.size():
+		var e: Dictionary = ready[i]
+		var key := str(i + 1) if i < 9 else ("0" if i == 9 else "·")
+		cells.append("[url=%d][b][color=#ffd870]%s  %s[/color][/b]  %s\n[font_size=15][color=#b8b0a0]%s[/color][/font_size][/url]" % [i + 1, key, e["name"], _cost_bb(e["cost"], e["missing"]), e["desc"]])
+	var who := ("for " + address_label) if not addressee.is_empty() else "(the nearest free villagers will study)"
+	_open_menu("research", "Research  " + who, _grid_bb(cells, 4) + _locked_bb(locked),
+		"Number keys or click to choose · red means you're short · Esc to close", true)
+
+
+func _research_by_name(arg: String) -> void:
+	var want := arg.to_lower().replace("_", " ")
+	var key := ""
+	for id in Defs.RESEARCH:
+		if Defs.RESEARCH[id]["name"].to_lower().begins_with(want) or id.replace("_", " ").begins_with(want):
+			key = id
+			break
+	if key == "":
+		hud.log_line("There's no research called '%s'. Type /r for the list." % arg, "warn")
+		return
+	_issue(addressee.duplicate(), [{"action": "research", "subject": key, "count": 0, "amount": 0, "where": ""}],
+		address_label if not addressee.is_empty() else "your people")
+
+
 func _menu_select(i: int) -> void:
 	if menu_kind == "people":
 		if i >= 1 and i <= menu_items.size():
@@ -1183,7 +1229,7 @@ func _menu_select(i: int) -> void:
 			_close_menu()
 			_open_crew_chat(c, c.leader)
 		return
-	if not menu_kind in ["build", "craft"]:
+	if not menu_kind in ["build", "craft", "research"]:
 		return
 	if i < 1 or i > menu_items.size():
 		return
@@ -1322,6 +1368,9 @@ func _menu_tech() -> void:
 		for id in Defs.UPGRADES:
 			if int(Defs.UPGRADES[id]["age"]) == a:
 				bl.append(Defs.UPGRADES[id]["name"] + " (upgrade)")
+		for id in Defs.RESEARCH:
+			if int(Defs.RESEARCH[id]["age"]) == a:
+				bl.append(Defs.RESEARCH[id]["name"] + " (research)")
 		if not bl.is_empty():
 			lines.append("   Build: " + ", ".join(bl))
 		if not il.is_empty():
@@ -1332,7 +1381,7 @@ func _menu_tech() -> void:
 
 func _menu_help() -> void:
 	var t := """[b]Moving[/b]  WASD · Shift sprint · Space jump · mouse to look
-[b]Fighting[/b]  Left click to strike (hold and release with a bow) · Q switch bow/weapon · G or E at the armory: take gear · F at the stable: ride
+[b]Fighting[/b]  Left click to strike (hold and release with a bow) · Hold right click to raise your shield: it blocks far more from the front, but slows you and drops while you swing · Q switch bow/weapon · G or E at the armory: take gear · F at the stable: ride
 [b]Selecting[/b]  Look at a villager and [b]click[/b] to select them; [b]Shift+click[/b] adds or drops more. Orders you type then go to exactly the selected people, as one crew. [b]Esc[/b] clears the selection.
 [b]Talking[/b]  Look at a villager and press [b]Enter[/b] (or T) to address their crew. In chat, [b]Tab[/b] cycles through individual members and back to the crew. [b]@Name[/b] addresses someone's crew by name, [b]@all[/b] addresses everyone. Idle villagers take orders with no addressee.
 [b]Marking[/b]  R marks the spot you look at; orders can then say 'there' or 'the mark'.
@@ -1341,6 +1390,7 @@ func _menu_help() -> void:
    /b  build menu (or B) · /b hut builds a hut directly
    /c  craft menu (or C) · /c spears 2 makes two batches
    /l  ledger (or Tab outside chat) · /p people and crews · /s scout reports
+   /r  research menu · /r gunpowder researches it directly
    /m  field map (or M) · /t tech tree · /h this help · /cancel stop a crew
 
 [b]Orders you can type[/b]

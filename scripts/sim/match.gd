@@ -18,7 +18,7 @@ func setup(opts: Dictionary) -> void:
 		f.id = i
 		f.name = "Your people" if i == 0 else "Rook's people"
 		f.commander_name = "Commander" if i == 0 else "Commander Rook"
-		f.color = Color(0.16, 0.28, 0.55) if i == 0 else Color(0.62, 0.15, 0.11)
+		f.color = Color(0.05, 0.38, 1.0) if i == 0 else Color(1.0, 0.08, 0.05)
 		f.is_ai = i == 1 or bool(opts.get("ai_both", false))
 		f.start = tr.starts[i]
 		for r in Defs.RESOURCES:
@@ -221,8 +221,9 @@ func step_problem(faction: int, s: Dictionary) -> String:
 			if up.begins_with("!") and not up.contains("first"):
 				return up.substr(1).capitalize()
 		"research":
-			if f.age < 3:
-				return "Research needs the Iron age and a university."
+			var rd: Dictionary = Defs.RESEARCH.get(subj, {})
+			if not rd.is_empty() and f.age < int(rd["age"]):
+				return "%s needs the %s age and a %s." % [rd["name"], Defs.AGES[rd["age"]], Defs.building_name(rd["building"]).to_lower()]
 		"gather":
 			if subj in Defs.DEPOSITS and f.age < 1:
 				return "Mining needs the Stone age. %s" % Defs.AGE_HOW[1]
@@ -259,7 +260,7 @@ func first_step_problem(faction: int, s: Dictionary) -> String:
 			if fac(faction).researched.has(subj):
 				why = "we already know %s." % Defs.RESEARCH[subj]["name"].to_lower()
 			elif not has_building(faction, Defs.RESEARCH[subj]["building"]):
-				why = "we need a university first."
+				why = "we need a %s first." % Defs.building_name(Defs.RESEARCH[subj]["building"]).to_lower()
 		"tame":
 			if buildings_of(faction, "stable").is_empty():
 				why = "we need a stable to keep horses in."
@@ -597,13 +598,14 @@ func set_mark(faction: int, p: Vector2) -> void:
 
 # --- The commander -----------------------------------------------------------------
 
-func set_commander(faction: int, p: Vector2, facing: float, anim: int) -> void:
+func set_commander(faction: int, p: Vector2, facing: float, anim: int, shield_up: bool = false) -> void:
 	var u := unit(fac(faction).commander)
 	if u == null or u.dead:
 		return
 	u.pos = p
 	u.facing = facing
 	u.anim = anim
+	u.shield_up = shield_up and u.shield != ""
 
 
 func commander(faction: int) -> Unit:
@@ -651,7 +653,7 @@ func commander_strike(faction: int) -> String:
 
 func commander_shoot(faction: int, origin: Vector3, dir: Vector3, power: float) -> bool:
 	var u := commander(faction)
-	if u == null or u.dead or not u.bow or u.arrows <= 0:
+	if u == null or u.dead or not can_shoot_bow(u) or u.arrows <= 0:
 		return false
 	u.arrows -= 1
 	fire_free_arrow(u, origin, dir.normalized() * lerpf(22.0, 62.0, clampf(power, 0.0, 1.0)), armory_tier(faction))
@@ -787,6 +789,12 @@ func build_menu(faction: int) -> Array:
 			lock = "Already being upgraded."
 		out.append({"kind": "upgrade", "id": up["building"], "name": up["name"] + " (upgrade)", "cost": up["cost"],
 			"desc": up["desc"], "locked": lock, "missing": missing_cost(faction, up["cost"])})
+	return out
+
+
+## Everything the /r menu can research. Done research drops off the list.
+func research_menu(faction: int) -> Array:
+	var out := []
 	for id in Defs.RESEARCH:
 		var r: Dictionary = Defs.RESEARCH[id]
 		if fac(faction).researched.has(id):
@@ -794,7 +802,9 @@ func build_menu(faction: int) -> Array:
 		var lock := ""
 		if not has_building(faction, r["building"]):
 			lock = "Needs a %s." % Defs.building_name(r["building"]).to_lower()
-		out.append({"kind": "research", "id": id, "name": "Research " + r["name"].to_lower(), "cost": r["cost"],
+		elif fac(faction).age < int(r["age"]):
+			lock = "Needs the %s age." % Defs.AGES[r["age"]]
+		out.append({"kind": "research", "id": id, "name": r["name"], "cost": r["cost"],
 			"desc": r["desc"], "locked": lock, "missing": missing_cost(faction, r["cost"])})
 	return out
 

@@ -16,7 +16,7 @@ var m
 var meshes
 var body_mm: MultiMesh
 var item_mm := {}
-var crowd_meshes: Array[MultiMesh] = []
+var crowd_meshes := []   # faction id -> one MultiMesh per villager model
 var horse_mm: MultiMesh
 var deer_mm: MultiMesh
 var vis := {}           # unit id -> [Vector3 pos, float facing, float phase]
@@ -36,10 +36,15 @@ func setup(match_ref, mats, mesh_lib, quality: int) -> void:
 	meshes = mesh_lib
 	view_dist = [200.0, 300.0, 380.0][quality]
 	body_mm = _make(meshes.person(), MAX_PEOPLE, true)
-	var crowd_material: ShaderMaterial = mats.get_mat("person").duplicate()
-	crowd_material.set_shader_parameter("painted_crowd", true)
-	for mesh: ArrayMesh in [preload("res://assets/people/villager_crowd.res"), preload("res://assets/people/farmer_crowd.res"), preload("res://assets/people/child_crowd.res")]:
-		crowd_meshes.append(_make(mesh, MAX_PEOPLE, true, crowd_material))
+	# Instance colour multiplies the baked paint, so each side needs its own dye uniform.
+	for f in m.factions:
+		var crowd_material: ShaderMaterial = mats.get_mat("person").duplicate()
+		crowd_material.set_shader_parameter("painted_crowd", true)
+		crowd_material.set_shader_parameter("crowd_dye", f.color)
+		var side_meshes: Array[MultiMesh] = []
+		for mesh: ArrayMesh in [preload("res://assets/people/villager_crowd.res"), preload("res://assets/people/farmer_crowd.res"), preload("res://assets/people/child_crowd.res")]:
+			side_meshes.append(_make(mesh, MAX_PEOPLE, true, crowd_material))
+		crowd_meshes.append(side_meshes)
 	for name in ITEMS:
 		var cap := MAX_PEOPLE if name in ["bundle_wood", "wood_spear", "club", "bow", "axe", "wood_shield"] else 260
 		if name in ["crown", "cloak"]:
@@ -219,7 +224,8 @@ func update_frame(delta: float, alpha: float, cam: Vector3, hidden: int) -> void
 			continue
 		# People.
 		var f = m.fac(u.faction)
-		var tunic: Color = f.color.darkened(0.15).lerp(Color(0.36, 0.3, 0.22), 0.08 + 0.22 * fmod(seed * 7.3, 1.0)) if f else Color(0.5, 0.45, 0.35)
+		# MultiMesh instance colours are read as linear.
+		var tunic: Color = f.color.srgb_to_linear() if f else Color(0.5, 0.45, 0.35)
 		var sc2 := 0.66 if u.child else (1.06 if u.kind == "commander" else 1.0)
 		var xf2 := Transform3D(basis.scaled(Vector3.ONE * sc2), pos)
 		var custom := Color(anim, v[2], clampf(moved / 4.0, 0.0, 1.5), seed)
@@ -243,9 +249,8 @@ func update_frame(delta: float, alpha: float, cam: Vector3, hidden: int) -> void
 		else:
 			if cargo != "":
 				custom.r = 14 if cargo == "wood" else (15 if cargo == "food" else 9)
-			if u.kind == "villager":
-				var crowd_tint := Color.WHITE.lerp(tunic, 0.16)
-				_put(crowd_meshes[Rig.model_for(u)], xf2, crowd_tint, custom)
+			if u.kind == "villager" and f:
+				_put(crowd_meshes[f.id][Rig.model_for(u)], xf2, Color.WHITE, custom)
 			else:
 				_put(body_mm, xf2, tunic, custom)
 		var tool := _tool_for(u) if not u.dead and cargo == "" else ""
@@ -265,13 +270,14 @@ func update_frame(delta: float, alpha: float, cam: Vector3, hidden: int) -> void
 			_item("bronze_helmet" if u.armor.begins_with("bronze") else "iron_helmet", rig, xf2, tunic, custom)
 		if u.kind == "commander":
 			_item("crown", rig, xf2, tunic, custom)
-			_item("cloak", rig, xf2, f.color.lightened(0.15) if f else tunic, custom)
+			_item("cloak", rig, xf2, f.color.lightened(0.15).srgb_to_linear() if f else tunic, custom)
 		if cargo != "":
 			var bundle := "bundle_wood" if cargo == "wood" else ("bundle_food" if cargo == "food" else "bundle_stone")
 			var bcol := Color(0.55, 0.53, 0.5) if cargo == "stone" else (Color(0.2, 0.2, 0.22) if cargo == "coal" else (Color(0.5, 0.36, 0.28) if cargo.ends_with("ore") else tunic))
 			_item(bundle, rig, xf2, bcol, custom)
-	for mm in crowd_meshes:
-		mm.visible_instance_count = counts.get(mm, 0)
+	for side_meshes in crowd_meshes:
+		for mm in side_meshes:
+			mm.visible_instance_count = counts.get(mm, 0)
 	body_mm.visible_instance_count = counts.get(body_mm, 0)
 	for name in item_mm:
 		var mm: MultiMesh = item_mm[name]
