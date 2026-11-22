@@ -378,7 +378,7 @@ func _click_selects(shift: bool) -> bool:
 
 func _update_hud() -> void:
 	var faction = m.fac(0)
-	hud.update_economy(faction.pop, faction.housing, faction.stock)
+	hud.update_economy(faction.pop, faction.housing, faction.stock, m.workers_by_resource(0))
 	var me = m.commander(0)
 	if me == null:
 		return
