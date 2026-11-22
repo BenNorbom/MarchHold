@@ -364,6 +364,26 @@ func test_back_to_work_returns_gear() -> void:
 	check(idler.task == "idle" and m.crew_of(idler) == null, "an idler returns the gear and goes back to idle")
 	check(int(f.gear["wood_spear"]) == 40 and int(f.gear["wood_shield"]) == 40, "every weapon is back in the armory (%d spears)" % int(f.gear["wood_spear"]))
 	check(wood_crew.steps.size() == 2 and wood_crew.steps[0]["action"] == "disarm", "the plan keeps the disarm step only at its start")
+	# A rider leads the horse back to the stable before working.
+	var stable_site: Dictionary = {}
+	f.age = 1
+	for k in 40:
+		stable_site = m.place_site(0, "stable", home + Vector2.from_angle(2.0 + k * 0.5) * (22.0 + k * 0.5), 0.0)
+		if stable_site.get("ok", false):
+			break
+	var stable = m.bld(stable_site["id"])
+	stable.progress = 1.0
+	m._complete(stable)
+	var rider = adults[2]
+	m.command(0, {"unit": rider.id, "individual": true, "steps": [step("guard", "", 0, "home")]})
+	rider.mounted = true
+	rider.max_hp += Defs.MOUNTED["hp_bonus"]
+	var riding_hp: float = rider.max_hp
+	m.command(0, {"unit": rider.id, "individual": true, "steps": [step("resume_work")]})
+	check(rider.task == "disarm" and rider.mounted, "a rider stays mounted until the stable")
+	run(m, 60.0)
+	check(not rider.mounted and rider.max_hp < riding_hp, "the rider gets off")
+	check(m._stable_count(stable) == 1, "the horse is back in the stable (%d)" % m._stable_count(stable))
 	# With the armory gone there is nowhere to walk to: the gear is put down on the spot.
 	m.command(0, {"unit": adults[0].id, "steps": [step("guard", "", 0, "home")]})
 	adults[0].weapon = "wood_spear"

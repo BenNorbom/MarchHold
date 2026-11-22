@@ -402,8 +402,8 @@ func resume_work(faction: int, only: Array = []) -> int:
 		var us: Array = g["units"]
 		var steps: Array = g["entry"]["steps"].duplicate(true)
 		back += us.size()
-		# Nobody works with a weapon in hand: whoever carries gear returns it to the armory first.
-		var carrying := us.any(func(u): return _has_gear(u))
+		# Nobody works with a weapon in hand or on horseback: gear goes back to the armory, horses to the stable.
+		var carrying := us.any(func(u): return _needs_stowing(u))
 		if steps.is_empty() and not carrying:
 			for u in us:
 				release_member(u)
@@ -1798,20 +1798,61 @@ func _do_arm(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
 		post(0, "%s: the armory ran out of gear for everyone." % crew_label(c), "warn")
 
 
-## Walk to the armory and hand back everything carried. With no armory left, put it down here.
+## Walk to the armory and hand back everything carried, then a rider leads the horse back
+## to a stable. With no armory left the gear is put down here; with no stable room the horse
+## is let go.
 func _do_disarm(u: Unit, c: Crew, dt: float) -> void:
 	if u.phase == "done":
 		u.anim = Anim.IDLE
 		return
-	var b := bld(c.state.get("bld", -1))
-	if _has_gear(u) and b != null and not b.dead and not go_to_building(u, b, dt):
-		return
-	_stow_gear(u, fac(u.faction))
+	if u.phase != "horse":
+		var b := bld(c.state.get("bld", -1))
+		if _has_gear(u) and b != null and not b.dead and not go_to_building(u, b, dt):
+			return
+		_stow_gear(u, fac(u.faction))
+		u.phase = "horse"
+	if u.mounted:
+		var st := _stall_for_horse(u.faction, u.pos)
+		if st != null and not go_to_building(u, st, dt):
+			return
+		_dismount(u, st)
 	u.phase = "done"
 
 
 func _has_gear(u: Unit) -> bool:
 	return u.weapon != "" or u.shield != "" or u.armor != "" or u.bow or u.arrows > 0
+
+
+## Anyone with gear or a horse has something to hand back before working.
+func _needs_stowing(u: Unit) -> bool:
+	return _has_gear(u) or u.mounted
+
+
+## Nearest stable with a free stall.
+func _stall_for_horse(faction: int, p: Vector2) -> Building:
+	var best: Building = null
+	var bd := INF
+	var cap := int(Defs.BUILDINGS["stable"]["horse_cap"])
+	for st: Building in buildings_of(faction, "stable"):
+		var d := st.pos.distance_squared_to(p)
+		if d < bd and _stable_count(st) < cap:
+			bd = d
+			best = st
+	return best
+
+
+## Get off: the horse goes into the stable `st`, or runs wild if there is none.
+func _dismount(u: Unit, st: Building) -> void:
+	u.mounted = false
+	u.max_hp -= Defs.MOUNTED["hp_bonus"]
+	u.hp = minf(u.hp, u.max_hp)
+	var h := spawn_unit(u.faction, "horse", st.pos if st != null else u.pos + Vector2(1.5, 0))
+	if st != null:
+		h.stable = st.id
+	else:
+		h.faction = -1
+		h.herd = -1
+		h.goal = u.pos
 
 
 ## Everything a person carries goes back into the faction's stock.

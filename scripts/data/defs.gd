@@ -494,7 +494,7 @@ static func describe_step(s: Dictionary) -> String:
 		"arm":
 			txt = "arm with " + item_name(subj, 2) if subj != "" else "arm with the best gear in the armory"
 		"disarm":
-			txt = "return their gear to the armory"
+			txt = "return their gear to the armory and horses to the stable"
 		"mount":
 			txt = "take horses from the stable"
 		"man":
