@@ -1345,7 +1345,7 @@ func _menu_help() -> void:
 
 [b]Orders you can type[/b]
    gather wood · gather 30 stone then build a house · pick berries · work the farms · hunt
-   build a hut · build a palisade · make 32 arrows · arm 6 with spears · to arms! · fall back
+   build a hut · build a palisade · make 32 arrows · arm 6 with spears · to arms! · fall back · back to work
    send two scouts east · scout their camp · attack their camp · guard the mark · follow me · hold
    tame 3 horses · mount up · smelt bronze · upgrade the armory · research gunpowder · man the cannon
    promote (makes a captain) · dismiss · status · then chains steps

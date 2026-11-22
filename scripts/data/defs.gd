@@ -193,7 +193,10 @@ const DEPOSITS := ["bronze_ore", "coal", "iron_ore"]
 
 # --- Orders ----------------------------------------------------------------------
 const ACTIONS := ["gather", "build", "upgrade", "craft", "arm", "mount", "man", "smelt", "research", "tame",
-	"scout", "guard", "attack", "follow", "hold", "recall", "promote", "dismiss", "status"]
+	"scout", "guard", "attack", "follow", "hold", "recall", "promote", "dismiss", "status", "resume"]
+## Orders that pull people off their work. The sim remembers the work they leave so "back to work" can restore it.
+const MILITARY_ACTIONS := ["arm", "mount", "man", "scout", "guard", "attack", "follow", "hold", "recall"]
+const WORK_ACTIONS := ["gather", "build", "upgrade", "craft", "smelt", "research", "tame"]
 const WHERE := ["", "here", "marked", "home", "enemy", "north", "northeast", "east", "southeast",
 	"south", "southwest", "west", "northwest"]
 const ONGOING := ["guard", "attack", "follow", "hold"]
@@ -315,6 +318,8 @@ static func validate_steps(steps) -> String:
 		var a: String = str(s.get("action", ""))
 		if not a in ACTIONS:
 			return "Step %d has an unknown action '%s'." % [i + 1, a]
+		if a == "resume" and steps.size() > 1:
+			return "Going back to work can't be combined with other steps."
 		var subj: String = str(s.get("subject", ""))
 		if not subj in subjects_for(a):
 			return "Step %d: '%s' can't be used with %s." % [i + 1, subj, a]
@@ -381,6 +386,8 @@ static func describe_step(s: Dictionary) -> String:
 			txt = "disband the crew"
 		"status":
 			txt = "report status"
+		"resume":
+			txt = "go back to work"
 		_:
 			txt = a
 	if count > 0:

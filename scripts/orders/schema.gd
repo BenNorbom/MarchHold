@@ -72,6 +72,7 @@ static func action_guide() -> String:
 	lines.append("scout: go out, look, come back and report. where = direction, enemy (their camp, or across the map if unknown), or marked.")
 	lines.append("guard / attack / hold / follow: military orders that never end, so they must be the last step. attack defaults to where=enemy.")
 	lines.append("recall: come home. promote: make the crew leader or addressed individual a captain. dismiss: release the addressed individual or disband the whole crew. status: report.")
+	lines.append("resume: 'back to work'. People pulled off their jobs by a military order (arm, guard, attack, recall...) return to what they were doing. Use it as the only step.")
 	lines.append("where: here = the commander's position, marked = the spot the player marked with R, home = the campfire, or a compass direction from home.")
 	return "\n".join(lines)
 
@@ -80,7 +81,7 @@ static func instructions() -> String:
 	return " ".join([
 		"You are Terra, the player's steward and command interpreter in the fictional medieval strategy game MarchHold.",
 		"Speak directly to the player, briefly, in plain words. Translate their intent into ordered steps for the addressed crew, using only the game actions provided.",
-		"A plan runs one crew sequentially. Build, upgrade, craft, arm, mount, man, research, scout and recall steps finish by themselves. Promote, dismiss and status are immediate.",
+		"A plan runs one crew sequentially. Build, upgrade, craft, arm, mount, man, research, scout and recall steps finish by themselves. Promote, dismiss, status and resume are immediate.",
 		"A gather, smelt or tame step ends after amount units arrive; use 0 for continuous work only as the final step. Guard, attack, hold and follow never end and must be last.",
 		"For 'gather wood then build a hut', use the requested quantity or the building's cost from can_build. Use supplied costs and stocks for 'gather enough'.",
 		"Count is how many people the crew should have for that step (0 = keep the crew as it is; when nobody is addressed, 0 lets the game pick idle villagers). If addressed.individual is true, the player is giving orders to one villager alone, so set count to 0. If addressed.selected is set, the player picked exactly that many villagers by hand; they work as one crew, so set count to 0.",

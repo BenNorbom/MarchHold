@@ -22,7 +22,7 @@ func _initialize() -> void:
 
 func _run_tests() -> void:
 	var only := OS.get_environment("MH_TEST")
-	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "crews", "selection", "walls", "combat", "parser", "schema", "chatgpt", "terra_orders", "duel"]
+	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "crews", "selection", "back_to_work", "walls", "combat", "parser", "schema", "chatgpt", "terra_orders", "duel"]
 	var t0 := Time.get_ticks_msec()
 	for name in tests:
 		if only != "" and only != name:
@@ -258,6 +258,46 @@ func test_selection() -> void:
 	check(joined["ok"] and m.crew_of(a) == big and m.crew_of(d) == big and big.members.size() == 4, "a selection can join another crew")
 
 
+func test_back_to_work() -> void:
+	var m = new_match(91)
+	var adults: Array = m.idle_adults(0, m.home_pos(0))
+	var woodcutters = [adults[0], adults[1]]
+	var miners = [adults[2], adults[3]]
+	var idler = adults[4]
+	var wood_crew = m.make_crew(0, woodcutters)
+	var stone_crew = m.make_crew(0, miners)
+	m.command(0, {"crew": wood_crew.id, "steps": [step("gather", "wood")]})
+	m.command(0, {"crew": stone_crew.id, "steps": [step("gather", "stone", 40)]})
+	run(m, 3.0)
+	var r: Dictionary = m.command(0, {"all": true, "steps": [step("guard", "", 0, "home")]})
+	check(r["ok"] and woodcutters[0].task != "gather" and miners[0].task != "gather", "to arms pulls everyone off their work")
+	check(m.crew_of(idler) != null and m.crew_of(idler).steps[-1]["action"] == "guard", "idle villagers are drafted too")
+	r = m.command(0, {"all": true, "steps": [step("resume")]})
+	check(r["ok"], "back to work succeeds after to arms")
+	check(m.crew_of(woodcutters[0]) == wood_crew and wood_crew.steps[0]["subject"] == "wood" and woodcutters[0].task == "gather", "woodcutters go back to wood in the same crew")
+	var back_stone = m.crew_of(miners[0])
+	check(back_stone != null and back_stone.steps[0]["subject"] == "stone" and miners[1].crew == back_stone.id and miners[0].task == "gather", "miners go back to stone together")
+	check(m.crew_of(idler) == null and idler.task == "idle", "people who were idle go back to idle")
+	check(m.work_memory.is_empty(), "returning clears the memory")
+	r = m.command(0, {"all": true, "steps": [step("resume")]})
+	check(not r["ok"], "back to work with nothing remembered says so")
+	# Calling to arms twice must not overwrite the earlier memory with the guard post.
+	m.command(0, {"all": true, "steps": [step("guard", "", 0, "home")]})
+	m.command(0, {"all": true, "steps": [step("guard", "", 0, "home")]})
+	r = m.command(0, {"all": true, "steps": [step("resume")]})
+	check(r["ok"] and woodcutters[0].task == "gather", "a second military order keeps the original job")
+	# New work given in between wins over the old memory.
+	m.command(0, {"all": true, "steps": [step("guard", "", 0, "home")]})
+	m.command(0, {"unit": woodcutters[0].id, "steps": [step("gather", "berries")]})
+	m.command(0, {"all": true, "steps": [step("resume")]})
+	check(m.crew_of(woodcutters[0]).steps[0]["subject"] == "berries", "someone given new work keeps it")
+	# Addressing one crew restores only that crew.
+	m.command(0, {"all": true, "steps": [step("guard", "", 0, "home")]})
+	r = m.command(0, {"unit": miners[0].id, "steps": [step("resume")]})
+	check(r["ok"] and miners[0].task == "gather" and miners[0].crew >= 0 and woodcutters[1].task == "guard", "addressed back to work only returns that crew")
+	check(Defs.validate_steps([step("resume"), step("gather", "wood")]) != "", "back to work can't be mixed with other steps")
+
+
 func test_walls() -> void:
 	var m = new_match(8)
 	var f = m.fac(0)
@@ -364,6 +404,10 @@ func test_parser() -> void:
 	check(r.get("ok", false) and r["steps"][0]["action"] == "recall", "fall back")
 	r = P.parse("to arms!")
 	check(r.get("ok", false) and r["steps"][0]["action"] == "arm" and r["steps"][-1]["action"] == "guard", "to arms")
+	r = P.parse("back to work")
+	check(r.get("ok", false) and r["steps"][0]["action"] == "resume" and r.get("all", false), "back to work")
+	r = P.parse("okay everyone get back to work!")
+	check(r.get("ok", false) and r["steps"].size() == 1 and r["steps"][0]["action"] == "resume", "get back to work")
 	r = P.parse("arm 6 with spears and guard the camp")
 	check(r.get("ok", false) and r["steps"][0]["subject"] == "wood_spear" and r["steps"][0]["count"] == 6, "arm with spears")
 	r = P.parse("what should we do about the weather in spain")

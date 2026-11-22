@@ -410,6 +410,8 @@ func command(faction: int, req: Dictionary) -> Dictionary:
 		return {"ok": false, "error": e3}
 	var targets := []
 	var first: Dictionary = steps[0]
+	if first["action"] == "resume":
+		return _resume_order(faction, req)
 	if req.get("all", false):
 		for c: Crew in crews.values():
 			if c.faction == faction:
@@ -451,6 +453,7 @@ func command(faction: int, req: Dictionary) -> Dictionary:
 			targets.append(same)
 		else:
 			for su in picked:
+				_remember_worker(su)
 				release_member(su)
 			targets.append(make_crew(faction, picked))
 	elif req.has("unit"):
@@ -473,6 +476,7 @@ func command(faction: int, req: Dictionary) -> Dictionary:
 			for s in steps:
 				s["count"] = 0
 			if c and c.members.size() > 1:
+				_remember_worker(u)
 				release_member(u)
 				c = null
 		if c == null:
@@ -500,6 +504,30 @@ func command(faction: int, req: Dictionary) -> Dictionary:
 	if ids.is_empty():
 		return {"ok": false, "error": "Nobody could take that order."}
 	return {"ok": true, "crews": ids}
+
+
+## "Back to work": everyone addressed returns to what a military order pulled them off.
+func _resume_order(faction: int, req: Dictionary) -> Dictionary:
+	var only := []
+	if not req.get("all", false):
+		if req.has("crew"):
+			var c := _addressed_crew(faction, req)
+			if c == null:
+				return {"ok": false, "error": "That crew is no longer available."}
+			only = c.members.duplicate()
+		elif req.has("units"):
+			only = req["units"].duplicate()
+		elif req.has("unit"):
+			var u := unit(int(req["unit"]))
+			if u == null or u.dead or u.faction != faction:
+				return {"ok": false, "error": "That person can't take orders."}
+			var uc := crew_of(u)
+			only = uc.members.duplicate() if uc and not req.get("individual", false) else [u.id]
+	var back := resume_work(faction, only)
+	if back == 0:
+		return {"ok": false, "error": "Nobody has earlier work to go back to."}
+	post(faction, "%d %s went back to work." % [back, "person" if back == 1 else "people"], "info")
+	return {"ok": true, "crews": []}
 
 
 func cancel(faction: int, req: Dictionary) -> int:

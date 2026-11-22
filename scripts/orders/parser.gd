@@ -196,6 +196,10 @@ static func _starts_with_verb(p: String) -> bool:
 
 static func _parse_part(p: String, out: Dictionary):
 	var count := count_in(p)
+	# Back to work: undo "to arms" and return to the earlier tasks.
+	if p.contains("back to work") or p.contains("return to work") or p.contains("resume work") or p.contains("resume your work") or p.contains("back to your tasks") or p.contains("back to your jobs") or p.contains("back to what you were doing"):
+		out["all"] = out["all"] or count == 0
+		return _step("resume")
 	# Recall / follow / hold.
 	if p.contains("fall back") or p.contains("come back") or p.contains("go home") or p.contains("come home") or has_word(p, "retreat") or has_word(p, "recall") or p.contains("back to camp") or p.contains("return home") or p.contains("return to camp"):
 		return _step("recall", "", 0, "home")
