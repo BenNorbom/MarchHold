@@ -160,12 +160,19 @@ func recruit(c: Crew, want: int, p: Vector2) -> int:
 		got += 1
 	if got < need:
 		for u in _pull_workers(c.faction, p, need - got, c):
+			_remember_worker(u)
 			_join(c, u)
 			got += 1
 	return got
 
 
 func start_plan(c: Crew, steps: Array) -> void:
+	var lead: String = str(steps[0].get("action", "")) if not steps.is_empty() else ""
+	if lead in Defs.MILITARY_ACTIONS:
+		_remember_crew_work(c)
+	elif lead in Defs.WORK_ACTIONS:
+		for id in c.members:
+			work_memory.erase(id)
 	for id in c.members:
 		var u := unit(id)
 		if u:
@@ -176,6 +183,120 @@ func start_plan(c: Crew, steps: Array) -> void:
 	c.done = false
 	c.lost = 0
 	_begin_step(c)
+
+
+# --- Back to work ---------------------------------------------------------------
+# A military order (to arms, attack, fall back...) remembers what each person was doing,
+# so "back to work" can put everyone back on it. Memories older than this are ignored,
+# so a standing army drafted long ago isn't disbanded by an emergency call-up.
+const WORK_MEMORY_TIME := 900.0
+
+
+## What this crew is doing, in a form "back to work" can restart. {} if it isn't working.
+func _work_entry(c: Crew) -> Dictionary:
+	if c.captain:
+		return {}
+	if c.steps.is_empty():
+		# A fresh crew of idle villagers: going back means going back to idle.
+		return {"group": c.id, "steps": [], "loop": false, "t": t}
+	if c.idx >= c.steps.size() or not str(c.steps[c.idx].get("action", "")) in Defs.WORK_ACTIONS:
+		return {}
+	var steps: Array = c.steps.slice(c.idx).duplicate(true)
+	var first: Dictionary = steps[0]
+	var amount := int(first.get("amount", 0))
+	if amount > 0:
+		var done := int(c.state.get("made", 0)) if first["action"] == "craft" else int(c.state.get("delivered", 0.0))
+		if done >= amount:
+			steps.remove_at(0)
+		else:
+			first["amount"] = amount - done
+	for s in steps:
+		s["count"] = 0
+	return {"group": c.id, "steps": steps, "loop": c.loop, "t": t}
+
+
+func _remember(u: Unit, entry: Dictionary) -> bool:
+	var old = work_memory.get(u.id)
+	if old != null and t - float(old["t"]) <= WORK_MEMORY_TIME:
+		return false  # keep the earliest memory: that's the real job
+	work_memory[u.id] = entry
+	return true
+
+
+## Called as a crew is about to take a military order.
+func _remember_crew_work(c: Crew) -> void:
+	var entry := _work_entry(c)
+	if entry.is_empty():
+		return
+	var used := false
+	for id in c.members:
+		var u := unit(id)
+		if u and _remember(u, entry):
+			used = true
+	if used:
+		# The unbuilt sites stay on the map for when they return.
+		for i in range(c.idx, c.steps.size()):
+			c.steps[i]["sites"] = []
+
+
+## A worker is being pulled out of a working crew to fill another order.
+func _remember_worker(u: Unit) -> void:
+	var c := crew_of(u)
+	if c == null:
+		return
+	var entry := _work_entry(c)
+	if not entry.is_empty():
+		_remember(u, entry)
+
+
+func _crew_is_working(c: Crew) -> bool:
+	return c.idx < c.steps.size() and str(c.steps[c.idx].get("action", "")) in Defs.WORK_ACTIONS
+
+
+## Put people back on the work a military order pulled them off. `only` limits it to those ids.
+## Returns how many went back. Anyone who has since been given new work is left alone.
+func resume_work(faction: int, only: Array = []) -> int:
+	var groups := {}
+	for id in work_memory.keys():
+		var u := unit(id)
+		if u == null or u.dead:
+			work_memory.erase(id)
+			continue
+		if u.faction != faction or (not only.is_empty() and not only.has(id)):
+			continue
+		var entry: Dictionary = work_memory[id]
+		work_memory.erase(id)
+		if t - float(entry["t"]) > WORK_MEMORY_TIME or u.child or u.siege >= 0:
+			continue
+		var cur := crew_of(u)
+		if cur != null and (cur.captain or _crew_is_working(cur)):
+			continue
+		var key: int = entry["group"]
+		if not groups.has(key):
+			groups[key] = {"entry": entry, "units": []}
+		groups[key]["units"].append(u)
+	var back := 0
+	for g in groups.values():
+		var us: Array = g["units"]
+		var steps: Array = g["entry"]["steps"]
+		back += us.size()
+		if steps.is_empty():
+			for u in us:
+				release_member(u)
+			continue
+		var crew := crew_of(us[0])
+		var same := crew != null and crew.members.size() == us.size()
+		if same:
+			for u in us:
+				if u.crew != crew.id:
+					same = false
+		if not same:
+			for u in us:
+				release_member(u)
+			crew = make_crew(faction, us)
+		crew.loop = bool(g["entry"]["loop"])
+		start_plan(crew, steps.duplicate(true))
+	return back
 
 
 ## The rival drops its unstarted sites. A player's sites wait to be resumed.

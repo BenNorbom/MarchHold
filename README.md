@@ -69,7 +69,7 @@ build a hut · build a palisade · make 32 arrows · arm 6 with spears · to arm
 send two scouts east · scout their camp · attack their camp · guard the mark · follow me · hold
 tame 3 horses · mount up · smelt bronze · upgrade the armory · research gunpowder · man the cannon
 promote · dismiss · status · cancel
-continue construction · finish the wall · gather wood here
+continue construction · finish the wall · gather wood here · back to work
 ```
 
 ### Hotkeys
