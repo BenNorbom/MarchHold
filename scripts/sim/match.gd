@@ -119,6 +119,10 @@ func _update_villager(u: Unit, dt: float) -> void:
 	if u.in_tower >= 0:
 		_update_tower_archer(u, dt)
 		return
+	if u.task == "arm" and not armed(u) and u.siege < 0:
+		u.flee_t = 0.0
+		update_worker(u, dt)
+		return
 	if u.task == "scout" and u.scout_leg < 3:
 		update_worker(u, dt)
 		return

@@ -2,7 +2,7 @@
 
 MarchHold is a realistic medieval strategy game played entirely in first person. You are a commander on foot or horseback. You walk among your people, pick them out by looking and clicking, and talk to them through a chat line. An OpenAI-powered interpreter ("Terra") turns what you type into concrete orders, and the simulation validates and executes them. Slash commands like `/b` give instant menus for the common things. You start with nothing and grow a settlement from a campfire to a gunpowder army of up to 200.
 
-First target: **1v1, player vs AI, single machine.** Later: **online head-to-head, up to 8 players.**
+Current release: **one player against one to seven AI rivals on a single machine.** Later: **online head-to-head, up to 8 players.**
 
 This plan succeeds the prototype at `Documents/MCRTS` (Electron + Three.js voxel game). The prototype proved the command loop; MarchHold is the production game.
 
@@ -61,7 +61,7 @@ The content here is deliberately lean. More buildings, weapons, and abilities ca
 
 Rules that hold from day one:
 
-1. **Server-authoritative even in single player.** The 1v1 vs AI runs on a local server so online play is adding clients, not rewriting the game.
+1. **Server-authoritative even in single player.** Local AI matches use the authoritative simulation. Online clients and a dedicated server are future work.
 2. **The model never mutates state.** Terra only proposes. The server checks every step against unlocked tech, stockpiles, crew availability, and placement rules.
 3. **One source of truth for content.** Items, buildings, recipes, prerequisites, build times, unit stats live in data tables. The command schema sent to the model, the slash-command menus, the in-game ledger, and the AI rival's options are all generated from them.
 4. **Slash commands and Terra produce the same commands.** `/b b h` → place it is the same validated "build hut here" command Terra would emit.
@@ -169,7 +169,7 @@ Seven raw resources and two refined ones:
 | Watch post | Wood | Early-warning alarm |
 | Quarry | Stone | Stone; opens the Stone age |
 | Stone wall + gate | Stone | Strong walls, built in stages |
-| Stone tower | Stone | Alarm + archer position |
+| Stone tower | Stone | Alarm and three sheltered rooftop archer posts. The commander can climb from the door. |
 | Stable | Stone | Holds captured horses, breeds them |
 | Mine | Stone | Placed on a bronze ore, coal or iron ore deposit |
 | Smelter | Stone → Iron | Makes bronze; upgrades to an iron furnace |
@@ -254,7 +254,7 @@ Arming someone takes them off work. Soldiers still eat. Captains lead squads: *"
 - **Blows:** each has a wind-up, an impact and a recovery on the simulation's clock, and the animation runs on the same clock. Stepping back during a wind-up dodges it. Walls stop blows and arrows.
 - **Orders:** guards and followers fight within a leash measured from their post or commander. Holders don't leave their spot.
 - **Pikes** set against a charge cancel its bonus.
-- **The commander:** every click is a blow (one can be queued). Swords sweep two, clubs interrupt a wind-up, spears and pikes outreach. Right mouse or V blocks from the front at a cost in stamina; raising the guard just as a blow lands parries and staggers the attacker.
+- **The commander:** every click is a blow (one can be queued). Swords sweep two, and spears and pikes have more reach. Right mouse or V blocks from the front at a cost in stamina; raising the guard just as a blow lands parries and staggers the attacker.
 
 Formations (line, wedge, shield wall, loose), morale and routing, wall assaults (ladders, rams, cannons), fire against palisades, and first-person commander combat (swing, thrust, block, bow draw) carried over from the prototype.
 
@@ -418,7 +418,7 @@ Rewritten in GDScript for Godot 4, keeping the design:
 
 ## 16. Decisions (formerly open questions)
 
-1. **Map:** a random seed every match, in three sizes. Small is 512 m (camps at least 320 m apart, 100 m from the edge), Medium is 768 m (460 m, 125 m) and is the default, Large is 1 km (620 m, 150 m) and is the biggest for 1v1. The tutorial always uses Large.
+1. **Map:** a random seed every match. Small (512 m) holds two settlements, Medium (768 m) four, Large (1,024 m) six, and Huge (1,536 m) eight. Medium is the default. The tutorial uses Large with one rival.
 2. **Commander death:** ends the match. Both commanders wear a **crown**, so you can find and kill Rook.
 3. **Rivers:** none at first. Worth adding later as obstacles with fords and bridges.
 4. **Tin:** dropped. Copper and tin are merged into a single **bronze ore**.

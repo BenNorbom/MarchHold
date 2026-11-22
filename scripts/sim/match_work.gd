@@ -1246,7 +1246,8 @@ func update_worker(u: Unit, dt: float) -> void:
 		"scout":
 			_do_scout(u, c, dt)
 		"recall":
-			if move_to(u, resting_place(u) + _ring(u, 6.0), dt, 2.0):
+			var refuge: Vector2 = resting_place(u) if post_of(u) else c.state.get("target", home_pos(u.faction))
+			if move_to(u, refuge + _ring(u, 6.0), dt, 2.0):
 				u.phase = "done"
 				u.anim = Anim.IDLE
 		"guard", "hold", "attack", "follow":

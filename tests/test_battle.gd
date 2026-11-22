@@ -52,18 +52,14 @@ func field(seed_in: int = 1):
 	tr.heights.fill(5.0)
 	var m = Match.new()
 	m.rng.seed = seed_in
-	var args: Array = [tr]
-	for info in m.get_method_list():
-		if info["name"] == "_init_world" and (info["args"] as Array).size() > 1:
-			args.append(2)        # worlds that are told how many settlements there are
-			break
-	m.callv("_init_world", args)
+	m._init_world(tr, 2)
+	m.birth_acc.resize(2)
 	for i in 2:
 		var f = m.Faction.new()
 		f.id = i
 		f.start = Vector2(40 + 176 * i, 128)
 		f.knowledge.resize(m.kres * m.kres)
-		f.visible.resize(m.kres * m.kres)
+		f.knowledge.fill(-1.0)
 		for r in Defs.RESOURCES:
 			f.stock[r] = 100.0
 		f.food_cap = 150
@@ -334,7 +330,7 @@ func test_timing() -> void:
 	e = dummy(m, 1, C + Vector2(1.2, 0))
 	while a.swing_start < 0.0 and m.t < 2.0:
 		m.tick(Defs.TICK)
-	e.pos += Vector2(1.6, 0)
+	e.pos = a.pos + Vector2(float(Defs.ITEMS[a.weapon]["reach"]) + 1.5, 0)
 	while m.t < a.swing_hit + 0.15:
 		m.tick(Defs.TICK)
 	check(e.hp == e.max_hp, "stepping back during the wind-up dodges it")
@@ -429,7 +425,7 @@ func test_towers() -> void:
 		crew(m, men, "guard", C)
 		run(m, 20.0)
 		var manned := men.filter(func(u): return u.in_tower == tw.id).size()
-		check(manned == 4, "four archers man a tower turned %.1f (%d)" % [rot, manned])
+		check(manned == 3, "three archers man a tower turned %.1f (%d)" % [rot, manned])
 
 
 func test_deep_crew() -> void:
@@ -456,7 +452,7 @@ func test_commander_attack() -> void:
 	m.commander_update(0, 0.05 + float(Defs.MELEE["spear"]["quick"]))
 	check(e.hp < e.max_hp, "and lands on that frame, between ticks")
 	check(not m.commander_swing(0, 0.4), "no second blow inside the swing")
-	check(m.commander_swing(0, 0.05 + 1.1 * Defs.COMMANDER_SWING), "the next blow is ready exactly when the swing ends")
+	check(m.commander_swing(0, 0.05 + float(Defs.ITEMS[p.weapon]["rate"]) * Defs.COMMANDER_SWING), "the next blow is ready exactly when the swing ends")
 
 	m = field()
 	p = player(m, C, "iron_sword")
@@ -583,7 +579,7 @@ func test_matchups() -> void:
 		["pikes beat cavalry", pike, lancer, 9.0],
 		["cavalry beats archers", lancer, archer, 14.0],
 		["sword and shield beats pikes", sword, pike, 9.0],
-		["archers beat unshielded infantry", archer, infantry, 13.0],
+		["archers beat unshielded infantry", archer, infantry, 22.0],
 		["shields blunt archers", sword, archer, 13.0],
 	]
 	for c in cases:

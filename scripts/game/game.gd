@@ -1107,11 +1107,9 @@ func _on_chat(text: String) -> void:
 		if parsed.get("all", false) and req.is_empty():
 			req = {"all": true}
 			who = "everyone"
-		# "Get back to work" with nothing half built means something else, so Terra decides.
-		if not terra.available() or not _nothing_left_to_resume(req, parsed["steps"]):
-			_execute(req, parsed["steps"], who, chat_site)
-			return
-	if terra.available():
+		_execute(req, parsed["steps"], who, chat_site)
+		return
+	if terra and terra.available():
 		if terra.busy:
 			hud.log_line("Terra is still thinking about your last order.", "warn")
 			return
@@ -1187,13 +1185,6 @@ func _name_place(title: String) -> void:
 func _stop_orders(req: Dictionary) -> void:
 	var n: int = m.cancel(0, req if not req.is_empty() else {"all": true})
 	hud.log_line("Stopped." if n > 0 else "Nobody was doing anything.", "crew")
-
-
-func _nothing_left_to_resume(req: Dictionary, steps: Array) -> bool:
-	for s in steps:
-		if s["action"] == "resume" and m.resume_sites(0, req, s.get("match", s["subject"]), chat_site).is_empty():
-			return true
-	return false
 
 
 func _abandon_site(req: Dictionary) -> bool:

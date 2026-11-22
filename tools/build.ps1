@@ -13,6 +13,7 @@ $version = (Select-String -Path project.godot -Pattern '^config/version="(.+)"')
 Write-Host "MarchHold $version"
 
 & $Godot --headless --path . --import | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Asset import failed." }
 if (-not $SkipTests) {
     & $Godot --headless --path . -s res://tests/run_tests.gd
     if ($LASTEXITCODE -ne 0) { throw "Tests failed." }
@@ -22,7 +23,7 @@ if (-not $SkipTests) {
 New-Item -ItemType Directory -Force build, dist | Out-Null
 foreach ($d in "build", "dist") { if (-not (Test-Path "$d/.gdignore")) { New-Item -ItemType File "$d/.gdignore" | Out-Null } }
 & $Godot --headless --path . --export-release "Windows Desktop" build/MarchHold.exe
-if (-not (Test-Path build/MarchHold.exe)) { throw "Export failed." }
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path build/MarchHold.exe)) { throw "Export failed." }
 & $Iscc "/DAppVersion=$version" installer\MarchHold.iss
 if ($LASTEXITCODE -ne 0) { throw "Installer build failed." }
 Get-ChildItem dist | Format-Table Name, @{n="MB"; e={[math]::Round($_.Length / 1MB, 1)}}

@@ -66,21 +66,9 @@ static func sighted(m, p) -> Array:
 	for o in near:
 		if o.stable >= 0 or out.has(o) or not (m.armed(o) or o.kind in ["cannon", "ram"]):
 			continue
-		if _in_sight(m, p, o.pos):
+		if Planner.post_can_see(m, p, o.pos):
 			out.append(o)
 	return out
-
-
-static func _in_sight(m, p, at: Vector2) -> bool:
-	for u in m.units_near(at, Defs.VILLAGER["sight"], p.faction):
-		if u.post == p.id:
-			return true
-	for b in m.buildings:
-		if b.dead or not b.complete or b.faction != p.faction or b.pos.distance_to(p.center) > p.radius:
-			continue
-		if b.pos.distance_to(at) <= float(Defs.BUILDINGS[b.type].get("sight", 18.0)):
-			return true
-	return false
 
 
 static func _defenders(m, p) -> Array:

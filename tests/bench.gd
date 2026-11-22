@@ -150,7 +150,7 @@ func _stage(m, pop: int, scenario: String) -> void:
 	var center := Vector2(m.map_size, m.map_size) * 0.5
 	for f in m.factions:
 		var home: Vector2 = m.home_pos(f.id)
-		var plan := ["armory", "stockpile", "granary", "granary", "watch_post"]
+		var plan := ["armory", "stockpile", "stockpile", "stockpile", "watch_post"]
 		for k in pop / 12:
 			plan.append("hut")
 		var k := 0

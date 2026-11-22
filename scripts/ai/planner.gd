@@ -156,6 +156,18 @@ static func find_site(m, faction: int, type: String, center: Vector2, front: Vec
 
 # --- Defence ------------------------------------------------------------------
 
+static func post_can_see(m, p, at: Vector2) -> bool:
+	for u in m.units_near(at, Defs.VILLAGER["sight"], p.faction):
+		if u.post == p.id:
+			return true
+	for b in m.buildings:
+		if b.dead or not b.complete or b.faction != p.faction or b.pos.distance_to(p.center) > p.radius:
+			continue
+		if b.pos.distance_to(at) <= float(Defs.BUILDINGS[b.type].get("sight", 18.0)):
+			return true
+	return false
+
+
 ## Enemies this side saw within radius of center in the last few seconds.
 static func threat(m, faction: int, center: Vector2, radius: float) -> int:
 	var seen := 0

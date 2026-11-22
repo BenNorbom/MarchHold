@@ -29,7 +29,7 @@ flowchart TB
   subgraph STONE["Stone age · ~3–5 min"]
     quarry(["Quarry"]):::key
     swall(["Stone wall + gate"]):::bld
-    tower(["Stone tower"]):::bld
+    tower(["Stone tower<br/>3 sheltered archer posts"]):::bld
     stable(["Stable"]):::bld
     ladders["Siege ladders"]:::item
     mounted["Mounted archery research<br/>~60 s"]:::item

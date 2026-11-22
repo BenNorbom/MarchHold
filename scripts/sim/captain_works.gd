@@ -526,7 +526,8 @@ static func _note_what_is_seen(m, p) -> void:
 	for id in p.survey_nodes:
 		if p.seen.has(id):
 			continue
-		if Planner.known(m, p.faction, m.terrain.nodes[id].pos):
+		var at: Vector2 = m.terrain.nodes[id].pos
+		if Planner.known(m, p.faction, at) or Planner.post_can_see(m, p, at):
 			p.seen[id] = true
 		elif p.mandate == "industry" or (m.terrain.nodes[id].kind == "rock" and m.buildings_of(p.faction, "quarry", false).is_empty()):
 			unseen = true

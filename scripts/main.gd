@@ -206,7 +206,7 @@ func _demo_battle(n: int) -> void:
 	var me = m.commander(0)
 	var ahead := Vector2(sin(me.facing), cos(me.facing))
 	var middle: Vector2 = me.pos + ahead * 16.0
-	var kits := ["club", "wood_spear", "bronze_sword", "bow", "iron_pike", "wood_spear"]
+	var kits := ["wood_spear", "wood_spear", "bronze_sword", "bow", "iron_pike", "wood_spear"]
 	for side in 2:
 		var men := []
 		for k in n:

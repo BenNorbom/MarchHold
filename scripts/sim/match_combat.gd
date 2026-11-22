@@ -196,6 +196,21 @@ func _tower_resupply(u: Unit) -> Building:
 	return null
 
 
+func _walk_into_tower(u: Unit, tower: Building, dt: float) -> void:
+	var door := tower_door(tower)
+	var local := (u.pos - tower.pos).rotated(-tower.rot)
+	if absf(local.x) <= 2.0 and local.y >= tower.size.y * 0.5 and u.pos.distance_to(door) <= 2.8:
+		# The footprint blocks a whole path cell. Walk the last step at the opening.
+		face(u, door)
+		u.move_t = t
+		u.anim = Anim.WALK
+		u.pos = u.pos.move_toward(door, unit_speed(u) * dt)
+		if u.pos.distance_to(door) <= 0.75:
+			enter_tower(u, tower)
+	else:
+		move_to(u, door + Vector2(0, 1.1).rotated(tower.rot), dt, 0.75, false, false)
+
+
 func _update_tower_archer(u: Unit, dt: float) -> void:
 	u.cooldown = maxf(0.0, u.cooldown - dt)
 	u.anim = Anim.IDLE
@@ -783,8 +798,8 @@ func _do_military(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
 						if arm:
 							if go_to_building(u, arm, dt, 1.4, true):
 								refill_quiver(u, f)
-						elif move_to(u, tower_door(tower), dt, 1.0):
-							enter_tower(u, tower)
+						else:
+							_walk_into_tower(u, tower, dt)
 						return
 					# Extra archers guard outside the tower until a post opens.
 					spot = approach_point(u, tower, 1.4)

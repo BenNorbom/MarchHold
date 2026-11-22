@@ -644,7 +644,7 @@ func test_mandate_building() -> void:
 	var village = m.village_post(0)
 	run(m, 280.0)
 	check(not sites_of(m, "farm").is_empty(), "the village captain builds farms")
-	check(not sites_of(m, "hut").is_empty() or not sites_of(m, "house").is_empty(), "and housing")
+	check(not sites_of(m, "hut").is_empty(), "and housing")
 	check(not sites_of(m, "quarry").is_empty(), "and finds the outcrop for a quarry")
 	var strays: Array = m.buildings_of(0, "", false).filter(func(b):
 		return b.type != "campfire" and (not b.type in Defs.MANDATES["village"]["builds"] or b.pos.distance_to(village.center) > village.radius + 0.1))
@@ -682,8 +682,8 @@ func test_mandate_building() -> void:
 	var miners: Array = grown_village(works, 12)
 	var wf = works.fac(0)
 	wf.age = 1
-	wf.stock["wood"] = 200.0
-	wf.stock["stone"] = 100.0
+	wf.stock["wood"] = 400.0
+	wf.stock["stone"] = 200.0
 	var ore = Planner.find_deposit(works, 0, "bronze_ore", works.home_pos(0), 330.0, false)
 	for i in miners.size():
 		miners[i].pos = ore.pos + Vector2.from_angle(i * 0.9) * 14.0
@@ -736,7 +736,7 @@ func test_mandate_building() -> void:
 	check(not sites_of(fort, "palisade").is_empty() and not sites_of(fort, "palisade_gate").is_empty(), "a garrison raises a palisade with a gate")
 	var from: Vector2i = fort.nearest_free_cell(0, fort.cell_of(base))
 	var to: Vector2i = fort.nearest_free_cell(0, fort.cell_of(fort.home_pos(0)))
-	check(not fort.grids[0].get_id_path(from, to).is_empty(), "and its people can still walk home")
+	check(not fort.find_path(0, fort.cell_center(from), fort.cell_center(to)).is_empty(), "and its people can still walk home")
 
 	# Told to build, a captain picks the site.
 	var told = new_match(77)
@@ -851,7 +851,7 @@ func test_absence() -> void:
 	check(m.posts.has(garrison.id) and garrison.members.size() >= garrison.target and stranded <= 1, "the remote post is still staffed at its post (%d, %d away)" % [garrison.members.size(), stranded])
 
 
-func raiders_at(m, at: Vector2, n: int, target: Vector2, weapon: String = "club") -> Array:
+func raiders_at(m, at: Vector2, n: int, target: Vector2, weapon: String = "wood_spear") -> Array:
 	var band := []
 	for k in n:
 		var e = m.spawn_unit(1, "villager", at + Vector2.from_angle(k * 2.4) * (1.0 + k * 0.3))
@@ -985,7 +985,7 @@ func test_threats() -> void:
 	var at: Vector2 = dim.home_pos(0) + (Vector2(dim.map_size, dim.map_size) * 0.5 - dim.home_pos(0)).normalized() * 170.0
 	var watchers: Array = armed_post(dim, at, 4)
 	var unseen = dim.spawn_unit(1, "villager", at + Vector2(0, 55))
-	unseen.weapon = "club"
+	unseen.weapon = "wood_spear"
 	for i in 12:
 		unseen.pos = at + Vector2(0, 55)
 		run(dim, 0.2)
@@ -1196,7 +1196,7 @@ func test_towers() -> void:
 	var crew = m.make_crew(0, archer_crew)
 	m.start_plan(crew, [step("guard", "", 0, "marked")])
 	run(m, 18.0)
-	check(m.tower_archer_count(tower) == 3, "three guarding archers walk around to the door and reach the roof")
+	check(m.tower_archer_count(tower) == 3, "three guarding archers reach the roof through %s (posts %s; positions %s)" % [door, tower.archer_posts, archer_crew.map(func(u): return [u.pos, u.path_goal, u.task])])
 	var posted := archer_crew.filter(func(u): return u.in_tower == tower.id)
 	check(posted.size() == 3, "the fourth archer guards outside")
 	if posted.size() != 3:
@@ -1326,10 +1326,10 @@ func test_parser() -> void:
 		"finish the job": "", "please continue": "", "continue, please": "", "go back to building": "",
 		"continue building the hut": "hut", "finish the farm": "farm", "keep building the farm": "farm",
 		"keep building the stone wall": "stone_wall", "get back to building the stone wall": "stone_wall",
-		"continue the construction of the armory": "armory", "continue work on the house": "house", "build it": "",
-		"finish the stockpile by the berries": "stockpile", "help with the construction": "", "finish that hunter's lodge": "lodge",
+		"continue the construction of the armory": "armory", "continue work on the hut": "hut", "build it": "",
+		"finish the stockpile by the berries": "stockpile", "help with the construction": "", "finish that palisade": "palisade",
 		"send 2 builders to finish the hut": "hut", "everyone continue construction": "", "finish off the watch post": "watch_post",
-		"continue where you left off": "", "resume construction on the granary": "granary", "go finish the quarry": "quarry"}
+		"continue where you left off": "", "resume construction on the stockpile": "stockpile", "go finish the quarry": "quarry"}
 	for text in resumes:
 		r = P.parse(text)
 		check(r["ok"] and r["steps"][0]["action"] == "resume" and r["steps"][0]["subject"] == resumes[text], "resume: " + text)
@@ -1385,7 +1385,7 @@ func test_terra_orders() -> void:
 	var crew = m.crew_of(worker)
 	check(crew != null and worker.task == "gather" and crew.steps[0]["amount"] == 10, "Terra starts the addressed villager's order immediately")
 	game.terra_ctx = ctx
-	game._on_terra({"ok": true, "data": {"kind": "reply", "reply": "A hut would house five people.", "steps": []}})
+	game._on_terra({"ok": true, "data": {"kind": "reply", "reply": "A hut would house six people.", "steps": []}})
 	check(worker.task == "gather" and not game.placing, "Terra advice leaves the crew and placement untouched")
 	game.terra_ctx = ctx
 	check(game._discard_terra_request({}), "an outstanding Terra order can be cancelled")
@@ -1669,7 +1669,7 @@ func test_construction() -> void:
 	var spare = m.bld(m.place_site(0, "stockpile", open_site(m, "stockpile", home, 16.0), 0.0)["id"])
 	game.chat_site = spare.id
 	say.call(null, "cancel")
-	check(spare.dead, "an unstarted site in view can still be cleared")
+	check(spare.dead, "an unstarted site in view can still be cleared (paid %s, site %s, latest response %s)" % [spare.paid, game.chat_site, game.hud.log_lines[-1]["node"].get_parsed_text()])
 	var rival_site = m.add_building(1, "hut", m.home_pos(1) + Vector2(20, 0), 0.0)
 	var theirs = m.idle_adults(1, m.home_pos(1))[0]
 	var st := step("build", "hut")

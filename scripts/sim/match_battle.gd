@@ -116,11 +116,11 @@ func _may_fight(u: Unit, o: Unit, area: Array, radius: float) -> bool:
 	if o.in_tower >= 0 and (not can_shoot_bow(u) or u.arrows <= 0 or d > bow_range(u, o)):
 		return false
 	var hit_me := o.id == u.attacker and t - u.hit_t < 4.0
-	if d > maxf(radius + 8.0, float(area[2]) if hit_me else 0.0):
-		return false
 	# An archer needn't leave the post to shoot.
 	if can_shoot_bow(u) and u.arrows > 0 and u.weapon == "" and d <= bow_range(u, o):
 		return true
+	if d > maxf(radius + 8.0, float(area[2]) if hit_me else 0.0):
+		return false
 	return o.pos.distance_to(area[0]) <= float(area[2] if hit_me else area[1])
 
 
@@ -133,7 +133,8 @@ func _pick_target(u: Unit, current: Unit, c: Crew, order: String, radius: float)
 	if current:
 		best_score = _target_score(u, current, current, shooter, places)
 	# Most fights are decided close by, so only look far when there's nobody near.
-	var looks := [radius] if radius <= 10.0 else [10.0, radius]
+	var reach := maxf(radius, bow_range(u)) if shooter else radius
+	var looks := [reach] if reach <= 10.0 else [10.0, reach]
 	var here := u.pos
 	for r: float in looks:
 		var r2 := r * r
