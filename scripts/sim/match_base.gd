@@ -153,6 +153,16 @@ class Post:
 	var surveying := false
 	var rounds := 0
 	var works_t := -999.0       # when the captain last looked at what to build
+	var alert := ""             # intruder, raid or falling_back
+	var alert_t := -999.0       # when the threat was last seen
+	var threat := 0             # the most seen at once during this alert
+	var threat_at := Vector2.ZERO
+	var refuge := Vector2.ZERO
+	var lost := 0
+	var lost_at_alert := 0
+	var blocked_since := {}     # project -> when it was first held up
+	var blocked_told := {}
+	var ready_told := false
 
 
 class Faction:

@@ -31,7 +31,7 @@ func _initialize() -> void:
 
 func _run_tests() -> void:
 	var only := OS.get_environment("MH_TEST")
-	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "crews", "selection", "delegation", "posts", "post_orders", "places", "mandate_building", "walls", "combat", "parser", "schema", "chatgpt", "terra_orders", "duel"]
+	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "crews", "selection", "delegation", "posts", "post_orders", "places", "mandate_building", "threats", "post_review", "walls", "combat", "parser", "schema", "chatgpt", "terra_orders", "duel"]
 	if only == "absence":
 		tests.append(only)
 	var t0 := Time.get_ticks_msec()
@@ -797,6 +797,221 @@ func test_absence() -> void:
 	var kept: Array = m.post_members(garrison).filter(func(u): return not m.under_direct_order(u) and u.task in ["guard", "idle"] and not u.child)
 	stranded = kept.filter(func(u): return u.pos.distance_to(garrison.center) > garrison.radius).size()
 	check(m.posts.has(garrison.id) and garrison.members.size() >= garrison.target and stranded <= 1, "the remote post is still staffed at its post (%d, %d away)" % [garrison.members.size(), stranded])
+
+
+func raiders_at(m, at: Vector2, n: int, target: Vector2, weapon: String = "club") -> Array:
+	var band := []
+	for k in n:
+		var e = m.spawn_unit(1, "villager", at + Vector2.from_angle(k * 2.4) * (1.0 + k * 0.3))
+		e.name = "Raider"
+		e.weapon = weapon
+		band.append(e)
+	var c = m.make_crew(1, band)
+	c.steps = [step("attack")]
+	c.state = {"target": target}
+	for e in band:
+		m._set_task(e, "attack")
+	return band
+
+
+## A garrison of armed people on open ground, already in place.
+func armed_post(m, at: Vector2, size: int) -> Array:
+	var people := []
+	for k in size:
+		var u = m.spawn_unit(0, "villager", at + Vector2.from_angle(k * 1.1) * 4.0)
+		u.name = m.pick_name(m.fac(0))
+		u.weapon = "wood_spear"
+		people.append(u)
+	m.set_mark(0, at)
+	m.command(0, {"unit": people[0].id, "individual": true, "steps": [step("mandate", "garrison", 0, "marked", size)]})
+	var p = m.post_of(people[0])
+	for u in people:
+		m.join_post(p, u)
+	p.walled = true         # open ground keeps the test about the fighting
+	return people
+
+
+func test_threats() -> void:
+	if not ResourceLoader.exists("res://scripts/sim/captain_watch.gd"):
+		check(false, "captains react to threats")
+		return
+	# A smaller raid is seen off without any orders.
+	var m = new_match(414)
+	var home: Vector2 = m.home_pos(0)
+	var f = m.fac(0)
+	var adults: Array = grown_village(m, 24)
+	for k in 40:
+		var p: Vector2 = home + Vector2.from_angle(k * 1.3) * (15.0 + k * 0.5)
+		if m.site_problem(0, "armory", p, 0.0) == "":
+			m.add_building(0, "armory", p, 0.0, true)
+			break
+	f.gear["wood_spear"] = 20
+	f.gear["wood_shield"] = 20
+	m.command(0, {"unit": adults[0].id, "individual": true, "steps": [step("mandate", "village")]})
+	var village = m.village_post(0)
+	run(m, 10.0)
+	var lone: Array = raiders_at(m, home + Vector2(28, 0), 1, home)
+	run(m, 8.0)
+	check(adults.filter(func(u): return u.weapon != "").is_empty(), "a lone intruder doesn't call out the militia")
+	for e in lone:
+		m.kill_unit(e)
+	run(m, 50.0)
+	m.messages.clear()
+	var raid: Array = raiders_at(m, home + Vector2(42, 0), 5, home)
+	var sheltered := false
+	var furthest := 0.0
+	for i in 90:
+		run(m, 1.0)
+		for u in adults:
+			if u.dead:
+				continue
+			sheltered = sheltered or u.task == "hold"
+			if u.enemy >= 0:
+				furthest = maxf(furthest, u.pos.distance_to(village.center))
+	var militia: int = adults.filter(func(u): return u.weapon != "").size()
+	check(militia >= 5 and militia <= 12, "militia are armed in proportion to the raid (%d for 5 raiders)" % militia)
+	check(sheltered, "everyone else takes shelter")
+	check(raid.filter(func(e): return not e.dead and e.pos.distance_to(home) < 60.0).is_empty(), "a smaller raid is seen off without orders")
+	check(furthest <= village.radius + 15.0, "nobody chases out of the post (%.0f m)" % furthest)
+	var calls: int = m.messages.filter(func(msg): return msg["kind"] == "alarm" and msg["text"].contains("sighted")).size()
+	check(calls == 1, "the captain reports the attack once (%d)" % calls)
+	for e in raid:
+		m.kill_unit(e)
+	run(m, 70.0)
+	var back: int = adults.filter(func(u): return not u.dead and u.task in ["gather", "build"]).size()
+	check(village.alert == "" and back >= 8, "then they stand down and go back to work (%d working)" % back)
+
+	# A raid doesn't override the player, and never becomes an attack.
+	var o = new_match(414)
+	var hearth: Vector2 = o.home_pos(0)
+	var folk_o: Array = grown_village(o, 20)
+	o.command(0, {"unit": folk_o[0].id, "individual": true, "steps": [step("mandate", "village")]})
+	run(o, 4.0)
+	var pinned = folk_o[5]
+	o.command(0, {"unit": pinned.id, "individual": true, "steps": [step("gather", "stone")]})
+	raiders_at(o, hearth + Vector2(0, 50), 4, hearth + Vector2(0, 50))
+	var attacked := false
+	for i in 12:
+		run(o, 1.0)
+		for c in o.crews_of(0):
+			if c.idx < c.steps.size() and c.steps[c.idx]["action"] == "attack":
+				attacked = true
+	var kept_order = o.crew_of(pinned)
+	check(pinned.dead or (kept_order != null and kept_order.post < 0 and pinned.task == "gather"), "a raid doesn't pull anyone off your direct order")
+	check(not attacked and o.posts.size() == 1, "captains never start an attack or found a post")
+
+	# A bigger raid: the posture decides.
+	for posture in ["fall_back", "hold"]:
+		var w = new_match(414)
+		var camp: Vector2 = w.home_pos(0)
+		var out: Vector2 = camp + (Vector2(w.map_size, w.map_size) * 0.5 - camp).normalized() * 170.0
+		var guards: Array = armed_post(w, out, 6)
+		var held = w.post_of(guards[0])
+		if posture == "hold":
+			w.command(0, {"post": held.id, "steps": [step("posture", "hold")]})
+		run(w, 4.0)
+		w.messages.clear()
+		var foes: Array = raiders_at(w, out + (out - camp).normalized() * 30.0, 18, out, "wood_spear")
+		var left := false
+		for i in 30:
+			run(w, 1.0)
+			for u in guards:
+				if not u.dead and u.flee_t <= 0.0 and u.pos.distance_to(out) > held.radius + 15.0:
+					left = true
+		if posture == "hold":
+			check(not left, "told to hold, they hold against a bigger raid")
+		else:
+			var living: Array = guards.filter(func(u): return not u.dead)
+			check(left and living.size() >= 3, "outnumbered, they fall back and most survive (%d of 6)" % living.size())
+			for e in foes:
+				w.kill_unit(e)
+			run(w, 150.0)
+			check(held.alert == "" and living.filter(func(u): return not u.dead and u.pos.distance_to(out) < held.radius).size() >= 1, "once it's quiet they return to their post")
+
+	# Captains only react to what the post can see.
+	var dim = new_match(414)
+	var at: Vector2 = dim.home_pos(0) + (Vector2(dim.map_size, dim.map_size) * 0.5 - dim.home_pos(0)).normalized() * 170.0
+	var watchers: Array = armed_post(dim, at, 4)
+	var unseen = dim.spawn_unit(1, "villager", at + Vector2(0, 55))
+	unseen.weapon = "club"
+	for i in 12:
+		unseen.pos = at + Vector2(0, 55)
+		run(dim, 0.2)
+	check(dim.post_of(watchers[0]).alert == "", "what the post can't see doesn't alarm it")
+
+	# Archers restock, and losses are replaced.
+	var r = new_match(414)
+	var base: Vector2 = r.home_pos(0) + (Vector2(r.map_size, r.map_size) * 0.5 - r.home_pos(0)).normalized() * 90.0
+	r.add_building(0, "armory", base + Vector2(14, 0), 0.0, true)
+	r.fac(0).gear["arrows"] = 64
+	var archers: Array = armed_post(r, base, 4)
+	for u in archers:
+		u.weapon = ""
+		u.bow = true
+		u.arrows = 0
+	run(r, 25.0)
+	check(archers.filter(func(u): return u.arrows >= Defs.QUIVER / 2).size() >= 3, "a garrison restocks its arrows")
+	var helpers: Array = grown_village(r, 14)
+	r.command(0, {"unit": helpers[0].id, "individual": true, "steps": [step("mandate", "village")]})
+	run(r, 4.0)
+	r.kill_unit(archers[1])
+	run(r, 4.0)
+	check(r.post_members(r.post_of(archers[0])).size() == 4, "a post's losses are replaced")
+
+	# Something blocked is reported once, with the reason.
+	var s = new_match(414)
+	var folk: Array = grown_village(s, 30)
+	s.command(0, {"unit": folk[0].id, "individual": true, "steps": [step("mandate", "village"), step("reserve", "wood", 5000)]})
+	run(s, 5.0)
+	s.messages.clear()
+	s.t += 130.0
+	run(s, 6.0)
+	s.t += 130.0
+	run(s, 6.0)
+	var told: Array = s.messages.filter(func(msg): return msg["text"].contains("can't build a farm"))
+	check(told.size() == 1 and told[0]["text"].contains("wood"), "a blocked job is reported once, with the reason (%d)" % told.size())
+
+
+func test_post_review() -> void:
+	# Direct orders end, whoever leads them.
+	var m = new_match(414)
+	var adults: Array = grown_village(m, 16)
+	m.command(0, {"unit": adults[0].id, "individual": true, "steps": [step("mandate", "village")]})
+	run(m, 3.0)
+	adults[3].captain = true       # captained something once
+	for lead in [adults[0], adults[3]]:
+		var r: Dictionary = m.command(0, {"units": [lead.id, adults[5].id], "steps": [step("recall", "", 0, "home")]})
+		check(r["ok"], "a crew led by a captain takes orders")
+		run(m, 25.0)
+		check(not m.under_direct_order(adults[5]) and not m.under_direct_order(lead), "a finished order lets go, even led by %s captain" % ("the post's" if lead == adults[0] else "a former"))
+	m.command(0, {"unit": adults[7].id, "individual": true, "steps": [step("promote")]})
+	run(m, 2.0)
+	check(adults[7].post < 0 and m.crew_of(adults[7]) != null and m.crew_of(adults[7]).captain, "promoting someone out of a post gives them their own crew")
+
+	# A post's plain name doesn't take over the word.
+	var game = chat_game(m)
+	game.addressee = {}
+	for pair in [["farming", "farms"], ["garrison", "garrison"], ["industry", "works"]]:
+		var u = m.spawn_unit(0, "villager", m.home_pos(0) + Vector2(6, 0))
+		u.name = m.pick_name(m.fac(0))
+		m.command(0, {"unit": u.id, "individual": true, "steps": [step("mandate", pair[0], 0, "home")]})
+		check(not m.places_of(0).has(pair[1]), "'%s' is still an ordinary word" % pair[1])
+	var again: Dictionary = Parser.parse("look after the farms", m.places_of(0).keys())
+	check(again["ok"] and again["steps"][0]["action"] == "mandate", "mandates still parse once such posts exist")
+
+	var march: Dictionary = Parser.parse("lead the army to attack their camp")
+	check(march["ok"] and march["steps"][0]["action"] == "attack", "leading an army to attack is an attack")
+	var plain = new_match(77)
+	var crew: Array = grown_village(plain, 8)
+	var r2: Dictionary = plain.command(0, {"unit": crew[1].id, "steps": [step("posture", "hold")]})
+	check(r2["ok"] and crew[1].task == "hold", "'hold at all costs' to an ordinary crew means hold")
+
+	# Being told to hold stops a retreat.
+	var village = m.village_post(0)
+	village.alert = "falling_back"
+	m.command(0, {"post": village.id, "steps": [step("posture", "hold")]})
+	check(village.alert == "raid", "'stand your ground' stops a retreat")
+	game.free()
 
 
 func test_walls() -> void:

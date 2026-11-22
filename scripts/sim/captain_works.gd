@@ -14,6 +14,8 @@ const PEOPLE_PER_PROJECT := 15 # one more project at a time for each of these
 const MAX_PROJECTS := 4
 const RING := 22.0             # garrison palisade
 const RING_SIDES := 14
+const TELL_AFTER := 120.0      # seconds held up before the captain says so
+const SPEARS_KEPT := 6
 const EVERY := 2.0             # seconds between looks at what to build
 const HAUL := 60.0             # work this far from a drop-off wants a stockpile
 
@@ -50,6 +52,10 @@ static func update(m, p) -> void:
 	for other in m.posts.values():
 		if other.id != p.id and other.faction == p.faction and not other.saving.is_empty() and int(other.saving["rank"]) < top:
 			_add_cost(held, other.saving["cost"])
+	if wants.is_empty() and not p.ready_told and p.target > 0 and p.members.size() >= p.target:
+		p.ready_told = true
+		if p.faction == 0:
+			m.post(0, "%s: the %s is manned and built. We'll keep it running." % [m.post_label(p), p.name], "done")
 	p.saving = {}
 	p.blocked = {}
 	for want in wants:
@@ -59,7 +65,7 @@ static func update(m, p) -> void:
 			continue
 		var cost: Dictionary = want["cost"]
 		if not _covers(f, cost, held):
-			p.blocked[want["what"]] = "short of " + Defs.cost_text(cost)
+			p.blocked[want["what"]] = "the stores can't spare " + Defs.cost_text(cost)
 			if p.saving.is_empty():
 				p.saving = {"rank": want["rank"], "cost": cost}
 			_add_cost(held, cost)
@@ -67,8 +73,46 @@ static func update(m, p) -> void:
 		if _start(m, p, want):
 			p.saving = {}
 			p.blocked.erase(want["what"])
+			p.blocked_since.erase(want["what"])
+			p.blocked_told.erase(want["what"])
+			_tell_blocked(m, p, wants)
 			return
 		p.blocked[want["what"]] = "no good site in the area"
+	_tell_blocked(m, p, wants)
+
+
+## Each thing held up is reported once, with the reason, until it gets going.
+static func _tell_blocked(m, p, wants: Array) -> void:
+	var still := {}
+	for want in wants:
+		var what: String = want["what"]
+		still[what] = true
+		if not p.blocked.has(what) or p.blocked[what] in ["you said not to", "not in the mandate"]:
+			continue
+		if not p.blocked_since.has(what):
+			p.blocked_since[what] = m.t
+		elif m.t - float(p.blocked_since[what]) >= TELL_AFTER and not p.blocked_told.has(what):
+			p.blocked_told[what] = true
+			if p.faction != 0:
+				continue
+			var verb: String = "make" if want["kind"] == "craft" else want["kind"]
+			var thing: String = want["type"]
+			match want["kind"]:
+				"build":
+					thing = "a " + Defs.building_name(thing).to_lower()
+				"craft":
+					thing = Defs.item_name(thing, 2)
+				"upgrade":
+					thing = "the " + thing
+			var why: String = p.blocked[what]
+			for r in want["cost"]:
+				if why.begins_with("the stores") and int(m.fac(0).reserve.get(r, 0)) > 0:
+					why += ", with the %d %s you told us to keep back" % [int(m.fac(0).reserve[r]), Defs.RESOURCE_NAMES[r]]
+			m.post(0, "%s: we can't %s %s: %s." % [m.post_label(p), verb, thing, why], "warn")
+	for what in p.blocked_since.keys():
+		if not still.has(what):
+			p.blocked_since.erase(what)
+			p.blocked_told.erase(what)
 
 
 static func committed(m, faction: int) -> Dictionary:
@@ -175,6 +219,11 @@ static func _village(m, p, out: Array) -> void:
 		out.append(_building(Rank.REST, "quarry"))
 	if pop >= 70 and f.age >= 2 and m.buildings_of(p.faction, "stable", false).is_empty():
 		out.append(_building(Rank.REST, "stable"))
+	# Militia need spears waiting. With an industry captain, that's their job.
+	for other in m.posts.values():
+		if other.faction == p.faction and other.mandate == "industry":
+			return
+	_keep_spears(m, p, out, SPEARS_KEPT)
 
 
 static func _farming(m, p, out: Array) -> void:
@@ -226,15 +275,8 @@ static func _industry(m, p, out: Array) -> void:
 			continue
 		if m.nearest_building(p.faction, p.center, [r["building"]]).research == "":
 			out.append(_want(Rank.REST, "research", id, r["cost"]))
-	var tier: int = m.armory_tier(p.faction)
-	if tier >= 0:
-		var spare := 0
-		for id in f.gear:
-			if Defs.ITEMS[id]["slot"] == "weapon":
-				spare += int(f.gear[id])
-		var item: String = ["wood_spear", "bronze_spear", "iron_spear"][tier]
-		if spare < 6 and not p.jobs.has("do:craft"):
-			out.append(_want(Rank.REST, "craft", item, Defs.item_cost(item, tier)))
+	_keep_spears(m, p, out, SPEARS_KEPT)
+	_keep_arrows(m, p, out)
 
 
 static func _garrison(m, p, out: Array) -> void:
@@ -251,6 +293,34 @@ static func _garrison(m, p, out: Array) -> void:
 		out.append(_building(Rank.DEFENCE, "armory"))
 	if f.age >= 1 and count_here(m, p, "tower") == 0:
 		out.append(_building(Rank.DEFENCE, "tower"))
+	var bare: int = m.post_members(p).filter(func(u): return not u.child and not m.armed(u)).size()
+	if bare > 0:
+		_keep_spears(m, p, out, bare)
+	_keep_arrows(m, p, out)
+
+
+static func _keep_spears(m, p, out: Array, wanted: int) -> void:
+	var tier: int = m.armory_tier(p.faction)
+	if tier < 0 or p.jobs.has("do:craft"):
+		return
+	var gear: Dictionary = m.fac(p.faction).gear
+	var spare := 0
+	for id in gear:
+		if Defs.ITEMS[id]["slot"] == "weapon":
+			spare += int(gear[id])
+	if spare < wanted:
+		var item: String = ["wood_spear", "bronze_spear", "iron_spear"][tier]
+		out.append(_want(Rank.REST, "craft", item, Defs.item_cost(item, tier)))
+
+
+static func _keep_arrows(m, p, out: Array) -> void:
+	var tier: int = m.armory_tier(p.faction)
+	if tier < 0 or p.jobs.has("do:craft") or int(m.fac(p.faction).gear.get("arrows", 0)) >= Defs.QUIVER * 2:
+		return
+	for u in m.units:
+		if not u.dead and u.faction == p.faction and u.bow:
+			out.append(_want(Rank.REST, "craft", "arrows", Defs.item_cost("arrows", tier)))
+			return
 
 
 static func _remote(m, p) -> bool:

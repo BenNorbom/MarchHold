@@ -490,7 +490,8 @@ func post_status(p: Post) -> String:
 	var size := str(p.members.size())
 	if p.target > 0:
 		size += " of %d" % p.target
-	return "%s: %s people. %s." % [post_label(p), size, ", ".join(doing) if not doing.is_empty() else "standing by"]
+	var alarm: String = {"intruder": " Intruder seen.", "raid": " Under attack.", "falling_back": " Falling back."}.get(p.alert, "")
+	return "%s: %s people. %s.%s" % [post_label(p), size, ", ".join(doing) if not doing.is_empty() else "standing by", alarm]
 
 
 ## Who carries out an order given to a captain: as many of their people as it needs.
@@ -619,6 +620,10 @@ func give_mandate(faction: int, req: Dictionary, s: Dictionary) -> Dictionary:
 		p.rounds = 0
 		p.walled = false
 		p.saving = {}
+		p.alert = ""
+		p.ready_told = false
+		p.blocked_since = {}
+		p.blocked_told = {}
 	p.mandate = kind
 	p.center = at
 	p.radius = float(d["radius"])
@@ -665,6 +670,9 @@ func settle(faction: int, req: Dictionary, steps: Array) -> Dictionary:
 		p = village_post(faction)
 	if p and p.faction != faction:
 		p = null
+	if p == null and steps.size() == 1 and steps[0]["action"] == "posture" and steps[0]["subject"] == "hold" and not req.is_empty():
+		# To anyone without a post, "hold at all costs" is just "hold".
+		return command(faction, req.merged({"steps": [{"action": "hold", "subject": "", "count": 0, "amount": 0, "where": ""}]}, true))
 	for s in steps:
 		var subj: String = s["subject"]
 		if s["action"] == "mandate":
@@ -685,6 +693,8 @@ func settle(faction: int, req: Dictionary, steps: Array) -> Dictionary:
 				p.forbid.erase(subj)
 			"posture":
 				p.posture = subj
+				if subj == "hold" and p.alert == "falling_back":
+					p.alert = "raid"
 	return result
 
 

@@ -27,7 +27,8 @@ func places_of(faction: int) -> Dictionary:
 	var out: Dictionary = fac(faction).places.duplicate()
 	for p: Post in posts.values():
 		var key := p.name.to_lower()
-		if p.faction == faction and p.mandate != "village" and not out.has(key):
+		# One plain word ("farms", "garrison") has to keep its usual meaning in orders.
+		if p.faction == faction and key.contains(" ") and not out.has(key):
 			out[key] = {"name": p.name, "pos": p.center}
 	return out
 
@@ -53,7 +54,9 @@ func under_direct_order(u: Unit) -> bool:
 ## Where someone idles, falls back to, flees to and heals.
 func resting_place(u: Unit) -> Vector2:
 	var p := post_of(u)
-	return p.center if p else home_pos(u.faction)
+	if p == null:
+		return home_pos(u.faction)
+	return p.refuge if p.alert == "falling_back" else p.center
 
 
 func join_post(p: Post, u: Unit) -> void:
@@ -73,6 +76,8 @@ func leave_post(u: Unit) -> void:
 	if p == null:
 		return
 	p.members.erase(u.id)
+	if u.dead:
+		p.lost += 1
 	if p.captain != u.id:
 		return
 	var heir: Unit = null
@@ -133,7 +138,8 @@ func _join(c: Crew, u: Unit) -> void:
 func _set_leader(c: Crew, id: int) -> void:
 	c.leader = id
 	var lead := unit(id)
-	c.captain = lead != null and lead.captain
+	# Inside a post only the post has a captain. A crew there ends when its work does.
+	c.captain = lead != null and lead.captain and lead.post < 0
 
 
 func leave_crew(u: Unit) -> void:
@@ -530,7 +536,12 @@ func _prepare_step(c: Crew, s: Dictionary) -> String:
 			c.state["target"] = home_pos(c.faction)
 		"promote":
 			var lead := unit(c.leader)
-			if lead:
+			if lead and not leads_post(lead):
+				# Their own crew now, outside any post.
+				for id in c.members:
+					var mate := unit(id)
+					if mate and not leads_post(mate):
+						leave_post(mate)
 				lead.captain = true
 				c.captain = true
 				c.loop = false
@@ -909,7 +920,7 @@ func _do_idle(u: Unit, dt: float) -> void:
 	if u.siege >= 0:
 		return
 	var held := post_of(u)
-	if held and held.captain == u.id and held.surveying:
+	if held and held.captain == u.id and held.surveying and held.alert == "":
 		_walk_rounds(u, held, dt)
 		return
 	if u.pos.distance_to(home) > 26.0:

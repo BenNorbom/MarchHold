@@ -69,6 +69,8 @@ static func mandate_in(s: String) -> Dictionary:
 		# "Don't" only counts in front of the mandate: "run the village and don't build walls" is fine.
 		if RegEx.create_from_string(" (don't|do not|never|stop) ").search(s.left(found.get_start() + 1)):
 			continue
+		if pair[0] == "army" and RegEx.create_from_string(" (attack|raid|charge|march|assault|destroy|follow) ").search(s):
+			continue
 		var where := "" if pair[0] == "village" else where_in(s)
 		return _step("mandate", pair[0], 0, where, clampi(count_in(s), 0, 100))
 	return {}

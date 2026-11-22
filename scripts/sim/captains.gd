@@ -6,6 +6,7 @@ extends RefCounted
 const Defs = preload("res://scripts/data/defs.gd")
 const Planner = preload("res://scripts/ai/planner.gd")
 const Works = preload("res://scripts/sim/captain_works.gd")
+const Watch = preload("res://scripts/sim/captain_watch.gd")
 
 const STEWARD_KEEPS := 6       # the village never lends itself below this
 const BUSH_REACH := 160.0
@@ -16,27 +17,48 @@ const SLACK := 1               # a job may run this far over before people are m
 static func think(m, p) -> void:
 	p.members = p.members.filter(func(id): return _serving(m, p, id))
 	if p.mandate == "village":
-		for u in m.idle_adults(p.faction, p.center):
-			if u.post < 0:
+		# Everyone free, in no order, so no need for idle_adults' sort by distance.
+		for u in m.units:
+			if u.post < 0 and u.crew < 0 and u.faction == p.faction and m.is_free_adult(u):
 				m.join_post(p, u)
 		_staff_other_posts(m, p)
-	elif m.village_post(p.faction) == null:
+	elif p.members.size() < p.target and m.village_post(p.faction) == null:
 		# With no steward, a captain finds their own people.
 		for u in m.idle_adults(p.faction, p.center):
 			if p.members.size() >= p.target:
 				break
 			if u.post < 0:
 				m.join_post(p, u)
-	Works.update(m, p)
+	Watch.update(m, p)
+	var mustered := Watch.all_hands(p)
+	if mustered:
+		_drop_work(m, p)
+	else:
+		Works.update(m, p)
 	var on_project := {}
 	for role in p.jobs:
 		if Works.is_project(role):
 			on_project[p.jobs[role]] = true
+	var roster: Array = m.post_members(p)
 	var workers := []
-	for u in m.post_members(p):
+	for u in roster:
 		if u.id != p.captain and not u.child and u.siege < 0 and not m.under_direct_order(u) and not on_project.has(u.crew):
 			workers.append(u)
-	_assign(m, p, _wanted(m, p, workers))
+	_assign(m, p, roster, Watch.jobs(m, p, workers) if mustered else _wanted(m, p, workers))
+
+
+## In a raid builders and crafters down tools. Paid-for work resumes afterwards.
+static func _drop_work(m, p) -> void:
+	for role in p.jobs.keys():
+		if not Works.is_project(role) and not (role == "arm" and p.alert == "falling_back"):
+			continue
+		var c = m.crews.get(p.jobs[role])
+		if c and c.post == p.id:
+			for id in c.members.duplicate():
+				var u = m.unit(id)
+				if u:
+					m.release_member(u)
+		p.jobs.erase(role)
 
 
 static func _serving(m, p, id: int) -> bool:
@@ -121,6 +143,9 @@ static func _wanted(m, p, workers: Array) -> Array:
 		"garrison", "army":
 			var bare := workers.filter(func(u): return u.weapon == "" and not u.bow).size()
 			var n := mini(bare, _spare_weapons(m, p))
+			if int(m.fac(p.faction).gear.get("arrows", 0)) > 0:
+				# Half-empty quivers go back for more.
+				n += workers.filter(func(u): return u.bow and u.arrows < Defs.QUIVER / 2).size()
 			if m.has_building(p.faction, "armory"):
 				_add(jobs, "arm", "arm", "", n)
 				left -= n
@@ -180,7 +205,7 @@ static func _spare_weapons(m, p) -> int:
 
 
 ## Moves as few people as possible to match the wanted jobs.
-static func _assign(m, p, jobs: Array) -> void:
+static func _assign(m, p, roster: Array, jobs: Array) -> void:
 	var wanted := {}
 	for job in jobs:
 		wanted[job["role"]] = job
@@ -202,16 +227,28 @@ static func _assign(m, p, jobs: Array) -> void:
 				m.release_member(u)
 		if keep == 0:
 			p.jobs.erase(role)
-	var free: Array = m.post_members(p).filter(func(u): return u.id != p.captain and m.is_free_adult(u))
+	var free: Array = roster.filter(func(u): return u.id != p.captain and m.is_free_adult(u))
 	for job in jobs:
-		if free.is_empty():
-			break
 		var role: String = job["role"]
 		var c = m.crews.get(p.jobs.get(role, -1))
+		var at: Vector2 = job.get("at", p.center)
+		if c and job.has("at"):
+			c.state["target"] = at      # the line moves with the threat
 		var need: int = int(job["n"]) - (c.members.size() if c else 0)
-		if need <= 0:
+		if need <= 0 or free.is_empty():
 			continue
-		var take := free.slice(0, need)
+		var fit := free
+		if role == "defend":
+			fit = free.filter(func(u): return m.armed(u))
+		elif role in ["arm", "shelter"]:
+			# Empty hands first, then half-empty quivers.
+			var bare: Array = free.filter(func(u): return u.weapon == "" and not u.bow)
+			if role == "arm":
+				bare.append_array(free.filter(func(u): return u.bow and u.arrows < Defs.QUIVER / 2))
+			fit = bare
+		var take: Array = fit.slice(0, need)
+		if take.is_empty():
+			continue
 		if c:
 			m.add_to_crew(c, take)
 		else:
@@ -225,5 +262,5 @@ static func _assign(m, p, jobs: Array) -> void:
 			p.jobs[role] = c.id
 			# "here" would be wherever the commander stands. A post works around its own center.
 			c.state["origin"] = p.center
-			c.state["target"] = p.center
-		free = free.slice(take.size())
+			c.state["target"] = at
+		free = free.filter(func(u): return not take.has(u))
