@@ -5,6 +5,10 @@ const WOOD_TYPES := ["hut", "stockpile", "farm", "armory", "palisade", "palisade
 const STONE_TYPES := ["stone_wall", "stone_gate", "tower"]
 
 const REFUGE_NEAR := 15.0       # this close to the refuge, people falling back turn and fight
+const OWN_TOWN := 130.0         # a march starting this near home may have buildings in its way
+const FAR_MARCH := 90.0
+const CLEAR_OF_TOWN := 10.0
+const FORMED_UP := 14.0
 
 var vision_t := 0.0
 var armed_filter: Callable = armed      # one Callable, not a new lambda for every villager every tick
@@ -81,6 +85,9 @@ func combat_update(u: Unit, dt: float, radius: float) -> bool:
 		gone = gone or (foe.in_tower >= 0 and (not can_shoot_bow(u) or u.arrows <= 0))
 		if not gone and (ticks + u.id) % 5 == 0:
 			gone = not _may_fight(u, foe, _fight_area(u, c, order, radius), radius)
+			# An attacking crew keeps after anyone it can still see, wherever they run.
+			if gone and order == "attack" and _hunted(u, c, foe):
+				gone = false
 		if gone:
 			foe = null
 			u.enemy = -1
@@ -90,6 +97,10 @@ func combat_update(u: Unit, dt: float, radius: float) -> bool:
 		u.scan_t = 0.0
 	if t + EPS >= u.scan_t:
 		foe = _pick_target(u, foe, c, order, radius)
+		if foe == null and order == "attack":
+			# Nobody close: go after the nearest enemy person any of the crew can see
+			# before touching a building, unless walls shut them in.
+			foe = _hunt_target(u, c)
 		var again := 0.5
 		if foe:
 			again = (2.2 if u.front else 1.0) if u.engaged else 0.8
@@ -105,6 +116,56 @@ func combat_update(u: Unit, dt: float, radius: float) -> bool:
 		return false
 	_fight(u, foe, dt, order, c)
 	return true
+
+
+## The ids of enemy people any member of this crew can see, refreshed twice a second.
+func _crew_sightings(c: Crew) -> Array:
+	if t - float(c.state.get("hunt_t", -9.0)) < 0.5:
+		return c.state.get("hunt", [])
+	c.state["hunt_t"] = t
+	var rivals := rivals_mask(c.faction)
+	var seen := {}
+	for id in c.members:
+		var m := unit(id)
+		if m == null or m.dead or not sides_near(m.pos, Defs.HUNT_SIGHT, rivals):
+			continue
+		for o: Unit in units_near(m.pos, Defs.HUNT_SIGHT, -3, c.faction):
+			if is_hostile(c.faction, o) and is_person(o) and o.in_tower < 0:
+				seen[o.id] = true
+	c.state["hunt"] = seen.keys()
+	return c.state["hunt"]
+
+
+## Is this foe in the crew's sight and reachable, i.e. not shut in behind walls?
+func _hunted(u: Unit, c: Crew, foe: Unit) -> bool:
+	return foe.id in _crew_sightings(c) and _can_run_down(u, foe) and wall_between(u.faction, u.pos, foe.pos) == null
+
+
+## Someone on foot doesn't run after a rider: they'd only break the line. An archer can still shoot.
+func _can_run_down(u: Unit, foe: Unit) -> bool:
+	return u.mounted or not foe.mounted or (can_shoot_bow(u) and u.arrows > 0 and u.pos.distance_to(foe.pos) <= bow_range(u, foe))
+
+
+## The nearest enemy person the crew can see and reach. Claims them like any other target.
+func _hunt_target(u: Unit, c: Crew) -> Unit:
+	var best: Unit = null
+	var bd := INF
+	for id in _crew_sightings(c):
+		var o := unit(id)
+		if o == null or not is_hostile(u.faction, o) or o.in_tower >= 0 or (o.id == u.avoid_id and t < u.avoid_t) or not _can_run_down(u, o):
+			continue
+		var d := u.pos.distance_squared_to(o.pos)
+		if d >= bd or wall_between(u.faction, u.pos, o.pos) != null:
+			continue
+		bd = d
+		best = o
+	if best:
+		pressure[best.id] = int(pressure.get(best.id, 0)) + 1
+		u.engage_from = u.pos
+		u.engaged = false
+		u.front = true
+		u.enemy = best.id
+	return best
 
 
 func _maybe_flee(u: Unit, dt: float, r: float) -> bool:
@@ -437,7 +498,7 @@ func fire_arrow(shooter: Unit, target: Unit, tier: int) -> void:
 
 func fire_ball(e: Unit, aim: Vector2, at_bld: int) -> void:
 	var d := e.pos.distance_to(aim)
-	var spread := float(Defs.CANNON["scatter"]) * d
+	var spread := float(Defs.CANNON["scatter"]) * d * (1.0 + d / float(Defs.CANNON["range"]))
 	var miss := Vector2(rng.randfn(0.0, spread), rng.randfn(0.0, spread))
 	var p := aim + miss
 	var s := Shot.new()
@@ -449,7 +510,7 @@ func fire_ball(e: Unit, aim: Vector2, at_bld: int) -> void:
 	s.prev = s.start
 	s.arc = 0.05
 	s.end = Vector3(p.x, _height(p) + 0.5, p.y)
-	s.dur = clampf(d / 120.0, 0.35, 1.6)
+	s.dur = maxf(d / float(Defs.CANNON["ball_speed"]), Defs.TICK)
 	s.target_bld = at_bld
 	shots.append(s)
 	sound("cannon", e.pos)
@@ -600,14 +661,18 @@ func _ball_impact(s: Shot) -> void:
 		var local := (p - b.pos).rotated(-b.rot)
 		if absf(local.x) <= b.size.x * 0.5 + 1.5 and absf(local.y) <= b.size.y * 0.5 + 1.5:
 			damage_building(b, Defs.CANNON["dmg_building"], e)
-	for u: Unit in units_near(p, Defs.CANNON["splash"], -2):
-		if u.faction == s.faction or u.stable >= 0:
+	# One ball, one kill: the nearest thing where it lands, armour or not, engine or not.
+	var victim: Unit = null
+	var best := INF
+	for u: Unit in units_near(p, 4.0, -2):
+		if u.dead or u.faction == s.faction or u.stable >= 0 or u.in_tower >= 0:
 			continue
-		var fall := 1.0 - u.pos.distance_to(p) / float(Defs.CANNON["splash"])
-		var dmg: float = Defs.CANNON["dmg_unit"] * clampf(fall, 0.2, 1.0)
-		if u.armor != "":
-			dmg *= 1.0 - float(Defs.ITEMS[u.armor]["armor"]) * 0.5
-		deal_damage(u, dmg, e, "ball", p)
+		var gap := u.pos.distance_to(p) - Crowd.radius(u)
+		if gap <= float(Defs.CANNON["hit_radius"]) and gap < best:
+			best = gap
+			victim = u
+	if victim:
+		deal_damage(victim, victim.hp + 1.0, e, "ball", p)
 
 
 # --- Siege engines ----------------------------------------------------------------
@@ -812,6 +877,12 @@ func _do_military(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
 		"attack":
 			var center := crew_center_now(c)
 			var dir := target - center
+			var out = march_out(c, center, target)
+			if out != null:
+				# Still among their own buildings: each finds a way out and the crew forms up beyond.
+				if move_to(u, slot_point(u, out, dir), dt, 1.5):
+					u.anim = Anim.IDLE
+				return
 			var in_way := wall_ahead(c, center, target)
 			# A deep or offset crew's centre never gets as close as its front does.
 			if in_way or center.distance_to(target) < 30.0 + c.depth + absf(c.lane):
@@ -841,6 +912,44 @@ func _do_military(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
 				spot = slot_point(u, lane_center(c, lead, dir), dir)
 			if move_to(u, spot, dt, 1.0):
 				u.anim = Anim.IDLE
+
+
+## Where a crew setting off from its own town forms up: past the last of their own buildings
+## on the line to the target. A formation can't push through a town, so its centre would stall.
+## The spot stays put until they reach it, or everyone would look for a new route each tick.
+func march_out(c: Crew, center: Vector2, target: Vector2):
+	var held = c.state.get("out")
+	if held != null:
+		if center.distance_to(held) > FORMED_UP + c.depth * 0.5:
+			return held
+		c.state.erase("out")
+		c.state["out_done"] = true
+		return null
+	if c.state.get("out_done", false) or t < float(c.state.get("out_t", -1.0)):
+		return null
+	c.state["out_t"] = t + 1.0
+	var home := home_pos(c.faction)
+	var along := target - center
+	var total := along.length()
+	if center.distance_to(home) > OWN_TOWN or total < FAR_MARCH:
+		c.state["out_done"] = true
+		return null
+	var dir := along / total
+	var last := -1.0
+	for b: Building in buildings_of(c.faction):
+		if not b.blocking:
+			continue
+		var d := (b.pos - center).dot(dir)
+		if d < 0.0 or d > total or b.pos.distance_to(home) > OWN_TOWN:
+			continue
+		if absf((b.pos - center).cross(dir)) < b.size.length() * 0.5 + c.width * 0.5:
+			last = maxf(last, d + b.size.length() * 0.5)
+	if last < 0.0 or last + c.depth + CLEAR_OF_TOWN > total - 30.0:
+		c.state["out_done"] = true
+		return null
+	var spot := (center + dir * (last + c.depth + CLEAR_OF_TOWN)).clamp(Vector2(20, 20), Vector2(map_size - 20, map_size - 20))
+	c.state["out"] = spot
+	return spot
 
 
 func _nearest_enemy_building(faction: int, p: Vector2, r: float) -> Building:
@@ -980,19 +1089,23 @@ func update_vision() -> void:
 	for u: Unit in units:
 		if u.dead or u.faction < 0 or u.stable >= 0:
 			continue
-		# Only commanders and scouts learn from what they see; buildings are below.
+		# Commanders, scouts and armed people learn from what they see; buildings are below.
 		var scouting := u.task == "scout" and u.scout_leg < 3
 		var leader := u.kind == "commander"
-		if not (leader or (scouting and u.kind == "villager")):
+		var soldier: bool = u.kind == "villager" and not scouting and u.weapon != ""
+		if not (leader or soldier or (scouting and u.kind == "villager")):
 			continue
 		var f: Faction = factions[u.faction]
 		var r: float = 0.0
 		if leader:
 			r = Defs.COMMANDER["sight"]
+		elif soldier:
+			r = Defs.SOLDIER_SIGHT
 		elif scouting:
 			r = Defs.SCOUT_SIGHT * (1.15 if u.mounted else 1.0)
 		var cells := kcells_in(u.pos, r)
-		if leader:
+		if leader or soldier:
+			# Troops report what they see straight to their own side, unlike scouts.
 			for k in cells:
 				f.knowledge[k] = t
 			_sight(f, u.pos, r, null)

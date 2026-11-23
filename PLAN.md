@@ -111,14 +111,15 @@ Each person eats on a ration cycle; children eat half.
 
 | State | Effect |
 |---|---|
-| **Well fed** | Births happen. +10% work speed. |
-| **Fed** | No births. Normal work. |
+| **Well fed** | Full birth rate. +10% work speed. |
+| **Fed** | Births at 75% of the well fed rate. Normal work. |
 | **Hungry** | −25% work speed. |
 | **Starving** | Health loss, then deaths. |
 
 ### Births
 
-- Births happen only when the settlement is **well fed** *and* there is **free housing**.
+- Births happen when the settlement is **fed** (75% rate) or **well fed** (full rate) *and* there is **free housing**.
+- While housing is full, births bank up (up to half a birth per adult) and are released at once when room opens.
 - Rate scales with well-fed adults (target: roughly one birth per 4–5 adults per minute; tunable).
 - Children mature in ~90 s and can carry light loads.
 - **Pacing targets** (tuning goals): a strong economy reaches ~60 pop by minute 10, ~120 by minute 18, and can hit 200 by minute 25–30. Food, not housing, is meant to be the usual brake.
@@ -214,7 +215,7 @@ Seven raw resources and two refined ones:
 
 | Item | Tiers | Role |
 |---|---|---|
-| Spear | Wood → bronze → iron | General infantry, decent vs cavalry |
+| Spear | Wood | Cheap general infantry, decent vs cavalry; pikes take over the role later |
 | Bow + arrows | Wood (stone tips) → bronze → iron tips | Ranged; quiver-limited |
 | Shield | Wood → bronze → iron | Blocks arrows and blows, slows the bearer |
 | Sword | Bronze → iron | Strong in melee with a shield |
@@ -239,7 +240,7 @@ Material tier scales damage and durability.
 The most advanced weapon in the game, and deliberately a siege tool first.
 
 - **Against walls and buildings:** devastating. A few hits bring down a stone wall segment; palisades and huts go down in one or two.
-- **In the open field:** inaccurate. Shots scatter more with range, and reload is slow (~15 s), so a cannon can hit a packed formation hard but often misses a spread-out one.
+- **In the open field:** a ball kills the one thing it lands on, whatever it is, even another cannon. It misses more and more with range, and reload is slow (~15 s).
 - **Crew:** 3 villagers. Slow to move by hand; much faster with a horse team.
 - **Vulnerable:** cavalry that reaches the guns wins. Cannons need an escort.
 - **Ammunition:** shot (iron + coal) from the armory, carried with the gun, like arrows.

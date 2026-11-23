@@ -10,6 +10,7 @@ var grid := AStarGrid2D.new()
 var terrain_solid := PackedByteArray()
 var blockers := {}              # cell index -> owners of what stands there (NOT_A_GATE, or a gate's faction)
 var open_gates: Array = []      # faction -> {cell: true}
+var changes := 0                # goes up whenever what blocks changes
 
 
 func setup(cells_per_side: int, ground: PackedByteArray, faction_count: int) -> void:
@@ -60,6 +61,7 @@ func remove(cells: PackedInt32Array, owner: int) -> void:
 
 ## A cell is open to a faction only if all that stands on it is that faction's gates.
 func _refresh(k: int, list: Array) -> void:
+	changes += 1
 	var c := Vector2i(k % n, k / n)
 	var ground: bool = terrain_solid[k] == 1
 	grid.set_point_solid(c, ground or not list.is_empty())
@@ -80,4 +82,20 @@ func route(faction: int, from: Vector2i, to: Vector2i) -> Array[Vector2i]:
 	var ids: Array[Vector2i] = grid.get_id_path(from, to, true)
 	for c: Vector2i in gates:
 		grid.set_point_solid(c, true)
+	return ids
+
+
+## A route to a goal that may be shut in, or [] if it is. It searches back from the goal, so
+## a walled camp costs its own area and not the whole map, and it steps cell by cell: jump
+## point search is some twenty times slower at proving that there is no way through.
+func route_into(faction: int, from: Vector2i, to: Vector2i) -> Array[Vector2i]:
+	var gates: Dictionary = open_gates[maxi(faction, 0)]
+	for c: Vector2i in gates:
+		grid.set_point_solid(c, false)
+	grid.jumping_enabled = false
+	var ids: Array[Vector2i] = grid.get_id_path(to, from, false)
+	grid.jumping_enabled = true
+	for c: Vector2i in gates:
+		grid.set_point_solid(c, true)
+	ids.reverse()
 	return ids

@@ -12,7 +12,7 @@ const SINK_AT := 14.0         # seconds after death
 
 const MAX_PEOPLE := 560
 const MAX_ANIMALS := 260
-const ITEMS := ["wood_spear", "bronze_spear", "iron_spear", "bronze_sword", "iron_sword", "bronze_pike", "iron_pike",
+const ITEMS := ["wood_spear", "bronze_sword", "iron_sword", "bronze_pike", "iron_pike",
 	"bronze_lance", "iron_lance", "bow", "axe", "hammer", "pick", "hoe", "basket", "bundle_wood", "bundle_stone",
 	"bundle_food", "wood_shield", "bronze_shield", "iron_shield", "bronze_helmet", "iron_helmet", "bronze_armor",
 	"iron_armor", "crown", "cloak"]
@@ -47,7 +47,9 @@ func setup(match_ref, mats, mesh_lib, quality: int) -> void:
 	bounds = AABB(Vector3(-60, -60, -60), Vector3(m.map_size + 126, 320, m.map_size + 126))
 	var sides: int = m.factions.size()
 	var people_cap := MAX_PEOPLE if sides == 2 else maxi(MAX_PEOPLE, sides * (Defs.POP_HARD_CAP + 10))
-	var item_cap := 260 if sides == 2 else maxi(260, sides * 100)
+	var item_cap := people_cap   # a maxed army may all carry the same thing
+	# Every rider draws a horse, on top of the ones in the stables and the wild herds.
+	var animal_cap := maxi(MAX_ANIMALS, sides * (Defs.POP_HARD_CAP + 160) + 80)
 	body_mm = _make(meshes.person(), people_cap, true)
 	# Instance colour multiplies the baked paint, so each side needs its own dye uniform.
 	for f in m.factions:
@@ -63,7 +65,7 @@ func setup(match_ref, mats, mesh_lib, quality: int) -> void:
 		if name in ["crown", "cloak"]:
 			cap = maxi(4, sides)     # one for every commander
 		item_mm[name] = _make(meshes.item(name), cap, name != "crown")
-	horse_mm = _make(meshes.quadruped(false), MAX_ANIMALS, true)
+	horse_mm = _make(meshes.quadruped(false), animal_cap, true)
 	deer_mm = _make(meshes.quadruped(true), MAX_ANIMALS, true)
 
 

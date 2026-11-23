@@ -14,6 +14,11 @@ const BLD_BUCKET := 32.0
 const WILD_HORSE := 1 << 30         # in a bucket's mask, beside one bit per faction
 const STEEP := 38.0
 const MAX_PATHS_PER_TICK := 14
+const WALL_TYPES := ["palisade", "palisade_gate", "stone_wall", "stone_gate"]
+const WALL_STANDOFF := 3.0           # how far short of a wall a blocked route stops
+const POCKET_MAX := 24               # a shut-in patch of ground this small is a gap between buildings
+const POCKET_REACH := 12             # cells searched for open ground beside one
+const SIDES: Array[Vector2i] = [Vector2i.RIGHT, Vector2i.DOWN, Vector2i.LEFT, Vector2i.UP]
 
 enum Anim { IDLE, WALK, RUN, CHOP, HAMMER, DIG, PICK, MELEE, SHOOT, CARRY, RIDE, DEAD, LOAD }
 
@@ -140,6 +145,8 @@ class Building:
 	var up_paid := false
 	var research := ""
 	var research_t := 0.0
+	var queue: Array = []        # armory only: items waiting to be made, one entry per item
+	var make_t := 0.0            # armory only: seconds spent on the item at the head of the queue
 	var node := -1
 	var deposit := ""
 	var cells := PackedInt32Array()
@@ -207,6 +214,7 @@ class Post:
 	var alert := ""             # intruder, raid or falling_back
 	var alert_t := -999.0       # when the threat was last seen
 	var threat := 0             # the most seen at once during this alert
+	var riders := 0             # how many of them were mounted
 	var threat_at := Vector2.ZERO
 	var refuge := Vector2.ZERO
 	var lost := 0
@@ -214,6 +222,10 @@ class Post:
 	var blocked_since := {}     # project -> when it was first held up
 	var blocked_told := {}
 	var ready_told := false
+	var goal := 0               # the age to reach as soon as possible, 0 for none
+	var focus := ""             # a STRATEGIES key with focus: true, or ""
+	var focus_keep := 0         # how many of the focus items to keep in the armory
+	var focus_told := false
 
 
 class Faction:
@@ -251,6 +263,7 @@ class Faction:
 	var children := 0
 	var housing := 0
 	var food_cap := 0
+	var granary := 0            # food storage given at the start, whatever the buildings hold
 	var idle := 0
 	var soldiers := 0
 	var horses := 0
@@ -327,8 +340,12 @@ var own_by_type: Array = []          # faction -> type -> the same
 
 # --- Setup ------------------------------------------------------------------------
 
+var sealed := {}                 # (faction, goal cell) -> blocking.changes when found shut in
+
+
 func _init_world(tr: Terrain, faction_count: int) -> void:
 	terrain = tr
+	sealed.clear()
 	map_size = tr.size
 	grid_n = int(map_size / CELL)
 	kres = int(map_size / KCELL)
@@ -745,8 +762,21 @@ func find_path(faction: int, a: Vector2, b: Vector2) -> PackedVector2Array:
 		return PackedVector2Array()
 	paths_this_tick += 1
 	var ca := nearest_free_cell(pf, cell_of(a))
-	var cb := nearest_free_cell(pf, cell_of(b), 20)
-	var ids: Array[Vector2i] = blocking.route(pf, ca, cb)
+	var cb := _way_to(pf, ca, nearest_free_cell(pf, cell_of(b), 20))
+	var ids: Array[Vector2i] = []
+	var across = _enemy_wall_across(pf, a, cell_center(cb))
+	if across != null:
+		# An enemy wall in the way may shut the goal right in.
+		if not _known_sealed(pf, cb):
+			ids = blocking.route_into(pf, ca, cb)
+			if ids.is_empty():
+				sealed[Vector3i(pf, cb.x, cb.y)] = blocking.changes
+		if ids.is_empty():
+			# No way in: go as far as the wall.
+			var hit: Vector2 = across
+			cb = nearest_free_cell(pf, cell_of(hit + (a - hit).normalized() * WALL_STANDOFF), 3)
+	if ids.is_empty():
+		ids = blocking.route(pf, ca, cb)
 	var out := PackedVector2Array()
 	if ids.is_empty():
 		return PackedVector2Array([b])
@@ -769,6 +799,69 @@ func find_path(faction: int, a: Vector2, b: Vector2) -> PackedVector2Array:
 		if line_clear(pf, end, b):
 			out.append(b)
 	return out
+
+
+## A goal in a gap between buildings can't be reached, and finding that out would cost a search
+## of the whole map. So look round the goal first, and aim for the nearest open ground instead.
+func _way_to(faction: int, from: Vector2i, goal: Vector2i) -> Vector2i:
+	var pocket := _pocket(faction, goal)
+	if pocket.is_empty() or pocket.has(from):
+		return goal
+	var tried := pocket.duplicate()
+	for r in range(1, POCKET_REACH):
+		for dy in range(-r, r + 1):
+			for dx in range(-r, r + 1):
+				if absi(dx) != r and absi(dy) != r:
+					continue
+				var q := goal + Vector2i(dx, dy)
+				if tried.has(q) or solid_for(faction, q):
+					continue
+				var shut := _pocket(faction, q)
+				if shut.is_empty() or shut.has(from):
+					return q
+				tried.merge(shut)
+	return goal
+
+
+## The cells of a small shut-in patch round c, or {} when c is on open ground.
+func _pocket(faction: int, c: Vector2i) -> Dictionary:
+	var seen := {c: true}
+	var open: Array[Vector2i] = [c]
+	while not open.is_empty():
+		var at: Vector2i = open.pop_back()
+		for d: Vector2i in SIDES:
+			var next := at + d
+			if seen.has(next) or solid_for(faction, next):
+				continue
+			seen[next] = true
+			if seen.size() > POCKET_MAX:
+				return {}
+			open.append(next)
+	return seen
+
+
+## Where a straight line first crosses another side's wall or gate, or null.
+func _enemy_wall_across(faction: int, a: Vector2, b: Vector2):
+	var best = null
+	var bd := INF
+	for other in own_by_type.size():
+		if other == faction:
+			continue
+		for type: String in WALL_TYPES:
+			for w: Building in own_by_type[other].get(type, []):
+				if not w.blocking:
+					continue
+				var half := Vector2.from_angle(w.rot) * (w.size.x * 0.5 + 0.4)
+				var hit = Geometry2D.segment_intersects_segment(a, b, w.pos - half, w.pos + half)
+				if hit != null and a.distance_squared_to(hit) < bd:
+					bd = a.distance_squared_to(hit)
+					best = hit
+	return best
+
+
+## Already found to be shut in, with nothing built or knocked down since.
+func _known_sealed(faction: int, c: Vector2i) -> bool:
+	return int(sealed.get(Vector3i(faction, c.x, c.y), -1)) == blocking.changes
 
 
 ## Deals out the tick's routes: an equal share for each living settlement, the remainder
@@ -1138,6 +1231,8 @@ func unlock_problem(faction: int, type: String) -> String:
 		return "Needs the %s age: %s" % [Defs.AGES[d["age"]], Defs.AGE_HOW[d["age"]].to_lower()]
 	if type == "university" and not has_building(faction, "smelter"):
 		return "Needs a smelter."
+	if d.has("needs") and not f.researched.has(d["needs"]):
+		return "Needs the %s. Research it with /r." % Defs.RESEARCH[d["needs"]]["name"].to_lower()
 	return ""
 
 

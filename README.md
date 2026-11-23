@@ -5,6 +5,7 @@ A medieval strategy game played entirely in first person. You are the commander 
 - A fresh valley every match in four sizes. Small (512 m) holds 2 settlements, Medium (768 m) holds 4, Large (1,024 m) holds 6, and Huge (1,536 m) holds 8. Medium is the default.
 - Play against one to seven AI rivals with five openings (rush, boom, turtle, cavalry, cannons) and three difficulties.
 - Be the last commander standing. Your death ends the match.
+- **Grand army** mode: every side starts with 200 villagers behind stone walls, every technology, 20 armories, 10 full stables and big stores, for battles between maxed-out armies.
 - Optional **Terra**: connect your ChatGPT plan or enter your own OpenAI API key to give orders in plain language ("get thirty wood, then put up a hut by the berries").
 
 ## Install
@@ -47,6 +48,8 @@ Look at a villager and press **Enter** to address their whole crew. Press **Tab*
 
 Promote a villager to captain and give them a post, such as “run the village” or “take charge of farming here.” Captains staff jobs, build within their mandate, and respond to threats. Use the people menu to talk to a post.
 
+Give a captain a strategy: “get to the Iron age ASAP” has them build the mines, smelter, furnace and university and staff them; “focus on pike production” keeps 20 pikes in the armory (“focus on 40 pikes” for more), doing the research and building the armories it takes. Focuses: pikes, swords, archers, cavalry, cannons, spears, growth, defence. An age and a focus can both stand. “Go back to normal” drops them.
+
 Give a selected individual a new order to take them out of their current crew, or say `dismiss` to release them. Say `join @Name` to move the addressed individual or crew into that person's crew and pick up its current orders.
 
 Slash commands work instantly and never need Terra:
@@ -54,11 +57,11 @@ Slash commands work instantly and never need Terra:
 | Command | Opens |
 |---|---|
 | `/b` | Build popup with pictures and keys. `b` is basic and `v` advanced, then one key: `/b b h` is a hut (`/b hut` also works) |
-| `/c` | Weapons popup, keyed the same way: `/c b w` is wooden spears, `/c b w 2` two batches (`/c spears 2` also works) |
+| `/c` | Weapons popup, keyed the same way: `/c b w` is a wooden spear, `/c 5 b w` five (`/c spears 5` also works). Hold **Shift** and keep pressing the key or clicking the picture to keep buying, or hold it down |
 | `/l` | Ledger: stores, people, food, housing, crews |
 | `/p` | People and crews |
 | `/s` | Scout reports, newest first |
-| `/r` | Research menu: mounted archery (stable) and gunpowder (university). `/r gunpowder` starts one directly |
+| `/r` | Research: bronze and iron armory, mounted archery (stable) and gunpowder (university). Picked like `/b` and `/c`; `/r gunpowder` works too. Research is paid up front and runs by itself, with no villagers |
 | `/m` | Field map |
 | `/t` | Tech tree |
 | `/h` | Help |
@@ -69,21 +72,22 @@ Orders the game understands without Terra, for example:
 gather wood · gather 30 wood then build a hut · pick berries · work the farms · hunt
 build a hut · build a palisade · make 32 arrows · arm 6 with spears · to arms! · fall back
 send two scouts east · scout their camp · attack their camp · guard the mark · follow me · hold
-tame 3 horses · mount up · smelt bronze · upgrade the armory · research gunpowder · man the cannon
+tame 3 horses · mount up · smelt bronze · research the bronze armory · research gunpowder · man the cannon
 promote · dismiss · status · cancel
 continue construction · finish the wall · gather wood here · back to work
 ```
 
 ### Hotkeys
 
-A typed hotkey runs when you press Enter. After pressing B or C, or entering a bare `/b` or `/c`, the key acts immediately. You can also click a picture.
+`/b`, `/c` and `/r` open a popup of pictures. A hotkey acts the moment it is complete, with no Enter: typing `/b b h` (or pressing B, B, H) lets you place a hut. You can also click a picture. An order recalled with the Up arrow still waits for Enter. Crafting takes its count first: `/c 2 b a` makes two batches of arrows.
 
 | | Keys |
 |---|---|
 | `/b b` Basic structures | **H** hut · **F** farm · **S** stockpile · **A** armory · **P** palisade · **G** palisade gate · **W** watch post · **Q** quarry |
-| `/b v` Advanced structures | **W** stone wall · **G** stone gate · **T** tower · **H** stable · **M** mine · **S** smelter · **U** university · **A** upgrade armory · **F** iron furnace · **R** gunpowder |
-| `/c b` Basic weapons | **W** wooden spear · **D** wooden shield · **B** bow · **A** arrows · **R** ram · bronze: **E** spear, **S** sword, **H** shield, **M** armor, **P** pike, **L** lance |
-| `/c v` Advanced weapons | iron: **E** spear, **S** sword, **H** shield, **M** armor, **P** pike, **L** lance · **C** cannon · **T** cannon shot |
+| `/b v` Advanced structures | **W** stone wall · **G** stone gate · **T** tower · **H** stable · **M** mine · **S** smelter · **U** university · **B** battering ram · **F** iron furnace |
+| `/c b` Basic weapons | **W** wooden spear · **D** wooden shield · **B** bow · **A** arrows · **R** ram · bronze: **S** sword, **H** shield, **M** armor, **P** pike, **L** lance |
+| `/c v` Advanced weapons | iron: **S** sword, **H** shield, **M** armor, **P** pike, **L** lance · **C** cannon · **T** cannon shot |
+| `/r` Research | **B** bronze armory · **I** iron armory · **M** mounted archery · **G** gunpowder |
 
 Walls are placed post to post: choose a palisade or stone wall, click each post, press Enter to finish.
 
@@ -99,10 +103,11 @@ MarchHold keeps account credentials encrypted on your PC. When you submit a free
 
 ## How the game works
 
-- **Growth.** Villagers are born only when the village is *well fed* (3 food stored per person) and there's free housing. The campfire houses 8 and each hut 6, up to 200 people. The campfire stores 150 food and each stockpile 50 more.
-- **Ages.** Wood (start) → Stone (build a quarry by a rock outcrop) → Bronze (smelt bronze from bronze ore and coal) → Iron (upgrade the smelter to an iron furnace) → Gunpowder (university research). The armory upgrades in place from wood to bronze to iron.
+- **Growth.** Villagers are born when the village is *fed* (1 food stored per person, 75% of the birth rate) or *well fed* (3 food per person, full rate) and there's free housing. Births keep building up while housing is full (up to half a birth per adult), so a new hut or a death is filled at once. The campfire houses 8 and each hut 6, up to 200 people. The campfire stores 150 food and each stockpile 50 more.
+- **Ages.** Wood (start) → Stone (build a quarry by a rock outcrop) → Bronze (smelt bronze from bronze ore and coal) → Iron (upgrade the smelter to an iron furnace) → Gunpowder (university research). Researching the bronze and then the iron armory (`/r`) upgrades every armory at once, including ones built later.
 - **Scouting.** You only know what you've seen. Scouts report when they return, and if they die, what they saw dies with them. Watch posts and towers ring the alarm when enemies appear.
-- **Combat.** Pikes beat cavalry. Cavalry runs down archers. Shields and armor blunt arrows. Sword and shield beat pikes up close. A raised shield protects you from blows and arrows from the front. Blocking costs stamina, and a well-timed parry staggers the attacker. Cannons smash walls but scatter in the open, reload slowly and need a crew of three. Horses pull cannons faster.
+- **Armories.** Each armory works through a queue by itself, one item at a time, paying for each as it starts. An order is shared out among all your armories, so more armories make it sooner. Once the armory is researched to bronze it stops making wooden shields, and at iron it stops making bronze gear; wooden spears, bows, arrows and rams are always made.
+- **Combat.** Pikes beat cavalry. Cavalry runs down archers. Shields and armor blunt arrows. Sword and shield beat pikes up close. A raised shield protects you from blows and arrows from the front. Blocking costs stamina, and a well-timed parry staggers the attacker. Pikemen and archers need both hands, so they carry no shield. A cannonball kills whatever it lands on, even another cannon, but only one target, and it misses more the further it flies. Cannons smash walls, reload slowly and need a crew of three. Horses pull cannons faster.
 
 The full design is in [PLAN.md](PLAN.md) and the tech tree in [TECH_TREE.md](TECH_TREE.md).
 
@@ -144,7 +149,9 @@ powershell -ExecutionPolicy Bypass -File tools\build.ps1
 
 ## Status
 
-Version 0.5.0 adds multi-rival matches, captain posts, combat timing and parries, stone tower garrisons, and build and craft hotkeys. Crews can resume construction and return to previous work after a military order.
+Version 0.6.0 adds the Grand army mode, strategy orders for captains (“get to the Iron age ASAP”, “focus on pike production”), armories that work through queues by themselves, armory upgrades as research in a new `/r` popup, battering rams built in the field, Shift to keep buying, and births while only fed. Berries run out sooner, so farms matter. Weapons are bought one at a time and cost more; metal spears are gone, and pikemen and archers carry no shield. Cannonballs kill one target outright. Rook defends far better against rushes, and big battles no longer freeze the game.
+
+Version 0.5.0 added multi-rival matches, captain posts, combat timing and parries, stone tower garrisons, and build and craft hotkeys.
 
 Version 0.4.0 added three map sizes, grid build and craft menus, named stone and ore landmarks, and clearer berry bushes and ore, and slows births slightly. Version 0.3.2 added click and Shift+click selection of villagers. Version 0.3.1 let Terra fill in order details and submit orders immediately, with manual placement for construction. Version 0.3.0 added individual crew orders, slash-command previews, and animated villager models. Version 0.2.0 added ChatGPT plan sign-in and model selection for Terra. Version 0.1.0 introduced the full lean tech tree, chat and slash commands, Terra, scouting, combat, horses, cannons, the AI rival, the intro and the tutorial. Next up: saving and resuming, an art pass on horses, formations and morale tuning, voice orders, and online play for up to 8 players.
 

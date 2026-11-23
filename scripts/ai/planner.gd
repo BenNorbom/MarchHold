@@ -19,8 +19,14 @@ static func wood_workers(adults: int, age: int) -> int:
 	return int(ceil(adults * (0.5 if age == 0 else 0.32)))
 
 
-static func stone_workers(adults: int, share: float = 0.12) -> int:
-	return int(ceil(adults * share))
+## People on stone, fewer while stone piles up beyond what is wanted and wood runs short.
+static func stone_workers(adults: int, share: float = 0.12, stone: float = 0.0, wood: float = INF, wanted: float = 250.0) -> int:
+	var n := int(ceil(adults * share))
+	if stone >= wanted and stone > wood * 2.0:
+		return mini(n, 1)
+	if stone >= wanted * 0.6:
+		return int(ceil(n * 0.5))
+	return n
 
 
 static func farms_wanted(pop: int) -> int:
@@ -152,6 +158,43 @@ static func find_site(m, faction: int, type: String, center: Vector2, front: Vec
 		if m.site_problem(faction, type, p, rot) == "" and (not known_only or _leaves_lane(m, faction, type, p, rot)):
 			return [p, rot]
 	return null
+
+
+## The woodcutters' trees near center: the middle of the nearest few, or null.
+static func tree_line(m, center: Vector2):
+	var picked := {}
+	var sum := Vector2.ZERO
+	for i in 6:
+		var n = m.nearest_node("tree", center, 110.0, func(nd): return not picked.has(nd.id))
+		if n == null:
+			break
+		picked[n.id] = true
+		sum += n.pos
+	return null if picked.is_empty() else sum / picked.size()
+
+
+## A drop-off beside those trees, on the camp's side of them: [position, rotation], or null.
+## Woodcutters walking 50 m to the campfire cut about a third as much as ones with a stockpile at hand.
+static func tree_stockpile_site(m, faction: int, center: Vector2):
+	var trees = tree_line(m, center)
+	if trees == null:
+		return null
+	var toward: Vector2 = (center - trees).normalized()
+	for r in [5.0, 8.0, 11.0, 14.0]:
+		for k in 12:
+			var p: Vector2 = trees + toward.rotated(k * TAU / 12.0) * r
+			if m.site_problem(faction, "stockpile", p, 0.0) == "":
+				return [p, 0.0]
+	return null
+
+
+## Whether the trees near center are a long walk from every drop-off.
+static func wood_haul_long(m, faction: int, center: Vector2) -> bool:
+	var trees = tree_line(m, center)
+	if trees == null:
+		return false
+	var drop = m.nearest_building(faction, trees, ["campfire", "stockpile"], false)
+	return drop == null or drop.pos.distance_to(trees) > 25.0
 
 
 # --- Defence ------------------------------------------------------------------

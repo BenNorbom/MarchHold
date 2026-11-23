@@ -9,6 +9,20 @@ const Planner = preload("res://scripts/ai/planner.gd")
 
 const FOOD_HEADROOM := 75.0   # storage kept beyond what "well fed" needs
 const STRATEGIES := ["rush", "boom", "turtle", "cavalry", "cannons"]
+# What each difficulty changes. None of them cheat: they see, pay and build like the player.
+# think: seconds between decisions. scout: when the first scout leaves. watch/posts: when and how many
+# watch posts face the enemy. alarm: how far from home an enemy counts as a raid. react: how big
+# a raid (riders count double) calls out the militia. ready: weapons kept in the armory for it,
+# plus one per `ready_per` adults. wall: when a palisade goes round the camp (sooner if riders are
+# seen). attack/army/gap: how soon, how big, and how often the attacks are.
+const LEVELS := [
+	{"think": 2.5, "scout": 200.0, "watch": 360.0, "posts": 1, "alarm": 90.0, "react": 4, "ready": 3, "ready_per": 14,
+		"wall": INF, "attack": 1.45, "army": 0.7, "gap": 420.0, "recall": 20.0},
+	{"think": 1.4, "scout": 110.0, "watch": 220.0, "posts": 1, "alarm": 110.0, "react": 3, "ready": 5, "ready_per": 10,
+		"wall": 900.0, "attack": 1.0, "army": 1.0, "gap": 300.0, "recall": 14.0},
+	{"think": 0.6, "scout": 60.0, "watch": 130.0, "posts": 2, "alarm": 140.0, "react": 2, "ready": 8, "ready_per": 7,
+		"wall": 480.0, "attack": 0.75, "army": 1.35, "gap": 200.0, "recall": 8.0},
+]
 
 var m                       # the Match
 var fid := 1
@@ -25,12 +39,17 @@ var last_scout := -999.0
 var wall_started := false
 var last_alarm := -999.0
 var rng := RandomNumberGenerator.new()
+var lv: Dictionary = LEVELS[1]
+var riders_seen_t := -INF   # when this side last saw enemy riders, or an enemy stable
+var raided_t := -INF        # when a raid last reached home
+var rearm_t := -INF
 
 
 func setup(match_ref, opts: Dictionary) -> void:
 	m = match_ref
 	fid = int(opts.get("faction", 1))
-	difficulty = int(opts.get("difficulty", 1))
+	difficulty = clampi(int(opts.get("difficulty", 1)), 0, LEVELS.size() - 1)
+	lv = LEVELS[difficulty]
 	strategy = opts.get("strategy", "random")
 	rng.seed = int(opts.get("seed", 1)) * 31 + fid
 	if strategy == "random" or not strategy in STRATEGIES:
@@ -46,15 +65,14 @@ func setup(match_ref, opts: Dictionary) -> void:
 
 func _first_attack_time() -> float:
 	var base: float = {"rush": 230.0, "boom": 840.0, "turtle": 1320.0, "cavalry": 780.0, "cannons": 1560.0}[strategy]
-	var scale: float = [1.45, 1.0, 0.85][difficulty]
-	return base * scale
+	return base * float(lv["attack"])
 
 
 func update(dt: float) -> void:
 	think_t -= dt
 	if think_t > 0.0 or m.over:
 		return
-	think_t = [2.5, 1.4, 0.8][difficulty]
+	think_t = float(lv["think"])
 	var f = m.fac(fid)
 	if m.home_of(fid) == null:
 		return
@@ -92,7 +110,10 @@ func _order(role: String, steps: Array, count: int) -> bool:
 		steps[0]["count"] = maxi(count, 1)
 	var res: Dictionary = m.command(fid, req)
 	if res.get("ok", false):
-		roles[role] = res["crews"][0]
+		# Weapons go straight into an armory's queue, so there may be no crew to remember.
+		var made: Array = res.get("crews", [])
+		if not made.is_empty():
+			roles[role] = made[0]
 		return true
 	return false
 
@@ -136,7 +157,8 @@ func _economy(f) -> void:
 	var wood_need := Planner.wood_workers(adults, f.age)
 	var stone_need := 0
 	if f.age >= 1 or m.has_building(fid, "quarry"):
-		stone_need = Planner.stone_workers(adults, 0.26 if strategy == "turtle" else 0.2)
+		stone_need = Planner.stone_workers(adults, 0.26 if strategy == "turtle" else 0.2, float(f.stock.get("stone", 0)), float(f.stock.get("wood", 0)),
+			450.0 if strategy == "turtle" or f.age >= 2 else 250.0)
 	elif _count("quarry", true) == 0 and m.t > 150.0 and strategy != "rush":
 		stone_need = 1
 	# With plenty of food in store, two pickers will do and wood gets every idle hand.
@@ -231,7 +253,7 @@ func _building_hold(f) -> float:
 
 
 func _basic_weapon() -> String:
-	return ["wood_spear", "bronze_spear", "iron_spear"][clampi(m.armory_tier(fid), 0, 2)]
+	return "wood_spear"
 
 
 ## Wood still owed for sites that are placed but not yet paid for. Builders pay when they start,
@@ -295,11 +317,12 @@ func _construction(f) -> void:
 		if Defs.UPGRADES.has(up_id) and m.can_afford(fid, Defs.UPGRADES[up_id]["cost"]):
 			_order(role, [_step("upgrade", b)], 3)
 		return
-	if want == "research:gunpowder":
-		if m.can_afford(fid, Defs.RESEARCH["gunpowder"]["cost"]):
-			_order("research", [_step("research", "gunpowder")], 1)
+	if want.begins_with("research:"):
+		# Research needs no villagers: pay and it runs in the building.
+		m.start_research(fid, want.substr(9))
 		return
-	_place_and_build(f, role, want, 0.0 if want == "armory" else _weapon_reserve(f))
+	# The armory and the quarry (the way to pikes and the Stone age) don't wait for spears.
+	_place_and_build(f, role, want, 0.0 if want in ["armory", "quarry"] else _weapon_reserve(f))
 
 
 func _place_and_build(f, role: String, want: String, reserve: float = 0.0, urgent: bool = false) -> void:
@@ -335,12 +358,18 @@ func _next_building(f) -> String:
 	# Two farms come first; the quarry (the way to the Stone age) goes before any more.
 	if _count("farm") < mini(farms_want, 2) and farms_due:
 		return "farm"
-	if _count("watch_post") == 0 and t > 200.0:
-		return "watch_post"
-	if _count("quarry") == 0 and t > (300.0 if rush else 170.0):
+	if _count("quarry") == 0 and t > (230.0 if rush else 170.0):
 		return "quarry"
+	# Lookouts come after the quarry, so they don't hold back the Stone age.
+	var posts_now := _count("watch_post")
+	if posts_now < int(lv["posts"]) and t > float(lv["watch"]) + posts_now * 150.0:
+		return "watch_post"
 	if _count("farm") < farms_want and farms_due:
 		return "farm"
+	# A ring of palisade turns a raid of riders into a siege, and the militia has time to arm.
+	var wall_due: bool = t > float(lv["wall"]) or (difficulty > 0 and t > 240.0 and (m.t - riders_seen_t < 600.0 or m.t - raided_t < 900.0))
+	if not wall_started and wall_due and m.has_building(fid, "armory") and pop >= 12 and float(f.stock.get("wood", 0)) >= 260.0 and _ring_radius("palisade") > 0.0:
+		return "palisade_ring"
 	if f.age < 1:
 		if strategy == "turtle" and not wall_started and m.has_building(fid, "armory") and t > 360.0 and pop >= 14 and float(f.stock.get("wood", 0)) >= 150.0:
 			return "palisade_ring"
@@ -362,8 +391,8 @@ func _next_building(f) -> String:
 		return "tower"
 	if f.age >= 2:
 		var arm = m.nearest_building(fid, _home(), ["armory"])
-		if arm and arm.tier == 0 and arm.upgrading == "":
-			return "upgrade:armory"
+		if arm and m.research_problem(fid, "armory_bronze") == "":
+			return "research:armory_bronze"
 		if _count("stable") == 0:
 			return "stable"
 		if not _mine_site_exists("iron_ore") and _find_deposit("iron_ore") != null:
@@ -373,11 +402,11 @@ func _next_building(f) -> String:
 			return "upgrade:smelter"
 	if f.age >= 3:
 		var arm2 = m.nearest_building(fid, _home(), ["armory"])
-		if arm2 and arm2.tier == 1 and arm2.upgrading == "":
-			return "upgrade:armory"
+		if arm2 and m.research_problem(fid, "armory_iron") == "":
+			return "research:armory_iron"
 		if strategy in ["cannons", "turtle", "boom"] and _count("university") == 0:
 			return "university"
-		if m.has_building(fid, "university") and not f.researched.has("gunpowder") and not _busy("research"):
+		if m.research_problem(fid, "gunpowder") == "":
 			return "research:gunpowder"
 	if _count("farm") < farms_want + 1 and pop > 20:
 		return "farm"
@@ -410,25 +439,7 @@ func _site_pending(types: Array) -> bool:
 
 ## The first stockpile goes beside the trees the woodcutters are working, on the camp's side of them.
 func _tree_stockpile_site():
-	var home := _home()
-	var picked := {}
-	var sum := Vector2.ZERO
-	for i in 6:
-		var n = m.nearest_node("tree", home, 110.0, func(nd): return not picked.has(nd.id))
-		if n == null:
-			break
-		picked[n.id] = true
-		sum += n.pos
-	if picked.is_empty():
-		return null
-	var center := sum / picked.size()
-	var toward := (home - center).normalized()
-	for r in [5.0, 8.0, 11.0, 14.0]:
-		for k in 12:
-			var p: Vector2 = center + toward.rotated(k * TAU / 12.0) * r
-			if m.site_problem(fid, "stockpile", p, 0.0) == "":
-				return [p, 0.0]
-	return null
+	return Planner.tree_stockpile_site(m, fid, _home())
 
 
 func _find_site(type: String):
@@ -439,12 +450,42 @@ func _find_site(type: String):
 	return Planner.find_site(m, fid, type, _home(), _toward_enemy(), rng, false, _mine_dep)
 
 
+## The smallest ring round the camp that no building stands in the way of, or 0.
+func _ring_radius(type: String) -> float:
+	if ring_r.has(type) and m.t - float(ring_r[type][1]) < 30.0:
+		return ring_r[type][0]
+	var home := _home()
+	var found := 0.0
+	var start := 40.0 if type == "palisade" else 50.0
+	var r := start
+	while r <= 86.0 and found == 0.0:
+		var n := ceili(TAU * r / float(Defs.BUILDINGS[type]["length"]))
+		var blocked := 0
+		for k in n:
+			var a: Vector2 = home + Vector2.from_angle(k * TAU / n) * r
+			var b: Vector2 = home + Vector2.from_angle((k + 1) * TAU / n) * r
+			if m.site_problem(fid, type, (a + b) * 0.5, (b - a).angle(), Vector2(a.distance_to(b), Defs.BUILDINGS[type]["thick"])) != "":
+				blocked += 1
+				if blocked > 1:
+					break
+		if blocked <= 1:
+			found = r
+		r += 4.0
+	ring_r[type] = [found, m.t]
+	return found
+
+
+var ring_r := {}
+
+
 func _build_wall(f, role: String, type: String) -> void:
 	wall_started = true
 	var home := _home()
-	var r := 46.0 if type == "palisade" else 56.0
+	var r := _ring_radius(type)
+	if r <= 0.0:
+		r = 46.0 if type == "palisade" else 56.0
 	var pts := []
-	var n := 14
+	var n := maxi(14, ceili(TAU * r / 16.0))
 	var gate_k := int(round(fposmod(atan2(_toward_enemy().y, _toward_enemy().x), TAU) / TAU * n)) % n
 	for k in n + 1:
 		pts.append(home + Vector2.from_angle(k * TAU / n) * r)
@@ -485,20 +526,20 @@ func _gear_plan(f) -> Array:
 	var tier: int = m.armory_tier(fid)
 	match strategy:
 		"rush":
-			return ["wood_spear"] if tier == 0 else ["bronze_spear", "bronze_shield"]
+			return ["wood_spear"] if tier == 0 else (["bronze_sword", "bronze_shield"] if tier == 1 else ["iron_sword", "iron_shield"])
 		"cavalry":
 			if tier >= 1:
 				return ["iron_lance" if tier >= 2 else "bronze_lance", "bronze_shield" if tier == 1 else "iron_shield"]
 			return ["wood_spear", "bow", "arrows"]
 		"turtle":
 			if tier >= 2:
-				return ["iron_spear", "iron_shield", "bow", "arrows"]
+				return ["iron_pike", "iron_sword", "iron_shield", "bow", "arrows"]
 			return ["wood_spear", "bow", "arrows", "arrows"]
 		"cannons":
 			if f.researched.has("gunpowder"):
 				return ["cannon", "shot", "iron_pike", "iron_shield"]
 			if tier >= 2:
-				return ["iron_spear", "iron_shield"]
+				return ["iron_pike", "iron_sword", "iron_shield"]
 	if tier >= 2:
 		return ["iron_sword", "iron_shield", "iron_armor", "bow", "arrows"]
 	if tier == 1:
@@ -518,7 +559,7 @@ func _army_want(f) -> int:
 
 func _army_target(f) -> int:
 	var base: int = {"rush": 7, "boom": 22, "turtle": 26, "cavalry": 12, "cannons": 18}[strategy]
-	base = int(base * [0.7, 1.0, 1.3][difficulty])
+	base = int(base * float(lv["army"]))
 	return base + attacks * 4
 
 
@@ -529,17 +570,29 @@ func _military(f) -> void:
 	if not _busy("craft"):
 		var plan := _gear_plan(f)
 		var item: String = plan[rng.randi_range(0, plan.size() - 1)]
-		var weapons := _gear_count(f, ["weapon"])
+		var weapons := _gear_count(f, ["weapon"]) + _queued(["weapon"])
 		var needs_gear: bool = m.t >= _army_start() and (f.soldiers + _gear_count(f, ["weapon", "bow"]) < _army_want(f) or item in ["arrows", "shot", "cannon", "ram"])
-		# Always keep a few spears for the militia.
-		if weapons < 6:
-			item = _basic_weapon()
+		# Always keep weapons for the militia: pikes once riders have been seen and the armory can make them.
+		var reserve_short: bool = weapons < _ready_want(f)
+		if reserve_short:
+			item = _militia_item()
 			needs_gear = true
+		if m.craft_problem(fid, item) != "":
+			item = _basic_weapon()
 		var cost := Defs.item_cost(item, maxi(0, m.armory_tier(fid)))
 		var hold := float(Defs.BUILDINGS["hut"]["cost"]["wood"]) if _housing_needed(f) else _building_hold(f)
 		hold += _unpaid_wood()
+		if reserve_short:
+			# The militia's weapons come before new buildings; only housing that is stopping births comes first.
+			hold = float(Defs.BUILDINGS["hut"]["cost"]["wood"]) if f.pop >= f.housing else 0.0
+			# Nor the quarry, unless a raid is on: the Stone age is the way to pikes.
+			if f.age == 0 and _count("quarry", false) == 0 and m.t > 230.0 and m.t - raided_t > 60.0:
+				hold = maxf(hold, float(Defs.BUILDINGS["quarry"]["cost"]["wood"]))
+			# A site already placed waits for its wood: spears mustn't take it first.
+			hold = maxf(hold, _unpaid_wood()) if m.t - raided_t > 60.0 else hold
 		var can_pay: bool = m.can_afford(fid, cost) and float(f.stock.get("wood", 0)) >= float(cost.get("wood", 0)) + hold
-		if needs_gear and can_pay and m.craft_problem(fid, item) == "" and m.step_problem(fid, _step("craft", item)) == "":
+		# A couple waiting at a time: each is paid for as it starts, so a long queue would drain the stores.
+		if needs_gear and can_pay and _queued_item(item) < 2 and m.craft_problem(fid, item) == "" and m.step_problem(fid, _step("craft", item)) == "":
 			var stock := int(f.gear.get(item, 0))
 			if stock < 12 or item == "arrows" or item == "shot":
 				# One batch at a time: a second batch would spend wood the economy may need first.
@@ -576,6 +629,11 @@ func _military(f) -> void:
 	# Never strip the economy: the army is a share of the adults, grown only while fed.
 	want = _army_want(f)
 	var economy_ok: bool = f.food_state >= 2 and (_size("wood") >= 2 or f.age >= 2)
+	# Soldiers who joined before there was a weapon for them go back for one when there is.
+	if army and not attacking and armed < have and free_gear > 0 and m.t - rearm_t > 20.0:
+		rearm_t = m.t
+		_order("army", [_step("arm"), _step("guard", "", 0, "home")], 0)
+		return
 	if not attacking and f.food_state <= 1 and have > maxi(4, int(f.adults * 0.2)):
 		_order("army", [_step("dismiss")], 0)
 		return
@@ -591,38 +649,113 @@ func _military(f) -> void:
 	var camp = m.known_enemy_camp(fid)
 	if camp == null:
 		return
-	if m.t >= next_attack and armed >= int(want * 0.75) and armed >= 5 and f.food_state >= 2:
+	# Training showed striking back straight after a raid leaves home open to the next wave, so attacks wait for the army.
+	if m.t >= next_attack and armed >= int(want * 0.75) and armed >= 5 and f.food_state >= 2 and m.t - raided_t > 120.0:
 		var steps := [_step("attack", "", 0, "enemy")]
 		if _order("army", steps, 0):
 			attacks += 1
-			next_attack = m.t + [420.0, 300.0, 220.0][difficulty]
+			next_attack = m.t + float(lv["gap"])
 			for e in m.units:
 				if not e.dead and e.faction == fid and e.kind in ["cannon", "ram"]:
 					_order("eng%d" % e.id, [_step("attack", "", 0, "enemy")], 0)
 
 
+## Items of these slots waiting in the armories' queues.
+func _queued(slots: Array) -> int:
+	var n := 0
+	for b in m.buildings_of(fid, "armory"):
+		for item in b.queue:
+			if Defs.ITEMS[item]["slot"] in slots:
+				n += int(Defs.ITEMS[item]["batch"])
+	return n
+
+
+func _queued_item(item: String) -> int:
+	var n := 0
+	for b in m.buildings_of(fid, "armory"):
+		n += b.queue.count(item)
+	return n
+
+
+## Weapons kept in the armory for the militia.
+func _ready_want(f) -> int:
+	# Early on every bit of wood builds the village: a few spears, more once riders are known or the village can spare them.
+	var early: bool = m.t < 300.0 and m.t - riders_seen_t > 900.0 and m.t - raided_t > 900.0
+	if early:
+		return 3
+	# Once raided, keep more in hand: raiders come back.
+	return int(lv["ready"]) + f.adults / int(lv["ready_per"]) + (4 if m.t - raided_t < 900.0 else 0)
+
+
+## Pikes against riders once the armory makes them, otherwise spears, which hit riders twice as hard too.
+func _militia_item() -> String:
+	if m.t - riders_seen_t < 900.0:
+		for pike in ["iron_pike", "bronze_pike"]:
+			if m.craft_problem(fid, pike) == "":
+				return pike
+	return _basic_weapon()
+
+
+## Enemies seen near home in the last few seconds: {total, riders}. Also notes riders and stables seen anywhere.
+func _threat_near(radius: float) -> Dictionary:
+	var out := {"total": 0, "riders": 0}
+	var home := _home()
+	var intel: Dictionary = m.fac(fid).intel
+	for key in intel:
+		var e: Dictionary = intel[key]
+		var kind: String = e.get("kind", "")
+		if kind == "building" and e.get("type", "") == "stable" and int(e.get("faction", -1)) != fid:
+			riders_seen_t = maxf(riders_seen_t, float(e["t"]))
+		if kind != "units":
+			continue
+		var riders := int(e.get("counts", {}).get("rider", 0))
+		if riders > 0:
+			riders_seen_t = maxf(riders_seen_t, float(e["t"]))
+		if m.t - float(e["t"]) < 6.0 and (e["pos"] as Vector2).distance_to(home) < radius:
+			# Several lookouts each note the same band, so the biggest sighting is the estimate.
+			out["total"] = maxi(out["total"], int(e["total"]))
+			out["riders"] = maxi(out["riders"], riders)
+	return out
+
+
 func _defend(f) -> void:
 	# React to enemies seen near home in the last few seconds.
-	var threat := Planner.threat(m, fid, _home(), 90.0)
-	if threat == 0:
-		# Stand the militia down once things are quiet.
-		if _crew("militia") != null and m.t - last_alarm > 45.0:
-			_order("militia", [_step("dismiss")], 0)
+	var seen := _threat_near(float(lv["alarm"]))
+	var weight: int = seen["total"] + seen["riders"]
+	if weight == 0:
+		# Once it's quiet the militia hand their weapons back and go back to work.
+		if _crew("militia") != null and m.t - last_alarm > 40.0:
+			if not _order("militia", [_step("resume_work")], 0):
+				_order("militia", [_step("dismiss")], 0)
+			roles.erase("militia")
 		return
-	if m.t - last_alarm < 20.0:
+	if weight >= int(lv["react"]):
+		raided_t = m.t
+	if m.t - last_alarm < float(lv["recall"]):
 		return
 	last_alarm = m.t
 	var army = _crew("army")
 	if army and not (army.idx < army.steps.size() and army.steps[army.idx]["action"] == "attack"):
 		_order("army", [_step("guard", "", 0, "home")], 0)
-	# Militia: arm villagers only for a real raid, not a lone scout.
+	# Militia: arm villagers only for a real raid, not a lone scout. Against riders, pikes first.
 	var guards: int = army.members.size() if army else 0
-	if threat >= 3 and guards < threat + 2:
-		_order("militia", [_step("arm"), _step("guard", "", 0, "home")], Planner.militia_wanted(f.adults, guards, threat))
+	if weight >= int(lv["react"]) and guards < weight + 2:
+		var with := ""
+		if seen["riders"] > 0:
+			for pike in ["iron_pike", "bronze_pike", "wood_spear"]:
+				if int(f.gear.get(pike, 0)) > 0:
+					with = pike
+					break
+		# Never more than there are weapons for: unarmed villagers sent into a fight only die.
+		var have := _size("militia")
+		var spare := int(f.gear.get(with, 0)) if with != "" else _gear_count(f, ["weapon", "bow"])
+		var more := mini(Planner.militia_wanted(f.adults, guards + have, weight), spare)
+		if more > 0:
+			_order("militia", [_step("arm", with), _step("guard", "", 0, "home")], have + more)
 
 
 func _scouting(f) -> void:
-	var first: float = [200.0, 110.0, 70.0][difficulty]
+	var first: float = lv["scout"]
 	if strategy == "rush":
 		first *= 0.7
 	if m.t < first:

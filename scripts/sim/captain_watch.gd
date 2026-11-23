@@ -31,6 +31,7 @@ static func update(m, p) -> void:
 		return
 	p.alert_t = m.t
 	p.threat_at = at / foes.size()
+	p.riders = maxi(p.riders if p.alert != "" else 0, foes.filter(func(o): return o.mounted).size())
 	var was: String = p.alert
 	if was == "":
 		p.threat = 0
@@ -120,7 +121,14 @@ static func jobs(m, p, workers: Array) -> Array:
 	# The cap is on everyone armed, or call-ups stack while the first lot are still arming.
 	call_up = maxi(0, mini(call_up, p.threat * 2 + 2 - fighters))
 	if call_up > 0:
-		out.append(_job("arm", "arm", call_up, p.center))
+		var job := _job("arm", "arm", call_up, p.center)
+		# Against riders, pikes first if there are any; the rest take the best there is.
+		if p.riders > 0:
+			for pike in ["iron_pike", "bronze_pike"]:
+				if int(m.fac(p.faction).gear.get(pike, 0)) >= call_up:
+					job["step"]["subject"] = pike
+					break
+		out.append(job)
 	if fighters > 0:
 		var reach := minf(p.radius, WATCHED)
 		var toward: Vector2 = p.threat_at - p.center
@@ -141,6 +149,7 @@ static func _stand_down(m, p) -> void:
 	var had: String = p.alert
 	p.alert = ""
 	p.threat = 0
+	p.riders = 0
 	if had == "intruder":
 		return
 	var lost: int = p.lost - p.lost_at_alert

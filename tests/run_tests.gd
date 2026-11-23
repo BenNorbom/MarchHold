@@ -32,7 +32,7 @@ func _initialize() -> void:
 
 func _run_tests() -> void:
 	var only := OS.get_environment("MH_TEST")
-	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "crews", "selection", "walls", "combat", "research", "shield", "parser", "schema", "chatgpt", "terra_orders", "hotkeys", "removed_buildings", "rings", "settlements", "path_queue", "rivals", "menu", "gathering", "construction", "back_to_work", "delegation", "posts", "post_orders", "places", "mandate_building", "threats", "post_review", "towers", "duel"]
+	var tests := ["defs", "validation", "terrain", "map_sizes", "economy", "births", "crews", "selection", "walls", "attack_hunts_people", "combat", "research", "shield", "parser", "schema", "chatgpt", "terra_orders", "hotkeys", "removed_buildings", "rings", "settlements", "grand_army", "weapon_rules", "strategy", "shift_buying", "path_queue", "rivals", "menu", "gathering", "construction", "back_to_work", "back_to_work_returns_gear", "ram_keeps_arms", "delegation", "order_moves", "posts", "post_orders", "places", "mandate_building", "threats", "post_review", "towers", "stables_militia", "duel"]
 	if only == "absence":
 		tests.append(only)
 	var t0 := Time.get_ticks_msec()
@@ -213,6 +213,64 @@ func test_economy() -> void:
 	check(float(f.stock["food"]) > food_before - 5.0, "berry pickers keep food up")
 
 
+## Runs the village for `seconds`, topping its food up to `food_per_person` each second.
+func run_fed(m, f, seconds: int, food_per_person: float) -> void:
+	for i in seconds:
+		f.stock["food"] = minf(float(f.food_cap), f.pop * food_per_person)
+		run(m, 1.0)
+
+
+func test_births() -> void:
+	var m = new_match(5)
+	var f = m.fac(0)
+	var home: Vector2 = m.home_pos(0)
+	# Fill the campfire's eight places so the village is housing capped.
+	for i in 2:
+		m.spawn_unit(0, "villager", home + Vector2(4 + i, 3))
+	m._refresh_counts(f)
+	check(f.pop == f.housing and f.pop == 8, "village is capped at 8 of 8 (%d of %d)" % [f.pop, f.housing])
+	var adults: int = f.adults
+	var bank_cap: float = maxf(1.0, adults * Defs.BIRTH_BANK_PER_ADULT)
+	var per_minute: float = adults * 60.0 / Defs.BIRTH_SECONDS_PER_ADULT
+
+	# Well fed: progress banks, nobody is born with no room.
+	m.birth_acc[0] = 0.0
+	var births0: int = f.births
+	run_fed(m, f, 60, 2.5 * 1.3)
+	check(f.food_state == 3, "held well fed (state %d)" % f.food_state)
+	check(f.births == births0 and f.pop == 8, "no births while capped (%d people)" % f.pop)
+	var well: float = m.birth_acc[0]
+	check(absf(well - per_minute) < 0.15, "well fed banks a minute of births (%.2f vs %.2f)" % [well, per_minute])
+
+	# Fed: the same minute banks 75% as much.
+	m.birth_acc[0] = 0.0
+	run_fed(m, f, 60, 2.0)
+	check(f.food_state == 2, "held fed (state %d)" % f.food_state)
+	var fed: float = m.birth_acc[0]
+	check(absf(fed / well - Defs.FED_BIRTH_RATE) < 0.06, "fed banks 75%% of well fed (%.2f of %.2f)" % [fed, well])
+
+	# The bank stops at half a birth per adult.
+	run_fed(m, f, 300, 2.5 * 1.3)
+	check(absf(m.birth_acc[0] - bank_cap) < 0.01, "bank is capped at %.1f (%.2f)" % [bank_cap, m.birth_acc[0]])
+
+	# Hungry: nothing is gained or lost.
+	var banked: float = m.birth_acc[0]
+	run_fed(m, f, 30, 0.5)
+	check(f.food_state == 1, "held hungry (state %d)" % f.food_state)
+	check(f.births == births0 and absf(m.birth_acc[0] - banked) < 0.001, "hungry village keeps its bank (%.2f)" % m.birth_acc[0])
+
+	# Two places open up: both are filled at once, never past housing.
+	var gone := 0
+	for u in m.units:
+		if gone < 2 and not u.dead and u.faction == 0 and u.kind == "villager":
+			m.kill_unit(u, "test")
+			gone += 1
+	run_fed(m, f, 2, 2.5 * 1.3)
+	m._refresh_counts(f)
+	check(f.births - births0 == 2, "two freed places gave two births within two seconds (%d)" % (f.births - births0))
+	check(f.pop <= f.housing, "births stay inside housing (%d of %d)" % [f.pop, f.housing])
+
+
 func test_crews() -> void:
 	var m = new_match(414)
 	var adults: Array = m.idle_adults(0, m.home_pos(0))
@@ -319,6 +377,114 @@ func test_back_to_work() -> void:
 	r = m.command(0, {"unit": miners[0].id, "steps": [step("resume_work")]})
 	check(r["ok"] and miners[0].task == "gather" and miners[0].crew >= 0 and woodcutters[1].task == "guard", "addressed back to work only returns that crew")
 	check(Defs.validate_steps([step("resume_work"), step("gather", "wood")]) != "", "back to work can't be mixed with other steps")
+
+
+## A militia hands its gear back at the armory before it works again.
+func test_back_to_work_returns_gear() -> void:
+	var m = new_match(92)
+	var f = m.fac(0)
+	f.stock["wood"] = 200.0
+	f.gear["wood_spear"] = 40
+	f.gear["wood_shield"] = 40
+	var home: Vector2 = m.home_pos(0)
+	var site: Dictionary = {}
+	for k in 30:
+		site = m.place_site(0, "armory", home + Vector2.from_angle(k * 0.5) * (16.0 + k * 0.5), 0.0)
+		if site.get("ok", false):
+			break
+	var armory = m.bld(site["id"])
+	armory.progress = 1.0
+	m._complete(armory)
+	var adults: Array = m.idle_adults(0, home)
+	var wood_crew = m.make_crew(0, [adults[0], adults[1]])
+	m.command(0, {"crew": wood_crew.id, "steps": [step("gather", "wood")]})
+	var idler = adults[4]
+	run(m, 3.0)
+	m.command(0, {"all": true, "steps": [step("arm"), step("guard", "", 0, "home")]})
+	run(m, 40.0)
+	check(adults[0].weapon != "" and adults[0].shield != "" and idler.weapon != "", "the call to arms equips everyone")
+	check(int(f.gear["wood_spear"]) < 40, "the weapons came out of the armory")
+	var r: Dictionary = m.command(0, {"all": true, "steps": [step("resume_work")]})
+	check(r["ok"], "back to work is accepted")
+	check(adults[0].task == "disarm" and adults[0].weapon != "", "they go to the armory still holding their weapons")
+	check(m.crew_of(adults[0]) == wood_crew and wood_crew.steps[1]["subject"] == "wood", "the crew's work waits behind returning the gear")
+	check(adults[0].task != "gather", "nobody works while carrying a weapon")
+	var worked_armed := false
+	for i in int(120.0 / Defs.TICK):
+		m.tick(Defs.TICK)
+		m.events.clear()
+		for u in [adults[0], adults[1], idler]:
+			if u.task == "gather" and u.weapon != "":
+				worked_armed = true
+	check(not worked_armed, "nobody gathered while still armed")
+	check(adults[0].weapon == "" and adults[0].shield == "" and idler.weapon == "" and idler.shield == "", "they hand their gear in")
+	check(adults[0].task == "gather" and m.crew_of(adults[0]) == wood_crew, "then the woodcutters work again")
+	check(idler.task == "idle" and m.crew_of(idler) == null, "an idler returns the gear and goes back to idle")
+	check(int(f.gear["wood_spear"]) == 40 and int(f.gear["wood_shield"]) == 40, "every weapon is back in the armory (%d spears)" % int(f.gear["wood_spear"]))
+	check(wood_crew.steps.size() == 2 and wood_crew.steps[0]["action"] == "disarm", "the plan keeps the disarm step only at its start")
+	# A rider leads the horse back to the stable before working.
+	var stable_site: Dictionary = {}
+	f.age = 1
+	for k in 40:
+		stable_site = m.place_site(0, "stable", home + Vector2.from_angle(2.0 + k * 0.5) * (22.0 + k * 0.5), 0.0)
+		if stable_site.get("ok", false):
+			break
+	var stable = m.bld(stable_site["id"])
+	stable.progress = 1.0
+	m._complete(stable)
+	var rider = adults[2]
+	m.command(0, {"unit": rider.id, "individual": true, "steps": [step("guard", "", 0, "home")]})
+	rider.mounted = true
+	rider.max_hp += Defs.MOUNTED["hp_bonus"]
+	var riding_hp: float = rider.max_hp
+	m.command(0, {"unit": rider.id, "individual": true, "steps": [step("resume_work")]})
+	check(rider.task == "disarm" and rider.mounted, "a rider stays mounted until the stable")
+	run(m, 60.0)
+	check(not rider.mounted and rider.max_hp < riding_hp, "the rider gets off")
+	check(m._stable_count(stable) == 1, "the horse is back in the stable (%d)" % m._stable_count(stable))
+	# With the armory gone there is nowhere to walk to: the gear is put down on the spot.
+	m.command(0, {"unit": adults[0].id, "steps": [step("guard", "", 0, "home")]})
+	adults[0].weapon = "wood_spear"
+	adults[0].bow = true
+	adults[0].arrows = 12
+	f.gear["arrows"] = 0
+	m.remove_building(armory, "destroyed")
+	m.command(0, {"unit": adults[0].id, "steps": [step("resume_work")]})
+	run(m, 2.0)
+	check(adults[0].weapon == "" and not adults[0].bow and adults[0].arrows == 0 and int(f.gear["arrows"]) == 12, "without an armory the gear is put down where they stand")
+
+
+func test_ram_keeps_arms() -> void:
+	for type in ["ram", "hut"]:
+		var m = new_match(93)
+		var f = m.fac(0)
+		f.age = 2
+		f.researched["armory_bronze"] = true
+		f.stock["wood"] = 500.0
+		f.stock["bronze"] = 100.0
+		var home: Vector2 = m.home_pos(0)
+		m.add_building(0, "armory", home + Vector2(20, 0), 0.0, true)
+		var site: Dictionary = {}
+		for k in 40:
+			site = m.place_site(0, type, home + Vector2.from_angle(2.0 + k * 0.5) * (22.0 + k * 0.5), 0.0)
+			if site.get("ok", false):
+				break
+		check(site.get("ok", false), "a %s site can be placed" % type)
+		var builder = m.idle_adults(0, home)[0]
+		var build := step("build", type)
+		build["sites"] = [site["id"]]
+		m.command(0, {"unit": builder.id, "individual": true, "steps": [build]})
+		m.command(0, {"unit": builder.id, "individual": true, "steps": [step("guard", "", 0, "home")]})
+		builder.weapon = "wood_spear"
+		check(m.command(0, {"unit": builder.id, "individual": true, "steps": [step("resume_work")]})["ok"], "back to work on the %s" % type)
+		if type == "ram":
+			check(builder.task == "build" and builder.weapon == "wood_spear", "a field ram is built under arms")
+			run(m, 10.0)
+			check(builder.weapon == "wood_spear", "the ram builder keeps the spear while working")
+		else:
+			check(builder.task == "disarm", "a hut builder hands the spear in first")
+			run(m, 30.0)
+			check(builder.weapon == "", "the hut builder works unarmed")
 
 
 func chat_game(m):
@@ -432,6 +598,99 @@ func grown_village(m, size: int) -> Array:
 	m.fac(0).stock["food"] = 140.0
 	m._refresh_counts(m.fac(0))
 	return m.idle_adults(0, home)
+
+
+func test_order_moves() -> void:
+	var r: Dictionary = Parser.parse("take 2 people off wood and put them on stone")
+	check(r["ok"] and r["steps"].size() == 2 and r["steps"][0]["action"] == "free" and r["steps"][0]["subject"] == "wood"
+		and r["steps"][0]["count"] == 2 and r["steps"][1]["action"] == "gather" and r["steps"][1]["subject"] == "stone",
+		"take 2 off wood, put them on stone (%s)" % str(r["steps"]))
+	r = Parser.parse("move 3 villagers from stone to wood")
+	check(r["ok"] and r["steps"][0]["action"] == "free" and r["steps"][0]["subject"] == "stone" and r["steps"][0]["count"] == 3
+		and r["steps"][1]["subject"] == "wood", "move 3 from stone to wood (%s)" % str(r["steps"]))
+	r = Parser.parse("switch everyone off berries onto wood")
+	check(r["ok"] and r["steps"][0]["subject"] == "berries" and r["steps"][0]["count"] == 0 and r["steps"][1]["subject"] == "wood", "everyone off berries onto wood")
+	r = Parser.parse("put 2 on stone")
+	check(r["ok"] and r["steps"].size() == 1 and r["steps"][0]["action"] == "gather", "a plain 'put 2 on stone' is still one gather")
+	check(r["steps"][0]["count"] == 2 and r["steps"][0]["amount"] == 0 and r["steps"][0]["subject"] == "stone", "'put 2 on stone' means two people (%s)" % str(r["steps"]))
+	r = Parser.parse("gather 10 stone then gather wood")
+	check(r["ok"] and not r["steps"].any(func(s): return s["action"] == "free"), "two jobs in a row are not a move")
+	var g: Dictionary = Parser.assign_in("add 3 villagers to Captain Hal")
+	check(g.get("count") == 3 and g.get("name") == "hal" and g.get("subject") == "", "add 3 villagers to Captain Hal (%s)" % str(g))
+	g = Parser.assign_in("give Hal two more men")
+	check(g.get("count") == 2 and g.get("name") == "hal", "give Hal two more men (%s)" % str(g))
+	g = Parser.assign_in("send 4 people from wood to Captain Hal")
+	check(g.get("count") == 4 and g.get("subject") == "wood" and g.get("name") == "hal", "send people from wood to a captain (%s)" % str(g))
+	g = Parser.assign_in("reinforce Hal")
+	check(g.get("name") == "hal", "reinforce Hal (%s)" % str(g))
+	check(Parser.assign_in("gather wood").is_empty() and Parser.assign_in("give Hal a spear").is_empty(), "other orders are not 'add people to a captain'")
+
+	# Moving workers takes exactly those people off the named work.
+	var m = new_match(515)
+	var adults: Array = grown_village(m, 12)
+	var four: Array = adults.slice(0, 4)
+	var ids := four.map(func(u): return u.id)
+	r = m.command(0, {"units": ids, "steps": [step("gather", "wood")]})
+	check(r["ok"], "a wood crew is started: %s" % r.get("error", ""))
+	var wood_crew = m.crew_of(four[0])
+	r = m.command(0, {"steps": [step("free", "wood", 0, "", 2), step("gather", "stone")]})
+	check(r["ok"] and not r["crews"].is_empty(), "taking 2 off wood and putting them on stone works: %s" % r.get("error", ""))
+	var stone_crew = m.crews.get(r["crews"][0]) if r["ok"] and not r["crews"].is_empty() else null
+	check(wood_crew.members.size() == 2, "two are left on wood (%d)" % wood_crew.members.size())
+	check(stone_crew != null and stone_crew.members.size() == 2 and stone_crew.members.all(func(id): return ids.has(id)), "exactly two of the wood gatherers are now on stone")
+	check(m.command(0, {"steps": [step("free", "farm", 1), step("gather", "wood")]})["ok"] == false, "nobody to take off farming is an honest refusal")
+
+	# A captain can be given more people, and they take up the captain's work.
+	var m2 = new_match(414)
+	var people: Array = grown_village(m2, 30)
+	m2.command(0, {"unit": people[0].id, "individual": true, "steps": [step("mandate", "village")]})
+	run(m2, 8.0)
+	var rr: Dictionary = m2.command(0, {"unit": people[1].id, "individual": true, "steps": [step("mandate", "industry", 0, "home", 4)]})
+	check(rr["ok"], "an industry captain is named: %s" % rr.get("error", ""))
+	if not rr["ok"]:
+		return
+	var works = m2.posts[rr["post"]]
+	var before: int = works.members.size()
+	var got: Dictionary = m2.command(0, {"post": works.id, "steps": [step("assign", "", 0, "", 3)]})
+	check(got["ok"], "three more people are added to the captain: %s" % got.get("error", ""))
+	check(works.members.size() == before + 3 and works.target >= works.members.size(), "they join the post (%d -> %d, target %d)" % [before, works.members.size(), works.target])
+	run(m2, 6.0)
+	check(works.members.size() >= before + 3, "the village doesn't take them back (%d)" % works.members.size())
+	var busy := 0
+	for u in m2.post_members(works):
+		var c = m2.crew_of(u)
+		if c and c.post == works.id:
+			busy += 1
+	check(busy >= 1 or works.members.size() >= 4, "the captain puts them to work (%d busy)" % busy)
+
+	# The same things typed in the chat box.
+	var game = chat_game(m2)
+	var captain_unit = m2.unit(works.captain)
+	var count_before: int = works.members.size()
+	game._on_chat("add 2 villagers to Captain %s" % captain_unit.name)
+	check(works.members.size() == count_before + 2, "typing 'add 2 villagers to Captain X' adds them (%d -> %d)" % [count_before, works.members.size()])
+	var plain: Array = m2.idle_adults(0, m2.home_pos(0)).filter(func(u): return u.post != works.id)
+	var joiner = plain[0] if not plain.is_empty() else m2.post_members(m2.posts.values().filter(func(p): return p.id != works.id)[0])[1]
+	game.addressee = {"unit": joiner.id, "individual": true}
+	game.address_label = joiner.name
+	game._on_chat("join @%s" % captain_unit.name)
+	check(joiner.post == works.id, "'join @Captain' puts someone under the captain (post %d)" % joiner.post)
+	game.addressee = {}
+	var crew_owner = new_match(77)
+	var crew_game = chat_game(crew_owner)
+	var cw: Array = crew_owner.idle_adults(0, crew_owner.home_pos(0))
+	crew_owner.command(0, {"units": cw.slice(0, 4).map(func(u): return u.id), "steps": [step("gather", "wood")]})
+	crew_game._on_chat("take 2 people off wood and put them on stone")
+	var on_stone := 0
+	var on_wood := 0
+	for u in cw:
+		var uc = crew_owner.crew_of(u)
+		if uc and uc.idx < uc.steps.size():
+			if uc.steps[uc.idx]["subject"] == "stone":
+				on_stone += 1
+			elif uc.steps[uc.idx]["subject"] == "wood":
+				on_wood += 1
+	check(on_stone == 2 and on_wood == 2, "typed in chat, two move from wood to stone (%d stone, %d wood)" % [on_stone, on_wood])
 
 
 func test_posts() -> void:
@@ -635,14 +894,15 @@ func test_mandate_building() -> void:
 		check(false, "captains build within their mandate")
 		return
 	# A village captain builds what the village needs, unasked.
-	var m = new_match(414)
+	var m = new_match(415)
 	var f = m.fac(0)
 	var home: Vector2 = m.home_pos(0)
 	var adults: Array = grown_village(m, 30)
 	f.stock["wood"] = 300.0
 	m.command(0, {"unit": adults[0].id, "individual": true, "steps": [step("mandate", "village")]})
 	var village = m.village_post(0)
-	run(m, 280.0)
+	# Fed villages grow too, so farms and huts take the wood first; the quarry comes later.
+	run(m, 560.0)
 	check(not sites_of(m, "farm").is_empty(), "the village captain builds farms")
 	check(not sites_of(m, "hut").is_empty(), "and housing")
 	check(not sites_of(m, "quarry").is_empty(), "and finds the outcrop for a quarry")
@@ -1093,6 +1353,49 @@ func test_walls() -> void:
 		check(m.solid_for(1, c), "palisade blocks the enemy")
 
 
+func test_attack_hunts_people() -> void:
+	# Attackers beside a building go for an enemy villager they can see, not the building.
+	var m = new_match(21)
+	var hut = m.add_building(1, "hut", m.home_pos(0) + Vector2(150, 0), 0.0, true)
+	var squad := []
+	for k in 3:
+		var a = m.spawn_unit(0, "villager", hut.pos + Vector2(-8, k * 2.0))
+		a.weapon = "wood_spear"
+		squad.append(a)
+	var c = m.make_crew(0, squad)
+	c.steps = [step("attack", "", 0, "enemy")]
+	c.state = {"target": hut.pos, "foe": 1}
+	c.idx = 0
+	for a in squad:
+		m._set_task(a, "attack")
+		a.enemy_bld = hut.id
+	var runner = m.spawn_unit(1, "villager", squad[0].pos + Vector2(-50, 0))
+	runner.name = "Runner"
+	m.rebuild_unit_hash()
+	run(m, 1.5)
+	check(squad.any(func(a): return a.enemy == runner.id), "attackers go after the villager they can see (%s)" % str(squad.map(func(a): return a.enemy)))
+	# Walled in, the same villager is left alone.
+	var m2 = new_match(21)
+	var hut2 = m2.add_building(1, "hut", m2.home_pos(0) + Vector2(150, 0), 0.0, true)
+	var squad2 := []
+	for k in 3:
+		var a2 = m2.spawn_unit(0, "villager", hut2.pos + Vector2(-8, k * 2.0))
+		a2.weapon = "wood_spear"
+		squad2.append(a2)
+	var c2 = m2.make_crew(0, squad2)
+	c2.steps = [step("attack", "", 0, "enemy")]
+	c2.state = {"target": hut2.pos, "foe": 1}
+	c2.idx = 0
+	for a2 in squad2:
+		m2._set_task(a2, "attack")
+		a2.enemy_bld = hut2.id
+	var inside = m2.spawn_unit(1, "villager", squad2[0].pos + Vector2(-50, 0))
+	m2.add_building(1, "stone_wall", squad2[0].pos + Vector2(-25, 0), 1.5708, true)
+	m2.rebuild_unit_hash()
+	run(m2, 1.5)
+	check(not squad2.any(func(a): return a.enemy == inside.id), "a villager shut in behind a wall is not hunted")
+
+
 func test_combat() -> void:
 	var m = new_match(11)
 	var f = m.fac(0)
@@ -1138,8 +1441,11 @@ func test_combat() -> void:
 	check(m.fac(1).deaths >= 3 or alive <= 1, "raiders died")
 	# Cannon vs a wall piece.
 	var m2 = new_match(12)
-	var w = m2.add_building(1, "stone_wall", m2.home_pos(1) + Vector2(40, 0), 0.0, true)
-	var cn = m2.spawn_unit(0, "cannon", w.pos + Vector2(-90, 0))
+	var line := []
+	for k in 7:
+		line.append(m2.add_building(1, "stone_wall", m2.home_pos(1) + Vector2(40, (k - 3) * 4.0), PI * 0.5, true))
+	var w = line[3]
+	var cn = m2.spawn_unit(0, "cannon", w.pos + Vector2(-60, 0))
 	cn.ammo = 8
 	var crewmen := []
 	for k in 3:
@@ -1153,7 +1459,10 @@ func test_combat() -> void:
 	for cm in crewmen:
 		m2._set_task(cm, "hold")
 	run(m2, 70.0)
-	check(w.dead or w.hp < w.max_hp * 0.5, "cannon shots break a stone wall (hp %.0f / %.0f)" % [w.hp, w.max_hp])
+	var dealt := 0.0
+	for piece in line:
+		dealt += piece.max_hp - (0.0 if piece.dead else piece.hp)
+	check(dealt >= 2.0 * Defs.CANNON["dmg_building"], "cannon shots from 60 m break up a stone wall (%.0f damage)" % dealt)
 
 
 func test_research() -> void:
@@ -1178,6 +1487,61 @@ func test_research() -> void:
 	var pr: Dictionary = Parser.parse("research mounted archery")
 	check(pr.get("ok", false) and pr["steps"][0]["action"] == "research" and pr["steps"][0]["subject"] == "mounted_archery", "parser reads 'research mounted archery'")
 	check("mounted_archery" in Defs.subjects_for("research"), "schema offers mounted_archery")
+
+	# Armory tiers are research that runs by itself and upgrades every armory.
+	var m2 = new_match(15)
+	var f2 = m2.fac(0)
+	var a1 = m2.add_building(0, "armory", m2.home_pos(0) + Vector2(20, 0), 0.0, true)
+	var a2 = m2.add_building(0, "armory", m2.home_pos(0) + Vector2(-20, 0), 0.0, true)
+	for e in m2.build_menu(0):
+		check(not (e["kind"] == "upgrade" and e["id"] == "armory"), "no armory upgrade in the build menu")
+	check(not Defs.UPGRADES.has("armory_bronze") and not Defs.UPGRADES.has("armory_iron"), "armory tiers are not building upgrades")
+	var lock := {}
+	for e in m2.research_menu(0):
+		lock[e["id"]] = e["locked"]
+	check(lock.has("armory_bronze") and lock["armory_bronze"] != "", "bronze armory research is listed but locked before the Bronze age")
+	check(lock.has("armory_iron") and lock["armory_iron"] != "", "iron armory research is listed but locked")
+	f2.age = 2
+	f2.stock["wood"] = 500.0
+	f2.stock["bronze"] = 500.0
+	f2.stock["stone"] = 500.0
+	f2.stock["iron"] = 500.0
+	check(m2.start_research(0, "armory_iron") != "", "iron armory needs the bronze armory first")
+	check(m2.unlock_problem(0, "ram").contains("bronze armory"), "a field ram needs the bronze armory")
+	var idle_before: int = m2.idle_adults(0, m2.home_pos(0)).size()
+	var res: Dictionary = m2.command(0, {"steps": [{"action": "research", "subject": "armory_bronze", "count": 0, "amount": 0, "where": ""}]})
+	check(res.get("ok", false), "the research order is accepted: %s" % res.get("error", ""))
+	check(m2.crews.is_empty() and m2.idle_adults(0, m2.home_pos(0)).size() == idle_before, "research takes no villagers")
+	check(f2.stock["bronze"] < 500.0, "research is paid for up front")
+	check(m2.start_research(0, "armory_bronze") != "", "the same research can't be started twice")
+	run(m2, 60.0)
+	check(not f2.researched.has("armory_bronze") and a1.tier == 0, "research takes its time")
+	run(m2, 40.0)
+	check(f2.researched.has("armory_bronze") and a1.tier == 1 and a2.tier == 1, "finished research upgrades every armory")
+	var a3 = m2.add_building(0, "armory", m2.home_pos(0) + Vector2(0, 30), 0.0, true)
+	m2._complete(a3)
+	check(a3.tier == 1, "an armory built later starts at the researched tier")
+	check(m2.armory_tier(0) == 1 and m2.craft_problem(0, "bronze_pike") == "", "bronze gear can be made")
+	# Villagers build a ram in the field; the finished site becomes a ram unit.
+	check(m2.unlock_problem(0, "ram") == "", "the bronze armory opens the field ram")
+	var rams_before: int = m2.units.filter(func(u): return u.kind == "ram" and not u.dead).size()
+	var rsite: Dictionary = m2.place_site(0, "ram", m2.home_pos(0) + Vector2(0, -45), 0.0)
+	check(rsite.get("ok", false), "a ram site can be placed: %s" % rsite.get("error", ""))
+	var rb: Dictionary = m2.command(0, {"all": true, "steps": [{"action": "build", "subject": "ram", "count": 0, "amount": 0, "where": "", "sites": [rsite["id"]]}]})
+	check(rb.get("ok", false), "villagers are told to build the ram: %s" % rb.get("error", ""))
+	run(m2, 120.0)
+	var gone = m2.bld(rsite["id"])
+	check(gone == null or gone.dead, "the finished ram site is gone")
+	check(m2.units.filter(func(u): return u.kind == "ram" and not u.dead).size() == rams_before + 1, "the site became a ram")
+	check(m2.start_research(0, "armory_iron") != "", "iron armory is still locked before the Iron age")
+	f2.age = 3
+	check(m2.start_research(0, "armory_iron") == "", "iron armory research starts in the Iron age")
+	run(m2, 125.0)
+	check(a1.tier == 2 and a2.tier == 2 and a3.tier == 2, "iron research upgrades every armory again")
+	var up: Dictionary = m2.command(0, {"steps": [{"action": "upgrade", "subject": "armory", "count": 0, "amount": 0, "where": ""}]})
+	check(not up.get("ok", true) and up["error"].to_lower().contains("research"), "an armory upgrade order points at research")
+	var pa: Dictionary = Parser.parse("research the iron armory")
+	check(pa.get("ok", false) and pa["steps"][0]["subject"] == "armory_iron", "parser reads 'research the iron armory'")
 
 
 func test_towers() -> void:
@@ -1346,6 +1710,10 @@ func test_parser() -> void:
 	for text in places:
 		r = P.parse(text)
 		check(r["ok"] and r["steps"][0]["where"] == places[text], "gather place: " + text)
+	r = P.parse("attack the village")
+	check(r.get("ok", false) and r["steps"][0]["where"] == "enemy", "attack the village means their village")
+	r = P.parse("attack the enemy town hall")
+	check(r.get("ok", false) and r["steps"][0]["where"] == "enemy", "attack the enemy town hall")
 	r = P.parse("attack their camp")
 	check(r.get("ok", false) and r["steps"][0]["action"] == "attack" and r["steps"][0]["where"] == "enemy", "attack their camp")
 
@@ -1413,7 +1781,8 @@ func test_hotkeys() -> void:
 		wanted["build:" + id] = true
 	for id in Defs.UPGRADES:
 		wanted["upgrade:" + Defs.UPGRADES[id]["building"]] = true
-	wanted["research:gunpowder"] = true
+	for id in Defs.RESEARCH:
+		wanted["research:" + id] = true
 	for id in Defs.ITEMS:
 		wanted["craft:" + id] = true
 	var keyed := {}
@@ -1439,15 +1808,44 @@ func test_hotkeys() -> void:
 	check(read.call("b", "b z")["error"] != "", "an unused key is explained")
 	check(read.call("b", "b h 2")["error"] != "", "a structure takes no count")
 	check(read.call("b", "v w")["error"].contains("Stone age"), "a locked key says what it needs")
-	check(read.call("b", "v a")["error"].contains("armory"), "an upgrade needs its building")
+	check(read.call("b", "v f")["error"].contains("smelter"), "an upgrade needs its building")
 	check(read.call("c", "b w")["error"].contains("armory"), "weapons need an armory")
 	m.add_building(0, "armory", m.home_pos(0) + Vector2(20, 0), 0.0, true)
 	var two: Dictionary = read.call("c", "b w 2")
 	check(two["error"] == "" and two["batches"] == 2 and two["entry"]["id"] == "wood_spear", "/c b w 2 is two batches of spears")
 	for bad in ["b w 0", "b w x", "b w 100", "b w 2 2"]:
 		check(read.call("c", bad)["error"] != "", "bad batch count refused: " + bad)
-	check(Array(Hotkeys.split_keys(PackedStringArray(["bh"]))) == ["b", "h"], "quick keys need no space")
-	check(Array(Hotkeys.split_keys(PackedStringArray(["hut"]))) == ["hut"], "quick keys still allow names")
+	check(Array(Hotkeys.split_keys("b", PackedStringArray(["bh"]))) == ["b", "h"], "quick keys need no space")
+	check(Array(Hotkeys.split_keys("b", PackedStringArray(["hut"]))) == ["hut"], "quick keys still allow names")
+	check(Array(Hotkeys.split_keys("r", PackedStringArray(["g"]))) == ["g"], "research has no page to split off")
+	var count: Dictionary = read.call("c", "2 b w")
+	check(count["error"] == "" and count["batches"] == 2 and count["entry"]["id"] == "wood_spear", "/c 2 b w is two batches of spears")
+	check(read.call("c", "2")["batches"] == 2 and read.call("c", "2")["key"] == "", "a count alone waits for the page")
+	check(read.call("c", "0 b w")["error"] != "" and read.call("c", "100 b w")["error"] != "", "a count outside 1-99 is refused")
+	check(read.call("c", "2 bow").is_empty(), "a count before a name is left to the name lookup")
+
+	# /r is a single page: just the key, or a name.
+	check(read.call("r", "")["page"] == "r" and read.call("r", "")["key"] == "", "bare /r shows the research page")
+	check(read.call("r", "g")["entry"]["id"] == "gunpowder" and read.call("r", "M")["entry"]["id"] == "mounted_archery", "/r g and /r m pick research")
+	check(read.call("r", "gunpowder").is_empty() and read.call("r", "mounted archery").is_empty(), "research names are left to the name lookup")
+	check(read.call("r", "x")["error"] != "", "an unused research key is explained")
+	check(read.call("r", "g")["error"].contains("university"), "research without its building says what it needs")
+	check(read.call("r", "m")["error"].contains("stable"), "mounted archery needs a stable")
+	f.age = 1
+	m.add_building(0, "stable", m.home_pos(0) + Vector2(-20, 0), 0.0, true)
+	check(read.call("r", "m")["error"] == "", "mounted archery is open with a stable")
+	f.researched["mounted_archery"] = true
+	check(read.call("r", "m")["error"].contains("already"), "research already known is explained")
+	f.researched.erase("mounted_archery")
+	check(read.call("r", "b")["entry"]["id"] == "armory_bronze" and read.call("r", "i")["entry"]["id"] == "armory_iron", "/r b and /r i pick the armory tiers")
+	check(read.call("r", "b")["error"].contains("Bronze age"), "the bronze armory waits for its age")
+	f.age = 3
+	check(read.call("r", "b")["error"] == "", "the bronze armory opens with the age")
+	check(read.call("r", "i")["error"].contains("bronze armory"), "the iron armory says it needs bronze first")
+	check(read.call("r", "bronze armory").is_empty() and read.call("r", "iron armory").is_empty(), "armory names are left to the name lookup")
+	for slot in Defs.HOTKEYS["r"]["r"]["keys"].values():
+		check(FileAccess.file_exists("res://assets/icons/research_%s.png" % slot.get_slice(":", 1)), "the research popup has a picture for " + slot)
+	f.age = 0
 
 	var game = load("res://scripts/game/game.gd").new()
 	game.m = m
@@ -1455,10 +1853,45 @@ func test_hotkeys() -> void:
 	game.add_child(game.hud)
 	game.view = game.WorldView.new()
 	game.add_child(game.view)
+	game.cmd = FakeCommander.new()
 	root.add_child(game)
 	game._slash("/b b h")
 	check(game.placing and game.place_type == "hut", "/b b h places a hut")
 	game.placing = false
+	# Typed with "/" like any other line, a complete hotkey acts without Enter.
+	game.open_chat("/")
+	game._on_chat_changed("/b b")
+	check(game.hud.chat_open and not game.placing, "/b b waits for a key")
+	game._on_chat_changed("/b b h")
+	check(not game.hud.chat_open and game.placing and game.place_type == "hut", "typing /b b h places a hut without Enter")
+	game.placing = false
+	game.open_chat("/")
+	game._on_chat_changed("/b bronze")
+	check(game.hud.chat_open and not game.placing, "typing a name that starts with a page letter doesn't act")
+	game.hud.close_chat()
+	game._on_chat_closed()
+	game.open_chat("/")
+	game._on_chat_changed("/r")
+	check(game.hud.picker.visible and game.hud.chat_open, "/r opens its popup")
+	game._on_chat_changed("/r g")
+	check(game.hud.chat_open, "a locked research key stays open and explains itself")
+	game.hud.close_chat()
+	game._on_chat_closed()
+	game.open_chat("/")
+	f.stock["food"] = 500.0
+	f.stock["wood"] = 500.0
+	f.age = 1
+	game._on_chat_changed("/r m")
+	check(not game.hud.chat_open and m.is_researching(0, "mounted_archery"), "typing /r m sets the research going without Enter")
+	f.age = 0
+	game.hud.history = ["/b b h"]
+	game.open_chat("/")
+	game.hud.history_i = 0
+	game._on_chat_changed("/b b h")
+	check(game.hud.chat_open and not game.placing, "an order recalled with Up still waits for Enter")
+	game.hud.close_chat()
+	game._on_chat_closed()
+	game.hud.history_i = -1
 	game._slash("/b v w")
 	check(not game.placing, "a locked structure can't be placed by key")
 	f.age = 1
@@ -1470,12 +1903,17 @@ func test_hotkeys() -> void:
 	game.placing = false
 	f.stock["wood"] = 100.0
 	game._slash("/c b w 2")
-	var made := []
+	var arm = m.buildings_of(0, "armory")[0]
+	check(arm.queue == ["wood_spear", "wood_spear"], "/c b w 2 queues two spears at the armory (%s)" % str(arm.queue))
+	var crewed := false
 	for c in m.crews_of(0):
 		for s in c.steps:
-			if s["action"] == "craft":
-				made.append([s["subject"], int(s["amount"])])
-	check(made == [["wood_spear", 2 * int(Defs.ITEMS["wood_spear"]["batch"])]], "/c b w 2 orders two batches (%s)" % str(made))
+			crewed = crewed or s["action"] == "craft"
+	check(not crewed, "queued weapons take no crew")
+	m._update_armories(float(Defs.ITEMS["wood_spear"]["time"]))
+	check(int(f.gear.get("wood_spear", 0)) == 1, "the armory makes one spear in %d s" % int(Defs.ITEMS["wood_spear"]["time"]))
+	check(is_equal_approx(float(f.stock["wood"]), 60.0), "the armory pays 40 wood for that spear")
+	check(arm.queue.size() == 1, "one spear is still waiting")
 	game.free()
 
 
@@ -1513,6 +1951,60 @@ func test_removed_buildings() -> void:
 	full._refresh_counts(f)
 	check(f.housing == Defs.POP_HARD_CAP, "the rival has room for huts to house 200 (%d)" % f.housing)
 	check(f.food_cap >= Defs.POP_HARD_CAP * Defs.WELL_FED_STOCK, "the rival has room to store food for 200 (%d)" % f.food_cap)
+
+
+func test_stables_militia() -> void:
+	# Two stables: once the first is full, driven-in horses fill the second.
+	var m = new_match(977)
+	var home: Vector2 = m.home_pos(0)
+	var cap := int(Defs.BUILDINGS["stable"]["horse_cap"])
+	m.fac(0).age = 1
+	var s1 = m.add_building(0, "stable", open_site(m, "stable", home, 10.0), 0.0, true)
+	var s2 = m.add_building(0, "stable", open_site(m, "stable", home, 24.0), 0.0, true)
+	for i in cap:
+		var h = m.spawn_unit(0, "horse", s1.pos)
+		h.stable = s1.id
+	for i in 3:
+		var w = m.spawn_unit(-1, "horse", home + Vector2(20 + i * 3, 10))
+		w.child = false
+	var herders: Array = m.idle_adults(0, home).slice(0, 2)
+	m.command(0, {"units": herders.map(func(u): return u.id), "steps": [step("tame", "horses", 3)]})
+	run(m, 150.0)
+	check(m._stable_count(s1) == cap, "the full stable stays at its cap")
+	check(m._stable_count(s2) >= 3, "the second stable takes the overflow (%d)" % m._stable_count(s2))
+	# Workers on a resource are counted for the HUD.
+	var m2 = new_match(977)
+	var crew: Array = m2.idle_adults(0, m2.home_pos(0)).slice(0, 3)
+	m2.command(0, {"units": crew.map(func(u): return u.id), "steps": [step("gather", "wood")]})
+	run(m2, 5.0)
+	check(int(m2.workers_by_resource(0).get("wood", 0)) == 3, "three woodcutters are counted")
+	# A call to arms mounts spearmen but keeps archers on foot until mounted archery is known.
+	for researched in [false, true]:
+		var m3 = new_match(977)
+		var h3: Vector2 = m3.home_pos(0)
+		m3.fac(0).age = 1
+		m3.add_building(0, "armory", open_site(m3, "armory", h3, 8.0), 0.0, true)
+		var st = m3.add_building(0, "stable", open_site(m3, "stable", h3, 24.0), 0.0, true)
+		for i in 2:
+			var horse = m3.spawn_unit(0, "horse", st.pos)
+			horse.stable = st.id
+			horse.child = false
+		m3.fac(0).gear["wood_spear"] = 1
+		m3.fac(0).gear["bow"] = 1
+		m3.fac(0).gear["arrows"] = 20
+		if researched:
+			m3.fac(0).researched["mounted_archery"] = true
+		var pair: Array = m3.idle_adults(0, h3).slice(0, 2)
+		m3.command(0, {"units": pair.map(func(u): return u.id), "steps": [step("arm")]})
+		run(m3, 60.0)
+		var riders := 0
+		for u in pair:
+			if u.mounted:
+				riders += 1
+				check(u.weapon != "" or u.bow, "only the armed ride")
+			elif u.bow:
+				check(not researched, "archers ride once mounted archery is known")
+		check(riders == (2 if researched else 1), "militia riders with research=%s: %d" % [researched, riders])
 
 
 func open_site(m, type: String, near: Vector2, from: float = 6.0) -> Vector2:
@@ -1578,7 +2070,7 @@ func test_gathering() -> void:
 		m.terrain.nodes.append(bush)
 		m._bucket_node(bush)
 		m.command(0, {"units": [m.idle_adults(0, home)[0].id], "steps": [step("gather", "berries")]})
-		run(m, 30.0)
+		run(m, 60.0)
 		check(bush.amount < 70.0, "a bush against a stockpile at %s gets picked (%.0f left)" % [offset, bush.amount])
 
 
@@ -1768,6 +2260,20 @@ func test_settlements() -> void:
 			sides[e["faction"]] = int(e["total"])
 	check(sides.size() == 2 and sides.get(2) == 1 and sides.get(5) == 1, "a mixed group is reported by side (%s)" % str(sides))
 	check(m.known_camps(0).is_empty(), "no rival camp is known before it has been seen")
+	# Attacking an unseen camp marches to the best guess instead of asking for a scout.
+	var raw = m.make_crew(0, m.idle_adults(0, m.home_pos(0)).slice(0, 2))
+	var blind: Dictionary = m.command(0, {"crew": raw.id, "steps": [step("attack", "", 0, "enemy")]})
+	check(blind.get("ok", false), "an attack on an unseen camp is not refused (%s)" % str(blind))
+	check(not m.enemy_ground(0)["sure"], "an unseen camp is only a guess")
+	# Armed troops report what they see to their own side.
+	var armed_u = m.unit(raw.members[0])
+	armed_u.weapon = "wood_spear"
+	var rb = m.home_of(3)
+	armed_u.pos = rb.pos + Vector2(8, 0)
+	m.rebuild_unit_hash()
+	m.update_vision()
+	check(not m.known_camps(0).is_empty(), "a soldier beside a rival camp reveals it")
+	m.fac(0).intel.clear()
 	# An army whose target falls comes home, still together.
 	var camp = m.home_of(3)
 	m.fac(0).intel["b%d" % camp.id] = {"kind": "building", "type": "campfire", "pos": camp.pos, "faction": 3, "t": 0.0}
@@ -1827,6 +2333,265 @@ func test_path_queue() -> void:
 			in_order = false
 		last[u.faction] = u.id
 	check(in_order, "whoever waited longest goes first")
+
+
+func test_strategy() -> void:
+	for pair in [["get to the iron age asap", "iron_age"], ["rush bronze", "bronze_age"], ["Captain Hal, iron age as fast as you can", "iron_age"],
+			["get gunpowder as soon as possible", "gunpowder"], ["focus on pike production", "pikes"], ["concentrate on archers", "archers"],
+			["make cavalry your priority", "cavalry"], ["focus on 40 swords", "swords"], ["go back to normal", "balanced"], ["focus on growth", "growth"]]:
+		var p: Dictionary = Parser.parse(pair[0])
+		check(p["ok"] and p["steps"].size() >= 1 and p["steps"][0]["action"] == "strategy" and p["steps"][0]["subject"] == pair[1], "'%s' is the %s strategy (%s)" % [pair[0], pair[1], str(p["steps"])])
+	check(Parser.parse("focus on 40 swords")["steps"][0]["amount"] == 40, "a focus takes a number")
+	for phrase in ["research gunpowder", "gather iron ore", "make 4 pikes", "build a mine", "attack their camp"]:
+		check(not Parser.parse(phrase)["steps"].any(func(s): return s["action"] == "strategy"), "'%s' is not a strategy" % phrase)
+	var both: Dictionary = Parser.parse("run the village and get to the iron age asap")
+	check(both["ok"] and both["steps"].size() == 2 and both["steps"][1]["subject"] == "iron_age", "a mandate can come with a strategy")
+
+	# A village captain told to race for iron gets there, mining and smelting by themselves.
+	var m = new_match(4242)
+	var f = m.fac(0)
+	var adults: Array = grown_village(m, 30)
+	f.stock["wood"] = 900.0
+	f.stock["stone"] = 400.0
+	f.stock["food"] = 300.0
+	for k in m.kcells_in(m.home_pos(0), 240.0):
+		f.knowledge[k] = 0.0
+	m.command(0, {"unit": adults[0].id, "individual": true, "steps": [step("mandate", "village")]})
+	var p = m.village_post(0)
+	var r: Dictionary = m.command(0, {"post": p.id, "steps": [step("strategy", "iron_age")]})
+	check(r["ok"] and p.goal == 3, "the village captain takes the Iron age as its aim: %s" % r.get("error", ""))
+	var reached := -1.0
+	while m.t < 1200.0:
+		run(m, 10.0)
+		m.messages.clear()
+		if f.age >= 3:
+			reached = m.t
+			break
+	check(reached > 0.0, "the captain reaches the Iron age within 20 minutes (age %s, %s)" % [Defs.AGES[f.age], str(p.blocked)])
+	check(m.post_status(p).contains("Iron") or f.age >= 3, "the post's status names the aim")
+	print("  iron age at %.0f s" % reached)
+	check(m.buildings_of(0, "mine", false).size() >= 2 and m.has_building(0, "smelter"), "with mines and a smelter it built itself")
+
+	# A pike focus keeps the armory stocked, through the queue, with no crew.
+	var w = new_match(4243)
+	var wf = w.fac(0)
+	var hands: Array = grown_village(w, 24)
+	wf.age = 2
+	wf.stock["wood"] = 2000.0
+	wf.stock["bronze"] = 600.0
+	wf.stock["food"] = 300.0
+	w.add_building(0, "armory", w.home_pos(0) + Vector2(22, 0), 0.0, true)
+	w.command(0, {"unit": hands[0].id, "individual": true, "steps": [step("mandate", "village")]})
+	var wp = w.village_post(0)
+	var told: Dictionary = w.command(0, {"post": wp.id, "steps": [step("strategy", "pikes", 15)]})
+	check(told["ok"] and wp.focus == "pikes" and wp.focus_keep == 15, "a pike focus takes a count")
+	# 90 s of research, then 15 s a pike at one armory.
+	run(w, 380.0)
+	check(wf.researched.has("armory_bronze"), "the captain researches the bronze armory the pikes need")
+	check(int(wf.gear.get("bronze_pike", 0)) >= 15, "and keeps 15 pikes in the armory (%d)" % int(wf.gear.get("bronze_pike", 0)))
+	check(not w.crews_of(0).any(func(c): return c.steps.any(func(s): return s["action"] == "craft")), "with nobody working at the armory")
+	var clear: Dictionary = w.command(0, {"post": wp.id, "steps": [step("strategy", "balanced")]})
+	check(clear["ok"] and wp.focus == "" and wp.goal == 0, "'balanced' drops the focus")
+	var nobody = new_match(4244)
+	var lone: Array = grown_village(nobody, 4)
+	check(not nobody.command(0, {"unit": lone[0].id, "steps": [step("strategy", "pikes")]})["ok"], "a strategy needs a captain with a post")
+
+
+func shift(down: bool) -> void:
+	var key := InputEventKey.new()
+	key.keycode = KEY_SHIFT
+	key.physical_keycode = KEY_SHIFT
+	key.pressed = down
+	key.shift_pressed = down
+	Input.parse_input_event(key)
+	Input.flush_buffered_events()
+
+
+func test_shift_buying() -> void:
+	var m = new_match(33)
+	var f = m.fac(0)
+	for k in 2:
+		m.add_building(0, "armory", m.home_pos(0) + Vector2(20, 14 * k), 0.0, true)
+	f.stock["wood"] = 2000.0
+	var game = chat_game(m)
+	game.open_chat("/")
+	shift(true)
+	check(Input.is_key_pressed(KEY_SHIFT), "the test can hold Shift")
+	for i in 7:
+		game._on_chat_changed("/c b w")
+	var queued := 0
+	for b in m.buildings_of(0, "armory"):
+		queued += b.queue.count("wood_spear")
+	check(queued == 7, "seven presses with Shift held queue seven spears (%d)" % queued)
+	check(game.hud.chat_open and game.hud.chat_edit.text.strip_edges() == "/c b", "the popup stays open for more (%s)" % game.hud.chat_edit.text)
+	var said: Array = game.hud.log_lines.filter(func(e): return e["node"].get_parsed_text().contains("wooden spear"))
+	check(said.is_empty(), "nothing is logged while still buying")
+	shift(false)
+	game.hud.close_chat()
+	game._on_chat_closed()
+	said = game.hud.log_lines.filter(func(e): return e["node"].get_parsed_text().contains("7 wooden spears"))
+	check(said.size() == 1, "one line sums it up when buying stops")
+	game.open_chat("/")
+	game._on_chat_changed("/c b w")
+	check(not game.hud.chat_open, "without Shift a key buys one and closes the popup")
+	game.free()
+
+
+func test_weapon_rules() -> void:
+	var m = new_match(31)
+	var f = m.fac(0)
+	check(not Defs.ITEMS.has("bronze_spear") and not Defs.ITEMS.has("iron_spear"), "there are no metal spears")
+	var arm = m.add_building(0, "armory", m.home_pos(0) + Vector2(20, 0), 0.0, true)
+	f.age = 4
+	f.researched["gunpowder"] = true
+	check(m.craft_problem(0, "wood_shield") == "" and m.craft_problem(0, "wood_spear") == "", "a wooden armory makes wooden gear")
+	arm.tier = 1
+	check(m.craft_problem(0, "wood_shield") != "", "a bronze armory no longer makes wooden shields")
+	check(m.craft_problem(0, "bronze_pike") == "", "but makes bronze pikes")
+	arm.tier = 2
+	for item in ["bronze_pike", "bronze_sword", "bronze_shield", "bronze_armor", "bronze_lance"]:
+		check(m.craft_problem(0, item) != "", "an iron armory doesn't make %s" % item)
+	for item in ["wood_spear", "bow", "arrows", "ram", "iron_pike", "iron_sword", "cannon"]:
+		check(m.craft_problem(0, item) == "", "an iron armory still makes %s" % item)
+	var p: Dictionary = Parser.parse("make 4 spears")
+	check(p["ok"] and m.resolve_steps(0, p["steps"])[0]["subject"] == "wood_spear", "spears are always wooden")
+	for item in ["wood_shield", "bronze_shield", "iron_shield"]:
+		f.gear[item] = 5
+	f.gear["iron_pike"] = 5
+	f.gear["bow"] = 5
+	f.gear["wood_spear"] = 5
+	var pikeman = m.spawn_unit(0, "villager", m.home_pos(0))
+	m._equip(pikeman, f, "iron_pike")
+	check(not m._equip(pikeman, f, "iron_shield") and pikeman.shield == "", "pikemen carry no shield")
+	var archer = m.spawn_unit(0, "villager", m.home_pos(0))
+	m._equip(archer, f, "bow")
+	m._equip_best(archer, f)
+	check(archer.bow and archer.shield == "", "archers carry no shield")
+	var spearman = m.spawn_unit(0, "villager", m.home_pos(0))
+	m._equip(spearman, f, "wood_spear")
+	check(m._equip(spearman, f, "wood_shield") and spearman.shield == "wood_shield", "spearmen do")
+	m._equip(spearman, f, "bow")
+	check(spearman.shield == "" and int(f.gear["wood_shield"]) == 5, "taking up a bow hands the shield back")
+	# A ball kills one thing outright.
+	var field = new_match(32)
+	var gun = field.spawn_unit(0, "cannon", field.home_pos(0))
+	var at: Vector2 = field.home_pos(0) + Vector2(60, 0)
+	var crowd := []
+	for k in 6:
+		var foe = field.spawn_unit(1, "villager", at + Vector2.from_angle(k * TAU / 6.0) * 0.9)
+		foe.armor = "iron_armor"
+		crowd.append(foe)
+	var other_gun = field.spawn_unit(1, "cannon", at + Vector2(0, 30))
+	field.rebuild_unit_hash()
+	var s = field.Shot.new()
+	s.kind = "ball"
+	s.faction = 0
+	s.shooter = gun.id
+	s.end = Vector3(crowd[0].pos.x, 0, crowd[0].pos.y)
+	field._ball_impact(s)
+	check(crowd.filter(func(u): return u.dead).size() == 1 and crowd[0].dead, "a ball kills the armoured man it lands on, and only him")
+	s.end = Vector3(other_gun.pos.x, 0, other_gun.pos.y)
+	field._ball_impact(s)
+	check(other_gun.dead, "and a ball destroys a cannon")
+	field.fire_ball(gun, at, -1)
+	var flight: float = field.shots.back().dur
+	check(flight > 0.0 and flight < 0.6, "a ball is fast but not instant (%.2f s over 60 m)" % flight)
+	var near := 0.0
+	var far := 0.0
+	for k in 200:
+		field.fire_ball(gun, field.home_pos(0) + Vector2(40, 0), -1)
+		near += Vector2(field.shots.back().end.x, field.shots.back().end.z).distance_to(field.home_pos(0) + Vector2(40, 0))
+		field.fire_ball(gun, field.home_pos(0) + Vector2(160, 0), -1)
+		far += Vector2(field.shots.back().end.x, field.shots.back().end.z).distance_to(field.home_pos(0) + Vector2(160, 0))
+	check(far > near * 6.0, "it misses by far more at long range (%.1f m against %.1f m)" % [far / 200.0, near / 200.0])
+
+
+func test_grand_army() -> void:
+	var spec: Dictionary = Defs.GRAND_ARMY
+	for case in [["small", 2, 11], ["medium", 2, 4242], ["medium", 2, 777], ["medium", 4, 93], ["large", 2, 1462], ["huge", 8, 5]]:
+		var m = Match.new()
+		var t0 := Time.get_ticks_msec()
+		m.setup({"seed": case[2], "map": case[0], "settlements": case[1], "mode": "grand_army"})
+		var took := Time.get_ticks_msec() - t0
+		var label := "grand army %s x%d seed %d" % case
+		var outside := 0
+		for f in m.factions:
+			var id: int = f.id
+			check(f.pop == spec["villagers"] and f.adults == spec["villagers"], "%s: side %d has %d villagers (%d)" % [label, id, spec["villagers"], f.pop])
+			check(f.housing == Defs.POP_HARD_CAP, "%s: side %d houses them all (%d)" % [label, id, f.housing])
+			for type in spec["buildings"]:
+				var n: int = m.buildings_of(id, type).size()
+				check(n == int(spec["buildings"][type]), "%s: side %d has %d %s (%d)" % [label, id, spec["buildings"][type], type, n])
+			check(m.buildings_of(id, "quarry").size() == 1, "%s: side %d has a quarry" % [label, id])
+			for dep in Defs.DEPOSITS:
+				check(m.buildings_of(id, "mine").any(func(b): return b.deposit == dep), "%s: side %d mines %s" % [label, id, dep])
+			for r in spec["stock"]:
+				check(is_equal_approx(float(f.stock[r]), float(spec["stock"][r])), "%s: side %d starts with %d %s" % [label, id, spec["stock"][r], r])
+			check(f.food_cap >= int(spec["stock"]["food"]), "%s: side %d can store its food" % [label, id])
+			check(f.age == Defs.AGES.size() - 1 and f.researched.size() == Defs.RESEARCH.size(), "%s: side %d has full tech" % [label, id])
+			for item in Defs.ITEMS:
+				if int(Defs.ITEMS[item].get("until", 99)) > 2:     # the iron armory replaces older gear
+					check(m.craft_problem(id, item) == "", "%s: side %d can make %s" % [label, id, item])
+			check(f.horses == int(spec["buildings"]["stable"]) * int(Defs.BUILDINGS["stable"]["horse_cap"]), "%s: side %d has full stables (%d)" % [label, id, f.horses])
+			var home: Vector2 = m.home_pos(id)
+			check(walk_out(m, id, home), "%s: side %d can leave by its gates" % [label, id])
+			check(not walk_out(m, (id + 1) % m.factions.size(), home), "%s: side %d's walls have no holes" % [label, id])
+			for type in ["armory", "stable"]:
+				outside += m.buildings_of(id, type).filter(func(b): return b.pos.distance_to(home) > 88.0).size()
+		check(outside == 0, "%s: armories and stables are inside the walls (%d out)" % [label, outside])
+		print("  %s set up in %d ms" % [label, took])
+	var big = Match.new()
+	big.setup({"seed": 4242, "map": "medium", "mode": "grand_army"})
+	var r: Dictionary = big.command(0, {"steps": [step("craft", "iron_pike", 60)]})
+	check(r.get("ok", false), "60 pikes can be ordered at once: %s" % r.get("error", ""))
+	check(big.buildings_of(0, "armory").all(func(b): return b.queue.size() == 3), "twenty armories share the order")
+	run(big, 76.0)
+	check(int(big.fac(0).gear.get("iron_pike", 0)) == 60, "and have made all 60 within 76 s (%d)" % int(big.fac(0).gear.get("iron_pike", 0)))
+	var riders: Array = big.idle_adults(0, big.home_pos(0)).slice(0, 30)
+	big.command(0, {"units": riders.map(func(u): return u.id), "steps": [step("mount")]})
+	run(big, 70.0)
+	var mounted: int = riders.filter(func(u): return u.mounted).size()
+	check(mounted == 30, "thirty riders find horses across several stables (%d)" % mounted)
+	var war = Match.new()
+	war.setup({"seed": 4242, "map": "medium", "mode": "grand_army", "ai_both": true})
+	war.fac(0).gear["iron_sword"] = 200
+	var army: Array = war.idle_adults(0, war.home_pos(0)).slice(0, 160)
+	war.command(0, {"units": army.map(func(u): return u.id), "steps": [step("arm", "iron_sword"), step("attack", "", 0, "enemy")]})
+	var slowest := 0.0
+	for i in 1100:
+		var began := Time.get_ticks_usec()
+		war.tick(Defs.TICK)
+		slowest = maxf(slowest, (Time.get_ticks_usec() - began) / 1000.0)
+		war.events.clear()
+	var clear: int = army.filter(func(u): return u.dead or u.pos.distance_to(war.home_pos(0)) > 100.0).size()
+	check(clear >= 140, "a big army marches out of its own walled town (%d of 160)" % clear)
+	check(slowest < 300.0, "without freezing the game (slowest tick %.0f ms)" % slowest)
+	var foe_home: Vector2 = big.home_pos(1)
+	var march: Vector2 = big.home_pos(0) + (foe_home - big.home_pos(0)).normalized() * 120.0
+	var since := Time.get_ticks_usec()
+	var route: PackedVector2Array = big.find_path(0, march, foe_home + Vector2(0, 10))
+	var route_ms := (Time.get_ticks_usec() - since) / 1000.0
+	check(route_ms < 100.0, "a route into a sealed camp doesn't freeze the game (%.0f ms)" % route_ms)
+	check(not route.is_empty() and route[-1].distance_to(foe_home) < 100.0 and route[-1].distance_to(foe_home) > 86.0, "and it ends at the foot of their wall")
+	check(big.fac(0).food_cap >= 9000 and float(big.fac(0).stock["food"]) > 9000.0, "the granary keeps the food (%d)" % int(big.fac(0).stock["food"]))
+
+
+## Whether this side could walk from inside a camp's walls to open country.
+func walk_out(m, faction: int, home: Vector2) -> bool:
+	var start: Vector2i = m.nearest_free_cell(faction, m.cell_of(home + Vector2(0, 8)))
+	var seen := {start: true}
+	var open: Array[Vector2i] = [start]
+	while not open.is_empty():
+		var c: Vector2i = open.pop_back()
+		if m.cell_center(c).distance_to(home) > 97.0:
+			return true
+		for d: Vector2i in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
+			var next: Vector2i = c + d
+			if seen.has(next) or m.solid_for(faction, next):
+				continue
+			seen[next] = true
+			open.append(next)
+	return false
 
 
 func test_rivals() -> void:

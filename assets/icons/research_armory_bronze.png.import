@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://b2p2k68vkryss"
-path="res://.godot/imported/upgrade_armory.png-459fb1033cffe41130385fbb3ea54038.ctex"
+uid="uid://cotna1g0i4o2p"
+path="res://.godot/imported/research_armory_bronze.png-0d97fad4ae80c6f69005d8c16b614a80.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/icons/upgrade_armory.png"
-dest_files=["res://.godot/imported/upgrade_armory.png-459fb1033cffe41130385fbb3ea54038.ctex"]
+source_file="res://assets/icons/research_armory_bronze.png"
+dest_files=["res://.godot/imported/research_armory_bronze.png-0d97fad4ae80c6f69005d8c16b614a80.ctex"]
 
 [params]
 

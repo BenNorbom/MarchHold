@@ -6,8 +6,8 @@ const Defs = preload("res://scripts/data/defs.gd")
 const AGE_TIPS := [
 	"",
 	"Stone age: stone walls, towers, stables and mines are open. Try /b v for advanced structures.",
-	"Bronze age: upgrade the armory to bronze for swords, pikes, lances and armor. Then upgrade the smelter to an iron furnace.",
-	"Iron age: upgrade the armory to iron, and build a university to research gunpowder.",
+	"Bronze age: press /r to research the bronze armory for swords, pikes, lances and armor. Every armory improves at once. Then upgrade the smelter to an iron furnace.",
+	"Iron age: research the iron armory (/r), and build a university to research gunpowder.",
 	"Gunpowder: the iron armory can now cast cannons and shot. 'man the cannon' then 'attack their camp'.",
 ]
 
@@ -19,7 +19,8 @@ var on := true
 
 func setup(game) -> void:
 	g = game
-	on = bool(Settings.get_val("hints", true)) and int(Settings.get_val("matches_played", 0)) < 3 and not game.opts.get("tutorial", false)
+	on = bool(Settings.get_val("hints", true)) and int(Settings.get_val("matches_played", 0)) < 3 and not game.opts.get("tutorial", false) \
+		and str(game.opts.get("mode", "standard")) == "standard"
 
 
 func _hint(key: String, text: String) -> void:
@@ -35,7 +36,7 @@ func on_message(msg: Dictionary) -> void:
 		if f.age < AGE_TIPS.size():
 			_hint("age%d" % f.age, AGE_TIPS[f.age])
 	elif msg["kind"] == "alarm":
-		_hint("alarm", "'to arms' arms everyone and guards home; 'fall back' brings everyone back to camp; 'back to work' returns them to what they were doing.")
+		_hint("alarm", "'to arms' arms everyone and guards home; 'fall back' brings everyone back to camp; 'back to work' sends them to the armory to hand their weapons back (and riders their horses), then on to what they were doing.")
 	elif msg["kind"] == "report":
 		_hint("report", "Reports are kept under /s, and the field map (M) shows what your scouts saw and when.")
 

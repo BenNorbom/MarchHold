@@ -29,7 +29,6 @@ const SLASH_ALIASES := {
 	"map": "m", "tech": "t", "help": "h", "?": "h", "stop": "cancel",
 }
 const CHAT_HINTS := {
-	"r": ["Research · /r", "Press Enter to browse research. The stable and university each teach their own."],
 	"l": ["Ledger · /l", "Press Enter to see supplies, food, housing and crew status."],
 	"p": ["People and crews · /p", "Press Enter to list crews. Type [b]@Name[/b] to address one."],
 	"s": ["Scout reports · /s", "Press Enter to read reports. To send a scout, type [b]send a scout east[/b]."],
@@ -81,7 +80,8 @@ var menu_items: Array = []
 var people_page := 0
 var people_pages := 1
 var chat_hint_command := ""
-var picker_quick := false     # opened with B or C: a key acts without Enter
+var buying := {}              # what Shift-repeat buying has queued so far: {id, n}
+var picker_quick := false     # opened with B or C: keys may run together ("bh") and a wrong one is dropped
 var map_open := false
 var map_refresh_t := 0.0
 var look_unit := -1
@@ -105,7 +105,8 @@ func start(options: Dictionary) -> void:
 	m = Match.new()
 	var map_id: String = Defs.MAP_REFERENCE if is_tutorial else str(opts.get("map", Defs.MAP_REFERENCE))
 	var settlements := 2 if is_tutorial else 1 + int(opts.get("opponents", 1))
-	m.setup({"seed": seed_in, "map": map_id, "settlements": settlements})
+	var mode: String = "standard" if is_tutorial else str(opts.get("mode", "standard"))
+	m.setup({"seed": seed_in, "map": map_id, "settlements": settlements, "mode": mode})
 	rivals.clear()
 	for id in range(1, m.factions.size()):
 		var rival = Rival.new()
@@ -151,7 +152,7 @@ func start(options: Dictionary) -> void:
 	if is_tutorial:
 		tutorial = Tutorial.new()
 		tutorial.setup(self)
-	if not Settings.get_val("intro_seen", false) or opts.get("intro", false):
+	if mode == "standard" and (not Settings.get_val("intro_seen", false) or opts.get("intro", false)):
 		intro = Intro.new()
 		add_child(intro)
 		intro.setup(self)
@@ -164,6 +165,11 @@ func start(options: Dictionary) -> void:
 func _welcome() -> void:
 	if tutorial:
 		tutorial.begin()
+		return
+	if str(opts.get("mode", "standard")) == "grand_army":
+		hud.log_line("Grand army: %d villagers behind stone walls, every technology, full stables and full stores. %s the same." % [
+			Defs.GRAND_ARMY["villagers"], "Commander Rook has" if rivals.size() == 1 else "All %d rivals have" % rivals.size()], "system")
+		hud.log_line("Your armories share each order: /c 60 v p makes 60 iron pikes. Then 'arm 60 with pikes', or 'to arms' for everyone.", "system")
 		return
 	if rivals.size() == 1:
 		hud.log_line("You stand at your campfire with six villagers. Commander Rook has made camp somewhere across the valley.", "system")
@@ -378,7 +384,7 @@ func _click_selects(shift: bool) -> bool:
 
 func _update_hud() -> void:
 	var faction = m.fac(0)
-	hud.update_economy(faction.pop, faction.housing, faction.stock)
+	hud.update_economy(faction.pop, faction.housing, faction.stock, m.workers_by_resource(0))
 	var me = m.commander(0)
 	if me == null:
 		return
@@ -855,6 +861,19 @@ func _captains_post(id: int):
 	return m.post_of(u) if u and u.faction == 0 and m.leads_post(u) else null
 
 
+## The post whose captain a message names, by full name or first name. null when none.
+func _post_named_in(text: String):
+	var low := " " + Parser.normalize(text).strip_edges() + " "
+	for p in m.posts_of(0):
+		var lead = m.unit(p.captain)
+		if lead == null:
+			continue
+		var full: String = lead.name.to_lower()
+		if low.contains(" " + full + " ") or low.contains(" " + full.get_slice(" ", 0) + " "):
+			return p
+	return null
+
+
 func _open_post_chat(p, prefill: String = "") -> void:
 	chat_crew = -1
 	addressee = {"post": p.id}
@@ -938,26 +957,29 @@ func _on_chat_changed(text: String) -> void:
 
 func _update_picker(command: String, args: PackedStringArray) -> void:
 	chat_hint_command = command
-	# An order recalled with Up waits for Enter like a typed one.
-	var quick: bool = picker_quick and hud.history_i < 0
-	var pick: Dictionary = Hotkeys.read(m, command, Hotkeys.split_keys(args) if quick else args)
-	if quick and pick.get("key", "") != "":
+	# Whatever the way in, a key acts the moment it's complete. Only an order recalled with Up
+	# waits for Enter. Keys typed as "bh" are for B and C, so a name like "bronze" is left alone.
+	var acts: bool = hud.history_i < 0
+	var packed: bool = picker_quick and acts
+	var pick: Dictionary = Hotkeys.read(m, command, Hotkeys.split_keys(command, args) if packed else args)
+	if acts and pick.get("key", "") != "":
 		if pick["error"] == "":
 			_take_pick(pick)
 			return
-		hud.set_draft("/%s %s" % [command, pick["page"]])
+		if packed:
+			hud.set_draft(Hotkeys.draft(command, pick["page"]))
 	var page: String = pick.get("page", "")
 	if page == "":
 		hud.show_picker_pages(command)
 	else:
-		hud.show_picker_entries(command, pick, Hotkeys.page_entries(m, command, page), quick)
+		hud.show_picker_entries(command, pick, Hotkeys.page_entries(m, command, page), acts)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
 func _on_picker_page(page: String) -> void:
 	if not hud.chat_open or not Defs.HOTKEYS.has(chat_hint_command):
 		return
-	var draft := "/%s %s " % [chat_hint_command, page]
+	var draft := Hotkeys.draft(chat_hint_command, page) + " "
 	hud.set_draft(draft)
 	_on_chat_changed(draft)
 
@@ -969,12 +991,12 @@ func _on_picker_key(key: String) -> void:
 	# The page comes from what's typed, so read it the same way the popup did.
 	var args: PackedStringArray = hud.chat_edit.text.strip_edges().split(" ", false).slice(1)
 	if picker_quick:
-		args = Hotkeys.split_keys(args)
+		args = Hotkeys.split_keys(command, args)
 	var shown: Dictionary = Hotkeys.read(m, command, args)
 	var page: String = shown.get("page", "")
 	if page == "":
 		return
-	var chosen := PackedStringArray([page, key])
+	var chosen := PackedStringArray([key]) if Hotkeys.only_page(command) != "" else PackedStringArray([page, key])
 	if shown["key"] == key and shown["batches"] > 1:
 		chosen.append(str(shown["batches"]))
 	var pick: Dictionary = Hotkeys.read(m, command, chosen)
@@ -985,12 +1007,48 @@ func _on_picker_key(key: String) -> void:
 
 
 func _take_pick(pick: Dictionary) -> void:
+	if pick["entry"].get("kind", "") == "craft" and Input.is_key_pressed(KEY_SHIFT):
+		_buy_more(pick)
+		return
 	hud.close_chat()
 	_on_chat_closed()
 	_choose_order_entry(pick["entry"], pick["batches"])
 
 
+## With Shift held, each press of a craft key or click on its picture queues one more,
+## and the popup stays open for the next. One line in the log says what it all came to.
+func _buy_more(pick: Dictionary) -> void:
+	var id: String = pick["entry"]["id"]
+	var amount: int = int(Defs.ITEMS[id]["batch"]) * int(pick["batches"])
+	if buying.get("id", id) != id:
+		_bought()
+	var why: String = m.step_problem(0, {"action": "craft", "subject": id, "count": 0, "amount": amount, "where": ""})
+	if why == "":
+		why = m.queue_craft(0, id, amount, true)
+	var note := ""
+	if why == "":
+		buying = {"id": id, "n": int(buying.get("n", 0)) + amount}
+		Sfx.play("click", null, -12.0)
+	else:
+		note = "[color=#f0c060]%s[/color]\n" % (why.left(1).to_upper() + why.substr(1))
+	var n: int = int(buying.get("n", 0))
+	if n > 0:
+		note += "[color=#ffd870]%d %s queued[/color] · keep Shift held and press again, or hold the key" % [n, Defs.item_name(id, n)]
+	var page: String = pick["page"]
+	hud.set_draft(Hotkeys.draft("c", page) + ("" if Hotkeys.only_page("c") != "" else " "))
+	hud.show_picker_entries("c", {"page": page, "key": "", "batches": 1, "entry": {}, "error": "", "note": note},
+		Hotkeys.page_entries(m, "c", page), true)
+
+
+func _bought() -> void:
+	var n: int = int(buying.get("n", 0))
+	if n > 0:
+		hud.log_line("The armories will make %d %s." % [n, Defs.item_name(buying["id"], n)], "crew")
+	buying = {}
+
+
 func _on_chat_closed() -> void:
+	_bought()
 	if chat_hint_command != "":
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	chat_hint_command = ""
@@ -1083,6 +1141,16 @@ func _on_chat(text: String) -> void:
 		if destination == null:
 			hud.log_line(named_dest["error"] if named_dest["error"] != "" else "Use 'join @Name' with the name of someone in the destination crew.", "warn")
 			return
+		var dest_post = _captains_post(destination.id)
+		if dest_post and not req.is_empty():
+			# Joining a captain means joining their post, and so whatever they are doing.
+			var joiners: Array = m.people_in(0, req)
+			if joiners.is_empty():
+				hud.log_line("Choose who should join first.", "warn")
+				return
+			m.put_in_post(dest_post, joiners.filter(func(jp): return jp.id != destination.id))
+			hud.log_line("%s joined %s." % [who.trim_suffix(" alone"), m.post_label(dest_post)], "crew")
+			return
 		var result: Dictionary = m.reassign_crew(0, req, destination.id)
 		if result["ok"]:
 			hud.log_line("%s joined %s." % [who.trim_suffix(" alone"), m.crew_label(m.crews[result["crew"]])], "crew")
@@ -1093,6 +1161,14 @@ func _on_chat(text: String) -> void:
 	if naming:
 		_name_place(naming.get_string(1).strip_edges())
 		return
+	var give := Parser.assign_in(text)
+	if not give.is_empty():
+		# "Add 3 villagers to Captain Hal": they join his post and take up whatever he needs done.
+		var named_cap: Dictionary = m.find_person(0, give["name"], true)
+		var held = _captains_post(named_cap["unit"].id) if named_cap["unit"] != null else null
+		if held:
+			_execute({"post": held.id}, [{"action": "assign", "subject": give["subject"], "count": give["count"], "amount": 0, "where": ""}], m.post_label(held))
+			return
 	var parsed: Dictionary = Parser.parse(text, m.places_of(0).keys())
 	if parsed.get("cancel", false):
 		if _discard_terra_request(req):
@@ -1158,7 +1234,17 @@ func _on_terra(result: Dictionary) -> void:
 			if err != "":
 				hud.log_line("That plan can't be done yet: " + err, "warn")
 				return
-			_execute(ctx["req"], steps, ctx["who"], site)
+			var req: Dictionary = ctx["req"]
+			var who: String = ctx["who"]
+			if steps[0]["action"] == "assign" and not req.has("post"):
+				# "Add 3 to Captain Hal" names the captain in the message, not the address.
+				var named_post = _post_named_in(ctx["text"])
+				if named_post == null:
+					hud.log_line("Say which captain should take them on, e.g. 'add 3 villagers to Captain Hal'.", "warn")
+					return
+				req = {"post": named_post.id}
+				who = m.post_label(named_post)
+			_execute(req, steps, who, site)
 		"cancel":
 			_stop_orders(ctx["req"])
 
@@ -1214,7 +1300,7 @@ func _execute(req: Dictionary, steps: Array, who: String, site: int = -1) -> voi
 			s["subject"] = found[0].type
 	if req.get("individual", false) or req.has("units"):
 		for s in steps:
-			if s["action"] != "mandate":    # there, the number is the post's size
+			if not s["action"] in ["mandate", "free", "assign"]:    # there, the number is a head count
 				s["count"] = 0
 	var needs := []
 	for i in steps.size():
@@ -1403,13 +1489,16 @@ func _slash(text: String) -> void:
 	var c: String = SLASH_ALIASES.get(token, token)
 	var arg := " ".join(parts.slice(1)).strip_edges()
 	match c:
-		"b", "c":
+		"b", "c", "r":
 			var pick: Dictionary = Hotkeys.read(m, c, parts.slice(1))
 			if pick.is_empty():
-				if c == "b":
-					_build_by_name(arg)
-				else:
-					_craft_by_name(arg)
+				match c:
+					"b":
+						_build_by_name(arg)
+					"c":
+						_craft_by_name(arg)
+					"r":
+						_research_by_name(arg)
 			elif pick["key"] == "":
 				# Deferred: the line edit stops editing once this submit returns.
 				_open_picker.call_deferred(c, pick["page"])
@@ -1423,11 +1512,6 @@ func _slash(text: String) -> void:
 			_menu_people()
 		"s":
 			_menu_reports()
-		"r":
-			if arg != "":
-				_research_by_name(arg)
-			else:
-				_menu_research()
 		"m":
 			_toggle_map()
 		"t":
@@ -1453,7 +1537,7 @@ func _open_picker(command: String, page: String) -> void:
 		return
 	picker_quick = true
 	cmd.move_enabled = false
-	hud.open_chat(address_label if address_label != "" else "your people", "/%s %s" % [command, page], chat_crew >= 0)
+	hud.open_chat(address_label if address_label != "" else "your people", Hotkeys.draft(command, page), chat_crew >= 0)
 
 
 func _open_menu(kind: String, title: String, body: String, footer: String = "Number keys or click to choose · Esc to close") -> void:
@@ -1470,22 +1554,6 @@ func _close_menu() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	cmd.look_enabled = true
 	cmd.move_enabled = not hud.chat_open
-
-
-func _menu_research() -> void:
-	var all: Array = m.research_menu(0)
-	menu_items = all.filter(func(e): return e["locked"] == "")
-	var lines: Array[String] = []
-	for i in menu_items.size():
-		var entry: Dictionary = menu_items[i]
-		lines.append("[url=%d][b]%d. %s[/b] · %s[/url]" % [i + 1, i + 1, entry["name"], Defs.cost_text(entry["cost"])])
-		lines.append(entry["desc"])
-	for entry in all:
-		if entry["locked"] != "":
-			lines.append("%s · %s" % [entry["name"], entry["locked"]])
-	var body := "
-".join(lines) if not lines.is_empty() else "Everything is researched."
-	_open_menu("research", "Research", body)
 
 
 func _research_by_name(arg: String) -> void:
@@ -1516,13 +1584,6 @@ func _menu_select(i: int) -> void:
 				var c = m.crews[row["crew"]]
 				_open_crew_chat(c, c.leader)
 		return
-	if menu_kind != "research":
-		return
-	if i < 1 or i > menu_items.size():
-		return
-	var e: Dictionary = menu_items[i - 1]
-	_close_menu()
-	_choose_order_entry(e)
 
 
 func _choose_order_entry(e: Dictionary, batches: int = 1) -> void:
@@ -1581,7 +1642,7 @@ func _menu_ledger() -> void:
 	var fs: String = Defs.FOOD_STATES[f.food_state]
 	var why := ""
 	if f.food_state < 3:
-		why = "  — well fed needs %d food stored (storage %d%s)" % [need, f.food_cap, ": build stockpiles" if need > f.food_cap else ""]
+		why = ("  — births are slow while only fed; " if f.food_state == 2 else "  — no births until fed; ") + "well fed needs %d food stored (storage %d%s)" % [need, f.food_cap, ": build stockpiles" if need > f.food_cap else ""]
 	elif f.pop >= f.housing:
 		why = "  — but housing is full: build huts"
 	lines.append("[b]Food[/b]  %d stored · [color=#%s]%s[/color]%s" % [int(f.stock["food"]), "a8d890" if f.food_state == 3 else ("f0c060" if f.food_state >= 1 else "ff6a50"), fs, why])
@@ -1684,16 +1745,16 @@ func _menu_help() -> void:
 
 [b]Slash commands[/b] (instant, no Terra needed)
    /b  build · b basic or v advanced, then one key: /b b h is a hut (or press B, B, H) · /b hut works too
-   /c  craft weapons the same way: /c b w is spears (or C, B, W) · /c b w 2 or /c spears 2 makes two batches
+   /c  craft weapons the same way: /c b w is spears (or C, B, W) · /c 2 b w or /c spears 2 makes two batches
    /l  ledger (or Tab outside chat) · /p people and crews · /s scout reports
-   /r  research menu · /r gunpowder researches it directly
+   /r  research, picked the same way: /r b bronze armory · /r i iron armory · /r m mounted archery · /r g gunpowder
    /m  field map (or M) · /t tech tree · /h this help · /cancel stop a crew
 
 [b]Orders you can type[/b]
    gather wood · gather 30 wood then build a hut · pick berries · work the farms · hunt
    build a hut · build a palisade · continue construction · finish the wall · make 32 arrows · arm 6 with spears · to arms! · fall back · back to work
    send two scouts east · scout their camp · attack their camp · guard the mark · follow me · hold
-   tame 3 horses · mount up · smelt bronze · upgrade the armory · research gunpowder · man the cannon
+   tame 3 horses · mount up · smelt bronze · research the bronze armory · research gunpowder · man the cannon
    promote (makes a captain) · dismiss · status · then chains steps
    Name, run the village · take twenty and run a mine here · set up a garrison at the mark · raise an army
    call this East Hill names the spot you just marked (R), or where you stand. Then: hold East Hill
@@ -1705,7 +1766,7 @@ func _menu_help() -> void:
    Gatherers pick the shortest haul to a drop-off, unless you say 'here', 'there' or a direction.
 
 [b]Winning[/b]  Kill every rival commander (they wear crowns). If you fall, the match is lost.
-[b]Growing[/b]  People are born only when the village is [i]well fed[/i] and there is free housing."""
+[b]Growing[/b]  People are born when the village is [i]fed[/i] (slower) or [i]well fed[/i], and there is free housing. Births build up while housing is full, and arrive together when room opens."""
 	_open_menu("help", "Help", t, "Esc to close")
 
 

@@ -25,7 +25,7 @@ const BUILD_WORDS := [
 
 const ITEM_WORDS := [
 	["iron sword", "iron_sword"], ["bronze sword", "bronze_sword"], ["sword", "bronze_sword:generic"],
-	["iron spear", "iron_spear"], ["bronze spear", "bronze_spear"], ["wooden spear", "wood_spear"], ["spear", "wood_spear:generic"],
+	["wooden spear", "wood_spear"], ["spear", "wood_spear"],
 	["iron shield", "iron_shield"], ["bronze shield", "bronze_shield"], ["wooden shield", "wood_shield"], ["shield", "wood_shield:generic"],
 	["iron armor", "iron_armor"], ["bronze armor", "bronze_armor"], ["armor", "bronze_armor:generic"], ["armour", "bronze_armor:generic"],
 	["iron pike", "iron_pike"], ["pike", "bronze_pike:generic"], ["iron lance", "iron_lance"], ["lance", "bronze_lance:generic"],
@@ -129,6 +129,44 @@ static func mandate_in(s: String) -> Dictionary:
 	return {}
 
 
+const AGE_WORDS := {"stone": "stone_age", "bronze": "bronze_age", "iron": "iron_age", "gunpowder": "gunpowder", "cannon": "gunpowder"}
+const FOCUS_WORDS := [["pike production", "pikes"], ["pikemen", "pikes"], ["pikes", "pikes"], ["pike", "pikes"], ["swordsmen", "swords"],
+	["swords", "swords"], ["sword", "swords"], ["archers", "archers"], ["archery", "archers"], ["bows", "archers"], ["cavalry", "cavalry"],
+	["horsemen", "cavalry"], ["lancers", "cavalry"], ["horses", "cavalry"], ["cannons", "cannons"], ["artillery", "cannons"],
+	["spearmen", "spears"], ["spears", "spears"], ["growth", "growth"], ["economy", "growth"], ["growing", "growth"], ["population", "growth"],
+	["defence", "defence"], ["defense", "defence"], ["defences", "defence"], ["defenses", "defence"], ["walls", "defence"]]
+
+
+## "Get to the Iron age ASAP", "rush bronze", "focus on pike production", "go back to normal".
+static func strategy_in(s: String) -> Array:
+	var out := []
+	var age := RegEx.create_from_string(" (?:get|go|advance|rush|race|push|head|hurry|move|jump|reach|aim|beeline|tech)(?: up| on| ahead| straight)?(?: to| for| into| towards?)?(?: the)? (stone|bronze|iron|gunpowder|cannon)(?: age| tech)?(?:s)? ").search(s)
+	if age == null:
+		age = RegEx.create_from_string(" (stone|bronze|iron|gunpowder) age (?:asap|as soon as possible|as fast as (?:you )?can|quickly|fast|first|now|is the priority) ").search(s)
+	if age == null:
+		age = RegEx.create_from_string(" (?:research |get )?(gunpowder) (?:asap|as soon as possible|as fast as (?:you )?can|first) ").search(s)
+	if age:
+		out.append(_step("strategy", AGE_WORDS[age.get_string(1)]))
+	var lead := " (?:focus|concentrate|specialise|specialize|prioritise|prioritize|put everything|go all in|go all-in|double down|lean)(?: on| into| in)?(?: the| our| making| producing| building| more)?(?: production of)? "
+	var priority := " make (?:the )?([a-z ]+?) (?:your|our|the) (?:priority|focus|main job) "
+	var found := RegEx.create_from_string(lead + "(.+)$").search(s)
+	var text := found.get_string(1) if found else ""
+	if text == "":
+		var p := RegEx.create_from_string(priority).search(s)
+		if p:
+			text = p.get_string(1)
+	if text == "" and RegEx.create_from_string(" (?:mass produce|mass-produce|build up|stock up on|pump out) ").search(s):
+		text = s
+	if text != "":
+		for pair in FOCUS_WORDS:
+			if (" " + text + " ").contains(" " + pair[0] + " "):
+				out.append(_step("strategy", pair[1], clampi(number_in(s), 0, 10000)))
+				break
+	if out.is_empty() and RegEx.create_from_string(" (?:go back to|return to|back to|switch to|play) (?:a )?(?:normal|balanced|a balanced plan|balance)| (?:drop|forget|cancel|clear) (?:the |your )?(?:focus|strategy|priority)| stop focusing ").search(s):
+		out.append(_step("strategy", "balanced"))
+	return out
+
+
 static func limits_in(s: String) -> Array:
 	var out := []
 	var kept := RegEx.create_from_string(" (?:keep|hold|leave|reserve) ([0-9]+|[a-z]+) (wood|stone|food|bronze ore|coal|iron ore|bronze|iron)( back| in reserve| aside| spare)? ")
@@ -210,6 +248,9 @@ static func count_in(s: String) -> int:
 			return n
 		if i > 0 and words[i - 1] in ["send", "take", "with", "use", "get", "need", "arm"]:
 			return n
+		# "put 2 on stone", "move 3 to wood": a number of people, since the next word isn't a thing.
+		if i > 0 and words[i - 1] in ["put", "move", "switch", "shift", "swap"] and nxt in ["on", "onto", "to", "into", "off", "from"]:
+			return n
 	return 0
 
 
@@ -220,7 +261,7 @@ static func where_in(s: String, default_where: String = "") -> String:
 	for k in DIRECTIONS:
 		if has_word(s, k):
 			return DIRECTIONS[k]
-	if has_word(s, "enemy") or s.contains("their camp") or s.contains("their base") or s.contains("their village") or has_word(s, "them") or s.contains(" rook"):
+	if has_word(s, "enemy") or s.contains("their camp") or s.contains("their base") or s.contains("their village") or s.contains("their town") or s.contains("their house") or has_word(s, "them") or s.contains(" rook"):
 		return "enemy"
 	if s.contains(" the mark") or s.contains(" marked") or s.contains(" flag") or s.contains(" over there") or s.contains(" there "):
 		return "marked"
@@ -281,6 +322,123 @@ static func parse(text: String, places: Array = []) -> Dictionary:
 	return out
 
 
+const PEOPLE_WORDS := ["people", "person", "men", "man", "villagers", "villager", "workers", "worker", "hands", "folks", "peasants", "peasant"]
+const ASSIGN_VERBS := ["add", "send", "give", "assign", "attach", "allocate", "transfer", "move", "put", "post"]
+
+
+## The gather subject named at word i, and how many words it takes: [subject, span] or [].
+static func _gather_at(words: PackedStringArray, i: int) -> Array:
+	for span in [2, 1]:
+		if i + span > words.size():
+			continue
+		var phrase := " ".join(words.slice(i, i + span))
+		for pair in GATHER_WORDS:
+			var key: String = pair[0]
+			if phrase == key or phrase == key + "s" or phrase == key + "es":
+				return [] if pair[1].contains(":generic") else [pair[1], span]
+	return []
+
+
+## "take 2 people off wood and put them on stone", "move 3 from stone to wood":
+## [free <from> n, gather <to>], or [] when the sentence doesn't name both.
+static func transfer_in(s: String) -> Array:
+	var words := s.strip_edges().split(" ", false)
+	var src := ""
+	var dst := ""
+	var i := 0
+	while i < words.size():
+		var hit := _gather_at(words, i)
+		if hit.is_empty():
+			i += 1
+			continue
+		# The word just before (or two before, "off the wood") says what the resource is for.
+		var marker := ""
+		for back in [1, 2]:
+			if i - back < 0:
+				break
+			var w: String = words[i - back]
+			if w in ["off", "from"]:
+				marker = "src"
+				break
+			if w in ["on", "onto", "to", "into", "for"]:
+				marker = "dst"
+				break
+			if not w in ["the", "some", "all", "of"]:
+				break
+		if marker == "src" and src == "":
+			src = hit[0]
+		elif marker == "dst" and src != "" and dst == "" and hit[0] != src:
+			dst = hit[0]
+		i += hit[1]
+	if src == "" or dst == "":
+		return []
+	var n := 0 if (s.contains(" everyone ") or s.contains(" everybody ") or s.contains(" all of them ") or s.contains(" all the ")) else number_in(s)
+	return [_step("free", src, 0, "", n), _step("gather", dst)]
+
+
+## "add 3 villagers to Captain Hal", "give Hal two more men", "reinforce Hal":
+## {count, subject, name} where name is the text to look for the captain in, or {}.
+static func assign_in(text: String) -> Dictionary:
+	var s := normalize(text)
+	var lead := RegEx.create_from_string("^ (?:(?:please|now|ok|okay|can you|could you|i want you to|i need you to|let's|go ahead and) )+").search(s)
+	if lead:
+		s = " " + s.substr(lead.get_end())
+	var words := s.strip_edges().split(" ", false)
+	if words.size() < 2:
+		return {}
+	var verb: String = words[0]
+	var count_all: bool = s.contains(" everyone ") or s.contains(" all the ") or s.contains(" every ") or s.contains(" all free ") or s.contains(" all idle ")
+	if verb == "reinforce" or verb == "bolster":
+		var tail := " ".join(words.slice(1)).trim_prefix("captain ").trim_prefix("cap ")
+		return {"count": 0 if count_all else _assign_count(s), "subject": "", "name": tail}
+	if not verb in ASSIGN_VERBS:
+		return {}
+	var people_at := -1
+	for k in words.size():
+		if words[k] in PEOPLE_WORDS or words[k] in ["them", "more"]:
+			people_at = k
+			break
+	if people_at < 0:
+		return {}
+	# "give Hal 3 more men": the name comes before the people.
+	if verb == "give" and not words.slice(1, people_at).is_empty() and not (words[1] in ["a", "an", "one", "two", "three", "four", "five", "six", "some", "more"] or words[1].is_valid_int()):
+		var name_part := " ".join(words.slice(1, people_at)).trim_prefix("captain ").trim_prefix("cap ")
+		# Drop the number and filler words at the end of the name.
+		var bits := name_part.split(" ", false)
+		while not bits.is_empty() and (bits[-1].is_valid_int() or bits[-1] in ["a", "an", "more", "extra", "another", "new", "free", "idle", "spare", "some", "two", "three", "four", "five", "six", "one"]):
+			bits.remove_at(bits.size() - 1)
+		if bits.is_empty():
+			return {}
+		return {"count": 0 if count_all else _assign_count(s), "subject": "", "name": " ".join(bits)}
+	var marker_at := -1
+	for k in range(people_at + 1, words.size()):
+		if words[k] in ["to", "under", "with", "into", "onto"]:
+			marker_at = k
+			break
+	if marker_at < 0 or marker_at + 1 >= words.size():
+		return {}
+	var middle := " " + " ".join(words.slice(0, marker_at)) + " "
+	var subject := ""
+	for key in [" from ", " off "]:
+		if middle.contains(key):
+			subject = find_in(" " + middle.substr(middle.find(key) + key.length()), GATHER_WORDS)
+			if subject.contains(":generic"):
+				subject = ""
+	var name := " ".join(words.slice(marker_at + 1)).trim_prefix("the ").trim_prefix("captain ").trim_prefix("cap ")
+	return {"count": 0 if (count_all and subject == "") else _assign_count(middle), "subject": subject, "name": name}
+
+
+## How many people an "add people to a captain" order means. One for "a villager", two
+## when no number is given, and the number said otherwise.
+static func _assign_count(s: String) -> int:
+	var n := number_in(s)
+	if n > 0:
+		return n
+	if s.contains(" a villager ") or s.contains(" a man ") or s.contains(" a worker ") or s.contains(" a person ") or s.contains(" another ") or s.contains(" one more "):
+		return 1
+	return 2
+
+
 static func _parse(text: String) -> Dictionary:
 	var s := normalize(text)
 	var out := {"ok": false, "steps": [], "all": false, "cancel": false, "confirm": false}
@@ -296,6 +454,7 @@ static func _parse(text: String) -> Dictionary:
 	if s.contains(" everyone ") or s.contains(" everybody ") or s.contains(" all of you ") or s.contains(" all hands "):
 		out["all"] = true
 	var settings := limits_in(s)
+	settings.append_array(strategy_in(s))
 	var charge := mandate_in(s)
 	if not charge.is_empty():
 		settings.push_front(charge)
@@ -303,6 +462,12 @@ static func _parse(text: String) -> Dictionary:
 		out["steps"] = settings
 		out["all"] = false
 		out["ok"] = Defs.validate_steps(_clean(settings)) == ""
+		return out
+	var moved := transfer_in(s)
+	if not moved.is_empty():
+		out["steps"] = moved
+		out["all"] = false
+		out["ok"] = Defs.validate_steps(_clean(moved)) == ""
 		return out
 	# Split into sequential parts.
 	var parts: Array[String] = []
@@ -356,6 +521,14 @@ const VERBS := ["gather", "collect", "chop", "cut", "harvest", "get", "fetch", "
 	"stay", "follow", "come", "fall", "retreat", "go", "return", "recall", "mount", "ride", "man", "crew", "tame", "catch",
 	"round", "bring", "smelt", "research", "study", "upgrade", "promote", "dismiss", "disband", "report", "status", "keep", "start", "stop",
 	"continue", "resume", "finish"]
+
+
+## "put 2 on stone", "move them to wood", "switch three onto berries".
+static func _moves_people_to(p: String) -> bool:
+	for verb in ["put", "move", "switch", "shift", "swap", "send", "set"]:
+		if has_word(p, verb):
+			return p.contains(" on ") or p.contains(" onto ") or p.contains(" to ") or p.contains(" into ")
+	return false
 
 
 static func _starts_with_verb(p: String) -> bool:
@@ -417,6 +590,10 @@ static func _parse_part(p: String, out: Dictionary):
 	if has_word(p, "research") or has_word(p, "study") or p.contains("learn gunpowder"):
 		if p.contains("archery") or p.contains("mounted") or p.contains("horse archer"):
 			return _step("research", "mounted_archery")
+		if has_word(p, "armory") or has_word(p, "armoury"):
+			return _step("research", "armory_iron" if has_word(p, "iron") else "armory_bronze")
+		if has_word(p, "bronze") or has_word(p, "iron"):
+			return null
 		return _step("research", "gunpowder") if p.contains("gunpowder") or p.contains("powder") else null
 	if has_word(p, "upgrade") or p.contains("improve the"):
 		if has_word(p, "armory") or has_word(p, "armoury"):
@@ -429,7 +606,9 @@ static func _parse_part(p: String, out: Dictionary):
 		return _step("scout", "", 0, where_in(p, ""), maxi(count, 0))
 	# Fighting.
 	if has_word(p, "attack") or has_word(p, "charge") or has_word(p, "raid") or has_word(p, "assault") or p.contains("kill them") or p.contains("destroy"):
-		return _step("attack", "", 0, where_in(p, "enemy"), count)
+		# "Attack the village" can only mean theirs: you never attack your own home.
+		var target := where_in(p, "enemy")
+		return _step("attack", "", 0, "enemy" if target == "home" else target, count)
 	if has_word(p, "guard") or has_word(p, "defend") or has_word(p, "protect") or p.contains("watch the"):
 		if _unknown_place(p):
 			return null
@@ -443,6 +622,8 @@ static func _parse_part(p: String, out: Dictionary):
 	var build := find_in(p, BUILD_WORDS)
 	var item2 := find_in(p, ITEM_WORDS)
 	var making := has_word(p, "make") or has_word(p, "craft") or has_word(p, "forge") or has_word(p, "cast") or has_word(p, "build") or has_word(p, "produce")
+	if item2 == "ram" and build == "" and has_word(p, "build") and not (has_word(p, "make") or has_word(p, "craft") or has_word(p, "produce")):
+		return _step("build", "ram", 0, "", count)    # built in the field by villagers; "make a ram" is the armory's
 	if making and item2 != "" and (build == "" or p.find(item2.split("_")[0]) < p.find(build.split("_")[0])):
 		return _step("craft", item2, number_in(p), "", count)
 	if build != "" and (making or has_word(p, "construct") or p.contains("put up") or has_word(p, "raise") or has_word(p, "erect") or p.contains("set up") or p.strip_edges().begins_with("a ")):
@@ -456,7 +637,7 @@ static func _parse_part(p: String, out: Dictionary):
 		return st
 	# Gathering.
 	var res := find_in(p, GATHER_WORDS)
-	var verbish := has_word(p, "gather") or has_word(p, "collect") or has_word(p, "chop") or has_word(p, "cut") or has_word(p, "harvest") or has_word(p, "get") or has_word(p, "fetch") or has_word(p, "mine") or has_word(p, "quarry") or has_word(p, "pick") or has_word(p, "hunt") or has_word(p, "farm") or p.contains("work the") or has_word(p, "keep") or p.contains("go for") or has_word(p, "bring")
+	var verbish := has_word(p, "gather") or has_word(p, "collect") or has_word(p, "chop") or has_word(p, "cut") or has_word(p, "harvest") or has_word(p, "get") or has_word(p, "fetch") or has_word(p, "mine") or has_word(p, "quarry") or has_word(p, "pick") or has_word(p, "hunt") or has_word(p, "farm") or p.contains("work the") or has_word(p, "keep") or p.contains("go for") or has_word(p, "bring") or _moves_people_to(p)
 	if res != "" and verbish:
 		if has_word(p, "hunt"):
 			res = "hunt"

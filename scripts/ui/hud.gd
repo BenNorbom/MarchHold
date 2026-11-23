@@ -362,7 +362,7 @@ func _on_chat_key(ev: InputEvent) -> void:
 
 
 func _input(ev: InputEvent) -> void:
-	if chat_open and picker.visible and ev is InputEventKey and ev.echo and ev.unicode > 32:
+	if chat_open and picker.visible and ev is InputEventKey and ev.echo and ev.unicode > 32 and not ev.shift_pressed:
 		# A held hotkey is one press, not a string of letters.
 		get_viewport().set_input_as_handled()
 		return
@@ -673,10 +673,11 @@ func _refresh_log_visibility() -> void:
 
 # --- Per frame ----------------------------------------------------------------------
 
-func update_economy(population: int, housing: int, stock: Dictionary) -> void:
+func update_economy(population: int, housing: int, stock: Dictionary, workers: Dictionary = {}) -> void:
 	supply_label.text = "Villagers  %d/%d" % [population, housing]
 	for resource: String in RESOURCE_DISPLAY_ORDER:
-		resource_counts[resource].text = str(int(stock.get(resource, 0)))
+		var n := int(workers.get(resource, 0))
+		resource_counts[resource].text = "%d  (%d)" % [int(stock.get(resource, 0)), n] if n > 0 else str(int(stock.get(resource, 0)))
 
 
 func update_status(hp: float, max_hp: float, stamina: float, held: String, yaw_deg: float, home_deg: float) -> void:

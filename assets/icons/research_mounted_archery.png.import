@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dp5mrtbcmr2lh"
-path="res://.godot/imported/craft_bronze_spear.png-191b2c39d380799c9e7d2daf47d830fd.ctex"
+uid="uid://b8tbjhy66sw4x"
+path="res://.godot/imported/research_mounted_archery.png-e5ec15d586e27f64490e161507cbd200.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/icons/craft_bronze_spear.png"
-dest_files=["res://.godot/imported/craft_bronze_spear.png-191b2c39d380799c9e7d2daf47d830fd.ctex"]
+source_file="res://assets/icons/research_mounted_archery.png"
+dest_files=["res://.godot/imported/research_mounted_archery.png-e5ec15d586e27f64490e161507cbd200.ctex"]
 
 [params]
 
