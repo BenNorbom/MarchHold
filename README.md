@@ -149,7 +149,9 @@ powershell -ExecutionPolicy Bypass -File tools\build.ps1
 
 ## Status
 
-Version 0.5.0 adds multi-rival matches, captain posts, combat timing and parries, stone tower garrisons, and build and craft hotkeys. Crews can resume construction and return to previous work after a military order.
+Version 0.6.0 adds the Grand army mode, strategy orders for captains (“get to the Iron age ASAP”, “focus on pike production”), armories that work through queues by themselves, armory upgrades as research in a new `/r` popup, battering rams built in the field, Shift to keep buying, and births while only fed. Berries run out sooner, so farms matter. Weapons are bought one at a time and cost more; metal spears are gone, and pikemen and archers carry no shield. Cannonballs kill one target outright. Rook defends far better against rushes, and big battles no longer freeze the game.
+
+Version 0.5.0 added multi-rival matches, captain posts, combat timing and parries, stone tower garrisons, and build and craft hotkeys.
 
 Version 0.4.0 added three map sizes, grid build and craft menus, named stone and ore landmarks, and clearer berry bushes and ore, and slows births slightly. Version 0.3.2 added click and Shift+click selection of villagers. Version 0.3.1 let Terra fill in order details and submit orders immediately, with manual placement for construction. Version 0.3.0 added individual crew orders, slash-command previews, and animated villager models. Version 0.2.0 added ChatGPT plan sign-in and model selection for Terra. Version 0.1.0 introduced the full lean tech tree, chat and slash commands, Terra, scouting, combat, horses, cannons, the AI rival, the intro and the tutorial. Next up: saving and resuming, an art pass on horses, formations and morale tuning, voice orders, and online play for up to 8 players.
 

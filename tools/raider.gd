@@ -45,16 +45,18 @@ func update(dt: float) -> void:
 		if not anyone.is_empty():
 			m.command(fid, {"unit": anyone[0].id, "individual": true, "steps": [step("mandate", "village")]})
 		return
+	# Like a player saving for a rush: the captain may not spend what the next step needs.
+	f.reserve = _saving_for(f)
 	_build_first(f, home)
 	if not foot and m.has_building(fid, "stable") and f.horses < riders and not _crew_doing("tame"):
 		var hands: Array = m.idle_adults(fid, home)
 		var p = m.village_post(fid)
-		var pick: Array = m.post_members(p).filter(func(u): return u.id != p.captain and not u.child and not m.under_direct_order(u)).slice(0, 2)
-		if pick.size() == 2:
+		var pick: Array = m.post_members(p).filter(func(u): return u.id != p.captain and not u.child and not m.under_direct_order(u)).slice(0, 4)
+		if pick.size() == 4:
 			m.command(fid, {"units": pick.map(func(u): return u.id), "steps": [step("tame", "horses", riders)]})
 	if m.has_building(fid, "armory") and _spears(f) < riders:
 		m.command(fid, {"steps": [step("craft", "wood_spear", riders - _spears(f))]})
-	if m.t >= next_wave and _spears(f) >= riders and (foot or f.horses >= riders):
+	if m.t >= next_wave and int(f.gear.get("wood_spear", 0)) >= riders and (foot or f.horses >= riders):
 		var p = m.village_post(fid)
 		var men: Array = m.post_members(p).filter(func(u): return u.id != p.captain and not u.child and not m.under_direct_order(u)).slice(0, riders)
 		if men.size() >= riders:
@@ -65,6 +67,20 @@ func update(dt: float) -> void:
 			if r.get("ok", false):
 				waves += 1
 				next_wave = m.t + wave_gap
+
+
+## What the captain must leave in store: the next building of the rush, then the spears.
+func _saving_for(f) -> Dictionary:
+	if f.pop < 12 or f.pop >= f.housing - 1:
+		return {}       # grow first, and never let saving stop the next hut
+	for type in (["armory"] if foot else ["quarry", "armory", "stable"]):
+		if m.buildings_of(fid, type, false).is_empty():
+			var cost: Dictionary = Defs.BUILDINGS[type]["cost"].duplicate()
+			if type == "stable" and f.age < 1:
+				return {}
+			return cost
+	var short := riders - _spears(f)
+	return {"wood": 40 * short} if short > 0 else {}
 
 
 func _spears(f) -> int:

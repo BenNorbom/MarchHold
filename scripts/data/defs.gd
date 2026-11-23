@@ -3,7 +3,7 @@ extends RefCounted
 ## schema sent to Terra, the slash menus, the ledger, the tech tree and the AI
 ## rival's options are all generated from these tables.
 
-const VERSION := "0.5.0"
+const VERSION := "0.6.0"
 
 # --- World -------------------------------------------------------------------
 # size: metres per side, a multiple of 256 so every grid and terrain chunk divides evenly.

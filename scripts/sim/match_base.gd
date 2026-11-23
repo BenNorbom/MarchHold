@@ -214,6 +214,7 @@ class Post:
 	var alert := ""             # intruder, raid or falling_back
 	var alert_t := -999.0       # when the threat was last seen
 	var threat := 0             # the most seen at once during this alert
+	var riders := 0             # how many of them were mounted
 	var threat_at := Vector2.ZERO
 	var refuge := Vector2.ZERO
 	var lost := 0

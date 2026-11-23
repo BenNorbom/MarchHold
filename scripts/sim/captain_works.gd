@@ -327,6 +327,12 @@ static func _village(m, p, out: Array) -> void:
 		out.append(_building(Rank.FOOD, "farm"))
 	if _planned(m, p.faction, "food_cap") < pop * Defs.WELL_FED_STOCK * 1.5 + 20.0:
 		out.append(_building(Rank.FOOD, "stockpile"))
+	elif pop >= 8 and Planner.wood_haul_long(m, p.faction, p.center) and Planner.tree_stockpile_site(m, p.faction, p.center) != null:
+		# A drop-off at the tree line roughly triples what the woodcutters bring in.
+		var by_trees := _building(Rank.FOOD, "stockpile")
+		by_trees["by_trees"] = true
+		by_trees["what"] = "build stockpile by the trees"
+		out.append(by_trees)
 	var housing := _planned(m, p.faction, "housing")
 	if housing < Defs.POP_HARD_CAP and housing - pop <= maxi(6, pop / 5):
 		out.append(_building(Rank.HOUSING, "hut"))
@@ -509,7 +515,7 @@ static func _start(m, p, want: Dictionary) -> bool:
 	var people := _hands(m, p, WALL_BUILDERS if wall else BUILDERS)
 	if people.is_empty():
 		return false
-	var placed := lay_out(m, p, type, want.get("deposit", ""))
+	var placed := lay_out(m, p, type, want.get("deposit", ""), want.get("by_trees", false))
 	if not placed["ok"]:
 		return false
 	var step := _step("build", type)
@@ -544,7 +550,7 @@ static func _queue(m, p, item: String, wanted: int) -> bool:
 
 
 ## Picks and marks out a site in the post's area. Used for the captain's own plans and for "build a ..." orders.
-static func lay_out(m, p, type: String, deposit: String = "") -> Dictionary:
+static func lay_out(m, p, type: String, deposit: String = "", by_trees: bool = false) -> Dictionary:
 	var d: Dictionary = Defs.BUILDINGS[type]
 	if not may_build(m, p, type):
 		return {"ok": false, "error": "A %s isn't part of running the %s. Address villagers, or use /b, to place it yourself." % [d["name"].to_lower(), p.name]}
@@ -556,6 +562,12 @@ static func lay_out(m, p, type: String, deposit: String = "") -> Dictionary:
 	var front: Vector2 = p.center - m.home_pos(p.faction)
 	if front.length() < 1.0:
 		front = Vector2(m.map_size, m.map_size) * 0.5 - p.center
+	if by_trees:
+		var spot = Planner.tree_stockpile_site(m, p.faction, p.center)
+		if spot != null and spot[0].distance_to(p.center) <= p.radius and Planner._leaves_lane(m, p.faction, type, spot[0], spot[1]):
+			var r: Dictionary = m.place_site(p.faction, type, spot[0], spot[1])
+			if r.get("ok", false):
+				return {"ok": true, "ids": [r["id"]]}
 	var deposits: Array = [deposit]
 	if type == "mine" and deposit == "":
 		deposits = Defs.DEPOSITS

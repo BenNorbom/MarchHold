@@ -3,6 +3,7 @@ extends SceneTree
 ##   godot --headless --path . -s res://tools/train_ai.gd -- [options]
 ##     --suite=rush|duel|all   rush: Rook against a scripted cavalry rusher, like a quick human player.
 ##                             duel: Rook's openings against each other.
+##     --only=spear            run only the rushes whose label contains this
 ##     --seeds=3               maps per matchup
 ##     --minutes=20            how long each match may run
 ##     --difficulty=2          Rook's difficulty
@@ -12,6 +13,8 @@ const Defs = preload("res://scripts/data/defs.gd")
 const Match = preload("res://scripts/sim/match.gd")
 const Rival = preload("res://scripts/ai/rival.gd")
 const Raider = preload("res://tools/raider.gd")
+
+const RUINED_POP := 5   # Rook alive at the end with fewer people than this counts as beaten
 
 var args := {}
 var results := []
@@ -30,11 +33,15 @@ func _main() -> void:
 	var level := int(args.get("difficulty", "2"))
 	if suite in ["rush", "all"]:
 		var rushes := [
-			{"label": "cavalry rush x8 at 7:00", "riders": 8, "first_wave": 420.0},
-			{"label": "cavalry rush x6 at 5:30", "riders": 6, "first_wave": 330.0},
-			{"label": "spear rush x8 at 4:00", "riders": 8, "first_wave": 240.0, "foot": true},
+			# Each goes as soon as it has the men, horses and spears; first_wave is only the earliest.
+			{"label": "cavalry rush, 8 riders", "riders": 8, "first_wave": 240.0},
+			{"label": "cavalry rush, 6 riders", "riders": 6, "first_wave": 240.0},
+			{"label": "spear rush, 8 on foot", "riders": 8, "first_wave": 240.0, "foot": true},
 		]
+		var only := str(args.get("only", ""))
 		for rush in rushes:
+			if only != "" and not str(rush["label"]).contains(only):
+				continue
 			for strategy in Rival.STRATEGIES:
 				for k in seeds:
 					_rush_match(rush, strategy, level, 9100 + k * 37, minutes)
@@ -58,9 +65,12 @@ func _rush_match(rush: Dictionary, strategy: String, level: int, seed_in: int, m
 	_play(m, [raider, rook], minutes)
 	var f1 = m.fac(1)
 	var f0 = m.fac(0)
-	var held: bool = not m.over or m.winner == 1
+	# A village left with a handful of people has lost, even if the clock ran out first.
+	var ruined: bool = not m.over and f1.pop < RUINED_POP
+	var held: bool = (not m.over and not ruined) or (m.over and m.winner == 1)
+	var outcome := "Rook WINS" if m.over and m.winner == 1 else ("ROOK DIES" if m.over else ("ROOK RUINED" if ruined else "Rook holds"))
 	var line := "RUSH %-26s vs %-8s seed %d | %s at %5.1f min | Rook pop %d age %s kills %d deaths %d | raider waves %d pop %d deaths %d | %.0f s" % [
-		rush["label"], strategy, seed_in, ("Rook holds" if not m.over else ("Rook WINS" if m.winner == 1 else "ROOK DIES")), m.t / 60.0,
+		rush["label"], strategy, seed_in, outcome, m.t / 60.0,
 		f1.pop, Defs.AGES[f1.age], f1.kills, f1.deaths, raider.waves, f0.pop, f0.deaths, (Time.get_ticks_msec() - t0) / 1000.0]
 	print(line)
 	results.append({"suite": "rush", "key": rush["label"], "strategy": strategy, "held": held, "won": m.over and m.winner == 1,

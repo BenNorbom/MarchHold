@@ -107,7 +107,8 @@ static func _wanted(m, p, workers: Array) -> Array:
 				var share := mini(left, ceili(workers.size() * 0.35))
 				left -= share - _works_jobs(m, p, jobs, share)
 			if f.age >= 1 or m.has_building(p.faction, "quarry"):
-				var stone := mini(Planner.stone_workers(f.adults, 0.2 if m.post_goal(p) >= 3 else 0.12), left)
+				var stone := mini(Planner.stone_workers(f.adults, 0.2 if m.post_goal(p) >= 3 else 0.12, float(f.stock.get("stone", 0)),
+					float(f.stock.get("wood", 0)), 450.0 if m.post_goal(p) >= 3 or p.focus == "defence" else 250.0), left)
 				_add(jobs, "stone", "gather", "stone", stone)
 				left -= stone
 			_add(jobs, "wood", "gather", "wood", left)
