@@ -306,7 +306,10 @@ func _build_picker() -> void:
 
 
 func _position_picker() -> void:
-	picker.position = chat_panel.position - Vector2(0, picker.size.y + 6)
+	var at := chat_panel.position - Vector2(0, picker.size.y + 6)
+	if village_widgets and Rect2(at, picker.size).intersects(village_widgets.get_rect()):
+		at.x = minf(village_widgets.get_rect().end.x + 8, root.size.x - picker.size.x - 12)
+	picker.position = at
 
 
 func show_picker_entries(command: String, pick: Dictionary, entries: Array, quick: bool) -> void:
@@ -447,6 +450,7 @@ func _build_map() -> void:
 func _build_village() -> void:
 	village_widgets = VBoxContainer.new()
 	village_widgets.position = Vector2(18, 14)
+	village_widgets.resized.connect(_position_picker)
 	village_widgets.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	village_widgets.add_theme_constant_override("separation", 12)
 	root.add_child(village_widgets)
