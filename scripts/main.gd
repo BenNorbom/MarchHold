@@ -81,6 +81,7 @@ func _ready() -> void:
 		get_tree().quit()
 		return
 	if smoke:
+		Settings.data["terra_provider"] = Settings.TERRA_OFF
 		Settings.data["intro_seen"] = true
 		_start({"seed": 777, "difficulty": 1, "opponents": dev_rivals, "mode": dev_mode})
 		_smoke()
@@ -175,7 +176,7 @@ func _demo_buildings() -> void:
 	var f = m.fac(0)
 	f.age = 4
 	var plan := [["hut", 14, 0.4], ["hut", 16, 1.2], ["hut", 22, 2.0], ["hut", 24, 2.7], ["armory", 20, 3.5],
-		["stable", 32, 5.0], ["smelter", 30, 5.8], ["watch_post", 36, 0.9], ["tower", 40, 2.4], ["university", 44, 3.1], ["farm", 34, 4.0],
+		["stable", 32, 5.0], ["watch_post", 36, 0.9], ["tower", 40, 2.4], ["university", 44, 3.1], ["farm", 34, 4.0],
 		["stockpile", 18, 5.4]]
 	for p in plan:
 		var pos: Vector2 = home + Vector2.from_angle(p[2]) * float(p[1])
@@ -218,7 +219,6 @@ func _demo_battle(n: int) -> void:
 			var u = m.spawn_unit(side, "villager", at)
 			u.name = "Demo"
 			u.bow = kits[k % kits.size()] == "bow"
-			u.arrows = 16 if u.bow else 0
 			u.weapon = "" if u.bow else kits[k % kits.size()]
 			u.shield = "wood_shield" if k % 3 == 2 else ""
 			men.append(u)
@@ -246,7 +246,7 @@ func _smoke() -> void:
 		m.tick(0.1)
 		g.run_rivals(0.1)
 	g._process(0.016)
-	say.call("/b b h")
+	say.call("/b h")
 	print("placing: ", g.placing, " type: ", g.place_type)
 	for k in 30:
 		var p: Vector2 = home + Vector2.from_angle(k * 0.7) * (16.0 + k)
@@ -272,7 +272,7 @@ func _smoke() -> void:
 	say.call("to arms")
 	say.call("cancel")
 	say.call("what is the meaning of the weather")
-	for cmdtxt in ["/l", "/p", "/s", "/t", "/h", "/c", "/r", "/b hut", "/c arrows 2"]:
+	for cmdtxt in ["/l", "/p", "/s", "/t", "/h", "/c", "/r", "/b hut", "/c spears 2"]:
 		say.call(cmdtxt)
 		await get_tree().process_frame   # /b and /c reopen the chat as a picker
 		if g.hud.chat_open:
@@ -330,9 +330,11 @@ func _take_shot() -> void:
 				game.m.fac(0).knowledge.fill(game.m.t - 120.0)
 				game._toggle_map()
 			"build":
-				game.open_chat("/b b", true)
+				game.open_chat("/b ", true)
 			"research":
 				game.open_chat("/r ", true)
+			"armory":
+				game.open_chat("/c ", true)
 			"ledger":
 				game._menu_ledger()
 			"chat":

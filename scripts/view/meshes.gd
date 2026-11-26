@@ -640,7 +640,7 @@ func rock_mesh(kind: String, variant: int) -> ArrayMesh:
 				var r := g.rng.randf_range(1.6, 3.4)
 				g.sphere(Vector3(g.rng.randf_range(-3, 3), r * 0.25 - 0.4, g.rng.randf_range(-3, 3)), r, 5, 9, Vector3(1.0, g.rng.randf_range(0.6, 1.1), 0.9), 0.2, 0.6)
 		_:
-			# Deposits: bronze_ore, coal, iron_ore
+			# Bronze and iron deposits
 			g.slot("rock", m("dep_" + kind))
 			for i in 5:
 				var r := g.rng.randf_range(0.8, 1.7)

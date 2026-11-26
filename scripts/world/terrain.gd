@@ -15,7 +15,7 @@ const HOME_STONE_OFF_AXIS := 30.0 # degrees to either side of the way the comman
 class RNode:
 	var id := 0
 	var kind := ""      # tree, rock, berry, deposit, carcass
-	var sub := ""       # pine/oak, boulder/outcrop, bush, bronze_ore/coal/iron_ore, deer
+	var sub := ""       # pine/oak, boulder/outcrop, bush, bronze/iron, deer
 	var pos := Vector2.ZERO
 	var amount := 0.0   # < 0 means it never runs out
 	var scale := 1.0

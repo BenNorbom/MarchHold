@@ -1,6 +1,6 @@
 ; Inno Setup script for MarchHold. Build with tools/build.ps1 (or: ISCC.exe installer\MarchHold.iss).
 #ifndef AppVersion
-  #define AppVersion "0.6.0"
+  #define AppVersion "0.7.0"
 #endif
 
 [Setup]

@@ -5,10 +5,10 @@ const Defs = preload("res://scripts/data/defs.gd")
 
 const AGE_TIPS := [
 	"",
-	"Stone age: stone walls, towers, stables and mines are open. Try /b v for advanced structures.",
-	"Bronze age: press /r to research the bronze armory for swords, pikes, lances and armor. Every armory improves at once. Then upgrade the smelter to an iron furnace.",
+	"Stone age: stone walls, towers, stables and mines are open. Press B to choose a structure.",
+	"Bronze age: press R to research the bronze armory for swords, pikes, lances and armor. Every armory improves at once. Then research Iron Mining at a mine.",
 	"Iron age: research the iron armory (/r), and build a university to research gunpowder.",
-	"Gunpowder: the iron armory can now cast cannons and shot. 'man the cannon' then 'attack their camp'.",
+	"Gunpowder: the iron armory can now cast cannons. 'man the cannon' then 'attack their camp'.",
 ]
 
 var g
@@ -36,7 +36,7 @@ func on_message(msg: Dictionary) -> void:
 		if f.age < AGE_TIPS.size():
 			_hint("age%d" % f.age, AGE_TIPS[f.age])
 	elif msg["kind"] == "alarm":
-		_hint("alarm", "'to arms' arms everyone and guards home; 'fall back' brings everyone back to camp; 'back to work' sends them to the armory to hand their weapons back (and riders their horses), then on to what they were doing.")
+		_hint("alarm", "'To arms' calls villagers who can get a weapon to defend home. The others keep working. 'Back to work' returns gear and horses, then restores their jobs.")
 	elif msg["kind"] == "report":
 		_hint("report", "Reports are kept under /s, and the field map (M) shows what your scouts saw and when.")
 
@@ -55,15 +55,15 @@ func tick(dt: float) -> void:
 		_hint("talk", "Look at a villager and press Enter to give orders. With nobody addressed, idle people take the job.")
 	var hut_wood: int = int(Defs.BUILDINGS["hut"]["cost"]["wood"])
 	if float(f.stock["wood"]) >= hut_wood and not m.has_building(0, "hut"):
-		_hint("hut", "You have %d wood: build a hut with /b b h to make room for more people." % hut_wood)
+		_hint("hut", "You have %d wood: build a hut with /b h to make room for more people." % hut_wood)
 	if f.pop >= f.housing and f.food_state == 3:
-		_hint("housing", "Housing is full, so no more births. Build huts (/b b h).")
+		_hint("housing", "Housing is full, so no more births. Build huts (/b h).")
 	if f.food_state <= 1 and t > 60.0:
-		_hint("food", "Food is short. Say 'pick berries', build a farm (/b b f), or say 'hunt'.")
+		_hint("food", "Food is short. Say 'pick berries', build a farm (/b f), or say 'hunt'.")
 	if f.pop * Defs.WELL_FED_STOCK > f.food_cap:
-		_hint("storage", "Your stores are too small to keep this many people well fed. Each stockpile (/b b s) holds 50 more food.")
+		_hint("storage", "Your stores are too small to keep this many people well fed. Each stockpile (/b s) holds 50 more food.")
 	if m.has_building(0, "armory"):
-		_hint("armory", "The armory is up. /c makes gear (/c b w for spears); 'arm 5 with spears' equips people. Stand by it and press E to arm yourself.")
+		_hint("armory", "The armory is up. /c makes gear (/c w for spears); 'arm 5 with spears' equips people. Stand by it and press E to arm yourself.")
 	var me = m.commander(0)
 	if me and me.shield != "":
 		_hint("shield", "Hold right click to raise your shield. It only covers what is in front of you.")

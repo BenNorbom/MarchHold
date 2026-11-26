@@ -57,7 +57,6 @@ class Unit:
 	var shield := ""
 	var armor := ""
 	var bow := false
-	var arrows := 0
 	var mounted := false
 	var cooldown := 0.0
 	var work_t := 0.0
@@ -74,7 +73,6 @@ class Unit:
 	var scout_leg := 0
 	var siege := -1             # villager: engine it crews. engine: unused
 	var crew_ids: Array = []    # engine: crew unit ids
-	var ammo := 0               # engine: shot loaded / carried
 	var team := false           # engine: horse team attached
 	var herd := -1
 	var driver := -1            # horse: villager driving it in
@@ -254,6 +252,7 @@ class Faction:
 	var attack_msg_t := -99.0
 	var is_ai := false
 	var mark := Vector2.ZERO
+	var marked_unit := -1
 	var mark_t := -999.0
 	var has_mark := false
 	var places := {}            # lower-case name -> {name, pos}
@@ -371,7 +370,7 @@ func _init_world(tr: Terrain, faction_count: int) -> void:
 	uside.resize(bucket_n * bucket_n)
 	uside.fill(0)
 	bld_buckets.clear()
-	fair_paths = faction_count > 2
+	fair_paths = faction_count > 2 or options.get("mode", "standard") == "grand_army"
 	path_queues.clear()
 	paths_left.resize(faction_count)
 	paths_left.fill(MAX_PATHS_PER_TICK / faction_count)
@@ -779,7 +778,7 @@ func find_path(faction: int, a: Vector2, b: Vector2) -> PackedVector2Array:
 		ids = blocking.route(pf, ca, cb)
 	var out := PackedVector2Array()
 	if ids.is_empty():
-		return PackedVector2Array([b])
+		return PackedVector2Array([a])
 	# String-pull: keep a waypoint only when the straight line to the next breaks.
 	var anchor := a
 	var i := 1
@@ -1203,7 +1202,7 @@ func site_problem(faction: int, type: String, p: Vector2, rot: float, size_overr
 		var want: String = d["near"]
 		var nd = _site_node(type, p)
 		if nd == null:
-			return "Build the quarry next to a rock outcrop." if want == "outcrop" else "Build the mine on a bronze ore, coal or iron ore deposit."
+			return "Build the quarry next to a rock outcrop." if want == "outcrop" else "Build the mine on a bronze or iron deposit."
 		if type == "mine":
 			for b: Building in buildings:
 				if not b.dead and b.type == "mine" and b.node == nd.id:
@@ -1229,8 +1228,6 @@ func unlock_problem(faction: int, type: String) -> String:
 		return "That can't be built."
 	if f.age < int(d["age"]):
 		return "Needs the %s age: %s" % [Defs.AGES[d["age"]], Defs.AGE_HOW[d["age"]].to_lower()]
-	if type == "university" and not has_building(faction, "smelter"):
-		return "Needs a smelter."
 	if d.has("needs") and not f.researched.has(d["needs"]):
 		return "Needs the %s. Research it with /r." % Defs.RESEARCH[d["needs"]]["name"].to_lower()
 	return ""

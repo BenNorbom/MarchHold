@@ -3,7 +3,7 @@ extends RefCounted
 ## schema sent to Terra, the slash menus, the ledger, the tech tree and the AI
 ## rival's options are all generated from these tables.
 
-const VERSION := "0.6.0"
+const VERSION := "0.7.0"
 
 # --- World -------------------------------------------------------------------
 # size: metres per side, a multiple of 256 so every grid and terrain chunk divides evenly.
@@ -46,9 +46,9 @@ const MODES := {
 # tiers: in-place upgrades and armory research, already done. Every stable starts full.
 const GRAND_ARMY := {
 	"villagers": 200,
-	"stock": {"food": 10000, "wood": 5000, "stone": 3000, "bronze_ore": 3000, "coal": 3000, "iron_ore": 3000, "bronze": 3000, "iron": 3000},
-	"buildings": {"tower": 8, "armory": 20, "stable": 10, "university": 1, "smelter": 2, "stockpile": 3, "hut": 32, "farm": 24},
-	"tiers": {"armory": 2, "smelter": 1},
+	"stock": {"food": 10000, "wood": 5000, "stone": 3000, "bronze": 3000, "iron": 3000},
+	"buildings": {"tower": 8, "armory": 20, "stable": 10, "university": 1, "stockpile": 3, "hut": 32, "farm": 24},
+	"tiers": {"armory": 2},
 }
 
 # --- Population --------------------------------------------------------------
@@ -62,8 +62,6 @@ const RATION_ADULT := 0.025       # food per second
 const RATION_CHILD := 0.0125
 const WELL_FED_STOCK := 3.0       # food in store per person to count as well fed
 const FED_STOCK := 1.0
-const QUIVER := 16
-const SHOT_LOAD := 8
 
 const FOOD_STATES := ["Starving", "Hungry", "Fed", "Well fed"]
 const FOOD_WORK := [0.5, 0.75, 1.0, 1.1]
@@ -72,15 +70,14 @@ const AGES := ["Wood", "Stone", "Bronze", "Iron", "Gunpowder"]
 const AGE_HOW := [
 	"You start here.",
 	"Build a quarry next to a rock outcrop.",
-	"Smelt your first bronze at a smelter (bronze ore + coal).",
-	"Upgrade the smelter to an iron furnace.",
+	"Mine bronze at a bronze deposit.",
+	"Research Iron Mining at a mine.",
 	"Build a university and research gunpowder.",
 ]
 
-const RESOURCES := ["wood", "stone", "food", "bronze_ore", "coal", "iron_ore", "bronze", "iron"]
+const RESOURCES := ["wood", "stone", "food", "bronze", "iron"]
 const RESOURCE_NAMES := {
-	"wood": "wood", "stone": "stone", "food": "food", "bronze_ore": "bronze ore",
-	"coal": "coal", "iron_ore": "iron ore", "bronze": "bronze", "iron": "iron",
+	"food": "food", "wood": "wood", "stone": "stone", "bronze": "bronze", "iron": "iron",
 }
 
 # --- Buildings -----------------------------------------------------------------
@@ -97,7 +94,7 @@ const BUILDINGS := {
 	"farm": {"name": "Farm", "age": 0, "cost": {"wood": 65}, "work": 45, "hp": 80, "size": Vector2(14, 14),
 		"workers": 2, "walkable": true, "desc": "Grain. One farm with a farmer feeds about five."},
 	"armory": {"name": "Armory", "age": 0, "cost": {"wood": 125}, "work": 100, "hp": 320, "size": Vector2(8, 6),
-		"workers": 3, "desc": "Makes all weapons, armor, arrows and cannons. Upgrades in place."},
+		"workers": 3, "desc": "Makes all weapons, armor and siege engines. Upgrades in place."},
 	"palisade": {"name": "Palisade", "age": 0, "cost": {"wood": 4}, "work": 10, "hp": 120, "wall": true,
 		"length": 4.0, "thick": 1.2, "height": 3.2, "desc": "Fast, weak wooden wall. Placed post to post."},
 	"palisade_gate": {"name": "Palisade gate", "age": 0, "cost": {"wood": 15}, "work": 25, "hp": 160, "wall": true,
@@ -117,9 +114,7 @@ const BUILDINGS := {
 	"stable": {"name": "Stable", "age": 1, "cost": {"wood": 125, "stone": 25}, "work": 90, "hp": 260,
 		"size": Vector2(10, 7), "horse_cap": 12, "desc": "Holds horses driven in from the wild and breeds them. Researches mounted archery."},
 	"mine": {"name": "Mine", "age": 1, "cost": {"wood": 100, "stone": 50}, "work": 90, "hp": 300, "size": Vector2(6, 6),
-		"workers": 5, "near": "deposit", "near_dist": 22.0, "desc": "Placed on a bronze ore, coal or iron ore deposit."},
-	"smelter": {"name": "Smelter", "age": 1, "cost": {"stone": 125, "wood": 50}, "work": 100, "hp": 320,
-		"size": Vector2(6, 6), "workers": 3, "desc": "Bronze ore + coal -> bronze. Upgrades to an iron furnace."},
+		"workers": 5, "near": "deposit", "near_dist": 22.0, "desc": "Placed on a bronze or iron deposit."},
 	# Built in the field by villagers. When finished the site turns into a free battering ram (needs a crew, see "man").
 	# needs: research required first. becomes: the engine it turns into.
 	# keeps_arms: builders do NOT have to put their weapons down for this, even on 'back to work'.
@@ -132,46 +127,42 @@ const BUILDINGS := {
 
 # Upgrades happen in place. tier is the building's tier after the upgrade.
 const UPGRADES := {
-	"iron_furnace": {"name": "Iron furnace", "building": "smelter", "from": 0, "tier": 1, "age": 2,
-		"cost": {"stone": 150, "bronze": 50}, "work": 120, "opens_age": 3, "desc": "Smelts iron. Opens the Iron age."},
 }
 
 # Research runs by itself inside its building once paid for: nobody has to work on it.
 # armory_tier: every armory (and every one built later) becomes this tier. requires: research needed first.
 const RESEARCH := {
+	"iron_mining": {"name": "Iron Mining", "building": "mine", "age": 2, "cost": {"stone": 150, "bronze": 50}, "time": 120.0, "opens_age": 3, "desc": "All mines can extract iron from iron deposits."},
 	"armory_bronze": {"name": "Bronze armory", "building": "armory", "age": 2, "cost": {"wood": 75, "bronze": 65},
-		"time": 90.0, "armory_tier": 1, "desc": "All armories make bronze swords, shields, armor, pikes, lances and rams, and stop making wooden shields."},
+		"time": 90.0, "armory_tier": 1, "desc": "All armories make bronze swords, shields, armor, pikes, lances and rams."},
 	"armory_iron": {"name": "Iron armory", "building": "armory", "age": 3, "cost": {"stone": 100, "iron": 75},
-		"time": 120.0, "armory_tier": 2, "requires": "armory_bronze", "desc": "All armories make iron gear in place of bronze. With gunpowder: cannons and shot."},
+		"time": 120.0, "armory_tier": 2, "requires": "armory_bronze", "desc": "Adds iron equipment at every armory. Gunpowder also unlocks cannons."},
 	"mounted_archery": {"name": "Mounted archery", "building": "stable", "age": 1, "cost": {"food": 60, "wood": 50},
 		"time": 60.0, "desc": "Riders can shoot their bows from the saddle."},
-	"gunpowder": {"name": "Gunpowder", "building": "university", "age": 3, "cost": {"food": 100, "coal": 40, "iron": 20},
-		"time": 90.0, "opens_age": 4, "desc": "The iron armory can cast cannons and make shot."},
+	"gunpowder": {"name": "Gunpowder", "building": "university", "age": 3, "cost": {"food": 100, "iron": 20},
+		"time": 90.0, "opens_age": 4, "desc": "The iron armory can cast cannons."},
 }
 
 # --- Gear ----------------------------------------------------------------------
-# tier: armory tier required (0 wood, 1 bronze, 2 iron). until: the armory tier that stops making it, because
-# something better replaces it (a wooden spear, a bow and a ram have no replacement, so they're always made). batch: items per order step (ammo comes in bundles; all else one at a time).
+# tier: minimum researched armory tier; all earlier recipes remain available.
 # cost: paid for each item when the armory starts it. time: seconds for one item at one armory.
 # block_*: share a carried shield stops. up_*: share it stops when raised, from the front.
 const SHIELD_ARC := 0.34          # cosine of the half angle a raised shield covers (70 degrees)
 const ITEMS := {
 	"wood_spear": {"name": "wooden spear", "plural": "wooden spears", "slot": "weapon", "tier": 0, "cost": {"wood": 40},
 		"batch": 1, "time": 10.0, "dmg": 9.0, "reach": 2.4, "rate": 1.2, "vs_mounted": 2.0},
-	"wood_shield": {"name": "wooden shield", "plural": "wooden shields", "slot": "shield", "tier": 0, "until": 1, "cost": {"wood": 50},
+	"wood_shield": {"name": "wooden shield", "plural": "wooden shields", "slot": "shield", "tier": 0, "cost": {"wood": 50},
 		"batch": 1, "time": 10.0, "block_arrow": 0.4, "block_melee": 0.15, "up_arrow": 0.75, "up_melee": 0.5, "slow": 0.05},
 	"bow": {"name": "bow", "plural": "bows", "slot": "bow", "tier": 0, "cost": {"wood": 50}, "batch": 1, "time": 10.0},
-	"arrows": {"name": "arrow", "plural": "arrows", "slot": "ammo", "tier": 0, "cost": {"wood": 4, "stone": 2},
-		"batch": 16, "time": 10.0, "tier_cost": [{"wood": 4, "stone": 2}, {"wood": 4, "bronze": 1}, {"wood": 4, "iron": 1}]},
-	"bronze_sword": {"until": 2, "name": "bronze sword", "plural": "bronze swords", "slot": "weapon", "tier": 1, "cost": {"bronze": 25},
+	"bronze_sword": {"name": "bronze sword", "plural": "bronze swords", "slot": "weapon", "tier": 1, "cost": {"bronze": 25},
 		"batch": 1, "time": 20.0, "dmg": 15.0, "reach": 1.7, "rate": 1.0},
-	"bronze_shield": {"until": 2, "name": "bronze shield", "plural": "bronze shields", "slot": "shield", "tier": 1, "cost": {"wood": 20, "bronze": 15},
+	"bronze_shield": {"name": "bronze shield", "plural": "bronze shields", "slot": "shield", "tier": 1, "cost": {"wood": 20, "bronze": 15},
 		"batch": 1, "time": 15.0, "block_arrow": 0.55, "block_melee": 0.25, "up_arrow": 0.85, "up_melee": 0.65, "slow": 0.06},
-	"bronze_armor": {"until": 2, "name": "bronze armor", "plural": "sets of bronze armor", "slot": "armor", "tier": 1, "cost": {"bronze": 40},
+	"bronze_armor": {"name": "bronze armor", "plural": "sets of bronze armor", "slot": "armor", "tier": 1, "cost": {"bronze": 40},
 		"batch": 1, "time": 25.0, "armor": 0.25, "slow": 0.08},
-	"bronze_pike": {"until": 2, "name": "bronze pike", "plural": "bronze pikes", "slot": "weapon", "tier": 1, "cost": {"wood": 30, "bronze": 15},
+	"bronze_pike": {"name": "bronze pike", "plural": "bronze pikes", "slot": "weapon", "tier": 1, "cost": {"wood": 30, "bronze": 15},
 		"batch": 1, "time": 15.0, "dmg": 11.0, "reach": 4.0, "rate": 1.4, "vs_mounted": 3.0, "close": 0.7},
-	"bronze_lance": {"until": 2, "name": "bronze lance", "plural": "bronze lances", "slot": "weapon", "tier": 1, "cost": {"wood": 30, "bronze": 15},
+	"bronze_lance": {"name": "bronze lance", "plural": "bronze lances", "slot": "weapon", "tier": 1, "cost": {"wood": 30, "bronze": 15},
 		"batch": 1, "time": 20.0, "dmg": 14.0, "reach": 3.0, "rate": 1.3, "charge": 2.0},
 	"ram": {"name": "battering ram", "plural": "battering rams", "slot": "siege", "tier": 1, "cost": {"wood": 300, "bronze": 50},
 		"batch": 1, "time": 40.0, "crew": 4},
@@ -186,9 +177,7 @@ const ITEMS := {
 	"iron_lance": {"name": "iron lance", "plural": "iron lances", "slot": "weapon", "tier": 2, "cost": {"wood": 30, "iron": 15},
 		"batch": 1, "time": 25.0, "dmg": 18.0, "reach": 3.0, "rate": 1.3, "charge": 2.0},
 	"cannon": {"name": "cannon", "plural": "cannons", "slot": "siege", "tier": 2, "research": "gunpowder",
-		"cost": {"iron": 200, "wood": 200, "coal": 40}, "batch": 1, "time": 60.0, "crew": 3},
-	"shot": {"name": "cannon shot", "plural": "cannon shot", "slot": "shot", "tier": 2, "research": "gunpowder",
-		"cost": {"iron": 2, "coal": 2}, "batch": 8, "time": 10.0},
+		"cost": {"iron": 200, "wood": 200}, "batch": 1, "time": 60.0, "crew": 3},
 }
 
 # How each kind of weapon is fought with.
@@ -247,63 +236,45 @@ const GATHER := {
 	"berries": {"name": "berries", "resource": "food", "node": "berry", "rate": 0.4, "carry": 5},
 	"hunt": {"name": "hunting", "resource": "food", "rate": 1.5, "carry": 5},
 	"farm": {"name": "farming", "resource": "food", "building": "farm", "building_rate": 0.14},
-	"bronze_ore": {"name": "bronze ore", "resource": "bronze_ore", "building": "mine", "building_rate": 0.4},
-	"coal": {"name": "coal", "resource": "coal", "building": "mine", "building_rate": 0.45},
-	"iron_ore": {"name": "iron ore", "resource": "iron_ore", "building": "mine", "building_rate": 0.35},
+	"bronze": {"name": "bronze", "resource": "bronze", "building": "mine", "building_rate": 0.4},
+	"iron": {"name": "iron", "resource": "iron", "building": "mine", "building_rate": 0.35},
 }
 
-const SMELT := {
-	"bronze": {"name": "bronze", "inputs": {"bronze_ore": 1, "coal": 1}, "time": 3.0, "tier": 0, "opens_age": 2},
-	"iron": {"name": "iron", "inputs": {"iron_ore": 1, "coal": 1}, "time": 4.0, "tier": 1},
-}
 
-const DEPOSITS := ["bronze_ore", "coal", "iron_ore"]
+const DEPOSITS := ["bronze", "iron"]
 
 # --- Hotkeys ---------------------------------------------------------------------
-# /b or /c, then a page (b basic, v advanced), then one key. Shown in this order.
+# Each action has one fixed key in its command grid.
 # /r has a single page, so it takes just the key: /r g.
 # Every structure, upgrade, research and item has exactly one key.
 const HOTKEYS := {
-	"b": {
-		"b": {"name": "Basic structures", "keys": {
-			"h": "build:hut", "f": "build:farm", "s": "build:stockpile", "a": "build:armory",
-			"p": "build:palisade", "g": "build:palisade_gate", "w": "build:watch_post", "q": "build:quarry"}},
-		"v": {"name": "Advanced structures", "keys": {
-			"w": "build:stone_wall", "g": "build:stone_gate", "t": "build:tower", "h": "build:stable", "m": "build:mine",
-			"s": "build:smelter", "u": "build:university", "b": "build:ram",
-			"f": "upgrade:smelter"}},
-	},
-	"r": {
-		"r": {"name": "Research", "keys": {
-			"b": "research:armory_bronze", "i": "research:armory_iron",
-			"m": "research:mounted_archery", "g": "research:gunpowder"}},
-	},
-	"c": {
-		"b": {"name": "Basic weapons", "keys": {
-			"w": "craft:wood_spear", "d": "craft:wood_shield", "b": "craft:bow", "a": "craft:arrows",
-			"r": "craft:ram",
-			"s": "craft:bronze_sword", "h": "craft:bronze_shield", "m": "craft:bronze_armor",
-			"p": "craft:bronze_pike", "l": "craft:bronze_lance"}},
-		"v": {"name": "Advanced weapons", "keys": {
-			"s": "craft:iron_sword", "h": "craft:iron_shield", "m": "craft:iron_armor",
-			"p": "craft:iron_pike", "l": "craft:iron_lance",
-			"c": "craft:cannon", "t": "craft:shot"}},
-	},
+	"b": {"b": {"name": "Build", "keys": {
+		"h": "build:hut", "f": "build:farm", "s": "build:stockpile", "a": "build:armory",
+		"p": "build:palisade", "g": "build:palisade_gate", "w": "build:watch_post", "q": "build:quarry",
+		"x": "build:stone_wall", "d": "build:stone_gate", "t": "build:tower", "l": "build:stable",
+		"m": "build:mine", "u": "build:university", "r": "build:ram"}}},
+	"r": {"r": {"name": "Research", "keys": {
+		"b": "research:armory_bronze", "i": "research:armory_iron", "n": "research:iron_mining",
+		"m": "research:mounted_archery", "g": "research:gunpowder"}}},
+	"c": {"c": {"name": "Armory", "keys": {
+		"w": "craft:wood_spear", "d": "craft:wood_shield", "b": "craft:bow",
+		"a": "craft:bronze_sword", "s": "craft:bronze_shield", "f": "craft:bronze_armor", "p": "craft:bronze_pike", "l": "craft:bronze_lance",
+		"z": "craft:iron_sword", "x": "craft:iron_shield", "v": "craft:iron_armor", "j": "craft:iron_pike", "k": "craft:iron_lance",
+		"r": "craft:ram", "c": "craft:cannon"}}},
 }
 
-# --- Orders ----------------------------------------------------------------------
-const ACTIONS := ["gather", "build", "resume", "upgrade", "craft", "arm", "mount", "man", "smelt", "research", "tame",
-	"scout", "guard", "attack", "follow", "hold", "recall", "promote", "mandate", "reserve", "forbid", "allow", "posture", "dismiss", "status", "resume_work", "free", "assign", "strategy"]
+const ACTIONS := ["gather", "build", "resume", "upgrade", "craft", "arm", "mount", "man", "research", "tame",
+	"scout", "move", "skirmish", "guard", "attack", "follow", "hold", "recall", "promote", "mandate", "reserve", "forbid", "allow", "posture", "dismiss", "status", "resume_work", "free", "assign", "strategy"]
 ## Orders that pull people off their work. The sim remembers the work they leave so "back to work" can restore it.
-const MILITARY_ACTIONS := ["arm", "mount", "man", "scout", "guard", "attack", "follow", "hold", "recall"]
-const WORK_ACTIONS := ["gather", "build", "upgrade", "smelt", "research", "tame"]
+const MILITARY_ACTIONS := ["arm", "mount", "man", "scout", "move", "skirmish", "guard", "attack", "follow", "hold", "recall"]
+const WORK_ACTIONS := ["gather", "build", "upgrade", "research", "tame"]
 # Settings for a captain. They take effect at once and can only be combined with each other.
 const SETTINGS := ["mandate", "reserve", "forbid", "allow", "posture", "assign", "strategy"]
 const WHERE := ["", "here", "marked", "home", "enemy", "north", "northeast", "east", "southeast",
 	"south", "southwest", "west", "northwest"]
 const PLACE := "place:"       # a where may also be PLACE + a place the player named
-const ONGOING := ["guard", "attack", "follow", "hold"]
-const AMOUNT_ACTIONS := ["gather", "craft", "smelt", "tame", "reserve", "strategy"]
+const ONGOING := ["move", "skirmish", "guard", "attack", "follow", "hold"]
+const AMOUNT_ACTIONS := ["gather", "craft", "tame", "reserve", "strategy", "skirmish"]
 const MAX_STEPS := 8
 
 # What a captain can be put in charge of. size: people when the order gives no number (0 = everyone free).
@@ -317,7 +288,7 @@ const MANDATES := {
 	"farming": {"name": "farms", "does": "run the farms", "radius": 70.0, "size": 8,
 		"builds": ["farm", "stockpile", "hut", "watch_post"]},
 	"industry": {"name": "works", "does": "run the mines and works", "radius": 90.0, "home_radius": 210.0, "size": 10,
-		"builds": ["mine", "quarry", "smelter", "armory", "university", "stockpile", "watch_post"]},
+		"builds": ["mine", "quarry", "armory", "university", "stockpile", "watch_post"]},
 	"garrison": {"name": "garrison", "does": "hold a garrison", "radius": 45.0, "size": 8,
 		"builds": ["armory", "palisade", "palisade_gate", "stone_wall", "stone_gate", "tower", "watch_post"]},
 	"army": {"name": "army", "does": "raise an army", "radius": 35.0, "size": 10, "builds": []},
@@ -338,12 +309,12 @@ const STRATEGIES := {
 	"spears": {"name": "spears", "focus": true, "items": ["wood_spear"], "keep": 20},
 	"pikes": {"name": "pikes", "focus": true, "items": ["iron_pike", "bronze_pike"], "keep": 20, "age": 2},
 	"swords": {"name": "swords", "focus": true, "items": ["iron_sword", "bronze_sword"], "keep": 20, "age": 2},
-	"archers": {"name": "archers", "focus": true, "items": ["bow", "arrows"], "keep": 20},
+	"archers": {"name": "archers", "focus": true, "items": ["bow"], "keep": 20},
 	"cavalry": {"name": "cavalry", "focus": true, "items": ["iron_lance", "bronze_lance"], "keep": 12, "age": 2, "horses": 12},
-	"cannons": {"name": "cannons", "focus": true, "items": ["cannon", "shot"], "keep": 4, "age": 4},
+	"cannons": {"name": "cannons", "focus": true, "items": ["cannon"], "keep": 4, "age": 4},
 }
 # What a captain with an age to reach or weapons to make may build beyond the mandate's own list.
-const STRATEGY_BUILDS := ["quarry", "mine", "smelter", "university", "armory", "stable", "stockpile"]
+const STRATEGY_BUILDS := ["quarry", "mine", "university", "armory", "stable", "stockpile"]
 const STRATEGY_REACH := 230.0     # how far from the post a captain racing for an age will mine
 
 const NAMES := ["Hal", "Wren", "Ana", "Bram", "Cora", "Dunstan", "Edda", "Finn", "Gil", "Hilda", "Ivo", "Jory",
@@ -435,7 +406,7 @@ static func subjects_for(action: String) -> Array[String]:
 			out.append("")
 			out.append_array(buildable_ids())
 		"upgrade":
-			out = ["armory", "smelter"]
+			out = ["armory"]
 		"craft":
 			for k in ITEMS:
 				out.append(k)
@@ -444,11 +415,10 @@ static func subjects_for(action: String) -> Array[String]:
 			for k in ITEMS:
 				if ITEMS[k]["slot"] in ["weapon", "shield", "armor", "bow"]:
 					out.append(k)
+		"skirmish":
+			out = ["", "cavalry"]
 		"man":
 			out = ["cannon", "ram"]
-		"smelt":
-			for k in SMELT:
-				out.append(k)
 		"research":
 			for k in RESEARCH:
 				out.append(k)
@@ -493,7 +463,7 @@ static func step_is_ongoing(step: Dictionary) -> bool:
 	var a: String = step.get("action", "")
 	if a in ONGOING:
 		return true
-	if a in ["gather", "smelt", "tame"] and int(step.get("amount", 0)) <= 0:
+	if a in ["gather", "tame"] and int(step.get("amount", 0)) <= 0:
 		return true
 	return false
 
@@ -523,7 +493,7 @@ static func validate_steps(steps) -> String:
 		if not (amount is int or amount is float) or int(amount) < 0 or int(amount) > 10000:
 			return "Step %d has a bad amount." % (i + 1)
 		if int(amount) > 0 and not a in AMOUNT_ACTIONS:
-			return "Step %d: amounts only apply to gathering, crafting, smelting and taming." % (i + 1)
+			return "Step %d: this action does not accept an amount." % (i + 1)
 		var w: String = str(s.get("where", ""))
 		if not w in WHERE and not (w.begins_with(PLACE) and w.length() > PLACE.length()):
 			return "Step %d has an unknown place '%s'." % [i + 1, w]
@@ -565,8 +535,8 @@ static func describe_step(s: Dictionary) -> String:
 			txt = "take horses from the stable"
 		"man":
 			txt = "crew a " + item_name(subj)
-		"smelt":
-			txt = ("smelt %d %s" % [amount, subj]) if amount > 0 else ("keep smelting " + subj)
+		"move", "skirmish":
+			txt = a + " to " + where
 		"research":
 			txt = "research " + RESEARCH.get(subj, {}).get("name", subj).to_lower()
 		"tame":

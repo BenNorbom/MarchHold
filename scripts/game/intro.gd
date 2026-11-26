@@ -6,7 +6,7 @@ const LINES := [
 	[6.0, 7.0, "You are their commander", "You don't click on people. You talk to them: look at someone, press Enter, and type what you want done."],
 	[13.0, 7.0, "A village grows when it is fed, fastest when well fed", "Feed your people and house them, and they will have children. Every soldier is a worker taken from the fields."],
 	[20.0, 7.0, "Across the valley: Commander Rook", "He is building too. You will only know what he is doing if you send scouts, and they come back alive."],
-	[27.0, 7.5, "Wood, stone, bronze, iron… gunpowder", "Build an armory and walls, smelt metal. Pikes stop cavalry, cavalry runs down archers, cannons crack walls."],
+	[27.0, 7.5, "Wood, stone, bronze, iron… gunpowder", "Build an armory and walls, mine metal. Pikes stop cavalry, cavalry runs down archers, cannons crack walls."],
 	[34.5, 6.5, "Kill the crowned commander to win", "If you fall, all is lost. Your own crown marks you too."],
 	[41.0, 4.0, "Press Enter to talk to your people", "Type /h at any time for help."],
 ]

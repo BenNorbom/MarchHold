@@ -94,13 +94,11 @@ func get_mat(name: String) -> Material:
 			# The photo is rusty brown, which reads as ore: keep only its detail.
 			m = rock("rock_face", Color(3.7, 3.6, 3.4), 0.12)
 			m.set_shader_parameter("saturation", 0.0)
-		"dep_bronze_ore":
+		"dep_bronze":
 			# Verdigris with copper veins, like its teal dot on the map.
 			m = rock("rock_boulder_dry", Color(0.12, 0.72, 0.52), 0.3, Color(0.95, 0.36, 0.06), 1.0, 0.35)
 			m.set_shader_parameter("saturation", 0.0)
-		"dep_coal":
-			m = rock("rock_boulder_dry", Color(0.28, 0.27, 0.27), 0.3, Color(0.04, 0.04, 0.05), 0.9, 0.0)
-		"dep_iron_ore":
+		"dep_iron":
 			m = rock("rock_boulder_dry", Color(0.72, 0.55, 0.45), 0.3, Color(0.55, 0.22, 0.12), 0.85, 0.2)
 		"person":
 			m = ShaderMaterial.new()

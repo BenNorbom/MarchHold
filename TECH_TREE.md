@@ -1,6 +1,6 @@
 # MarchHold — Tech Tree
 
-Companion to [PLAN.md](PLAN.md) §6–8. Costs and exact timings are not set yet; the times shown are pacing targets.
+Normal starts in the Wood age. Grand Army starts with every research project complete. Both modes use the same buildings and recipes.
 
 **Viewing:** VS Code needs the "Markdown Preview Mermaid Support" extension, then Ctrl+Shift+V. GitHub draws these automatically.
 
@@ -23,70 +23,44 @@ flowchart TB
     armory1(["Armory · wood"]):::key
     palisade(["Palisade + gate"]):::bld
     post(["Watch post"]):::bld
-    w_items["Wooden spear · wooden shield<br/>bow · stone-tipped arrows · militia"]:::item
+    w_items["Wooden spear · wooden shield<br/>militia"]:::item
   end
 
-  subgraph STONE["Stone age · ~3–5 min"]
+  subgraph STONE["Stone age"]
     quarry(["Quarry"]):::key
     swall(["Stone wall + gate"]):::bld
     tower(["Stone tower<br/>3 sheltered archer posts"]):::bld
     stable(["Stable"]):::bld
-    ladders["Siege ladders"]:::item
+    mine(["Mine on a deposit"]):::bld
+    bow["Bow"]:::item
     mounted["Mounted archery research<br/>~60 s"]:::item
   end
 
-  subgraph BRONZE["Bronze age · ~10–13 min"]
-    mine(["Mine<br/>on a deposit"]):::bld
-    ores{{"Bronze ore · coal · iron ore"}}:::res
-    smelter1(["Smelter"]):::key
-    armory2(["Armory · bronze"]):::bld
-    b_items["Bronze sword · shield · armor<br/>pike · lance · bronze arrows · ram"]:::item
+  subgraph BRONZE["Bronze age"]
+    bronze{{"Usable bronze"}}:::res
+    armory2(["Bronze armory research"]):::bld
+    ram["Battering ram and bronze equipment"]:::item
   end
-
-  subgraph IRON["Iron age · ~17–22 min"]
-    smelter2(["Smelter · iron furnace"]):::key
-    armory3(["Armory · iron"]):::bld
-    i_items["Iron sword · shield · armor<br/>pike · lance · iron arrows"]:::item
-  end
-
-  subgraph GUN["Gunpowder age · ~25–30 min"]
-    univ(["University"]):::key
-    research["Gunpowder research<br/>~90 s"]:::item
-    cannon["Cannon + shot"]:::item
-  end
-
-  fire --> hut & stock & farm & armory1
-  armory1 --> palisade & post & w_items
-  armory1 --> quarry
-  quarry --> swall & tower & stable & ladders
+  irontech(["Iron Mining at a mine<br/>150 stone + 50 bronze · 120 s"]):::key
+  iron{{"Usable iron from iron deposits"}}:::res
+  armory3(["Iron armory research"]):::bld
+  univ(["University"]):::bld
+  gun["Gunpowder research"]:::key
+  cannon["Cannon"]:::item
+  fire --> hut & stock & farm & armory1 & palisade & post
+  armory1 --> w_items
+  fire --> quarry --> mine --> bronze
+  quarry --> swall & stable & tower & bow
+  armory1 --> bow
   stable --> mounted
-  quarry --> mine --> ores --> smelter1
-  smelter1 -->|"bronze"| armory2 --> b_items
-  armory1 -.->|"research (/r)"| armory2
-  smelter1 -.->|upgrade| smelter2
-  smelter2 -->|"iron"| armory3 --> i_items
-  armory2 -.->|"research (/r)"| armory3
-  armory3 --> univ --> research --> cannon
+  bronze --> armory2 --> ram
+  bronze --> irontech --> iron --> armory3
+  armory2 --> armory3
+  iron --> univ --> gun --> cannon
+  armory3 --> cannon
 ```
 
-Red buildings are the ones that open the next age. Dotted arrows are upgrades in place. The armory tiers are research: finishing one upgrades every armory at once, and research runs by itself with no villagers.
-
-## Resources
-
-```mermaid
-flowchart LR
-  classDef res fill:#4f6b3a,stroke:#2e4222,color:#fff
-  classDef ref fill:#7a6a2a,stroke:#4a3f16,color:#fff
-
-  wood{{"Wood"}}:::res
-  stone{{"Stone"}}:::res
-  food{{"Food"}}:::res
-  horses{{"Wild horses"}}:::res
-  bore{{"Bronze ore"}}:::res --> bronze{{"Bronze"}}:::ref
-  coal{{"Coal"}}:::res --> bronze
-  coal --> iron{{"Iron"}}:::ref
-  ore{{"Iron ore"}}:::res --> iron
-```
+Every mine produces the usable metal in its deposit. Iron Mining unlocks iron for the whole settlement. Armory research expands the recipes at every armory. Bows become available in the Stone age, and archers and cannons can fire throughout a battle without resupply.
 
 ## Horses
 

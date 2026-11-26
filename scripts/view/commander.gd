@@ -272,12 +272,9 @@ func primary_pressed() -> void:
 	if u == null or u.dead:
 		return
 	if can_shoot():
-		if u.arrows > 0:
-			drawing = true
-			guard_held = false
-			draw = 0.0
-		else:
-			attacked.emit("Your quiver is empty. Refill it at the armory (E).")
+		drawing = true
+		guard_held = false
+		draw = 0.0
 		return
 	if u.bow and u.mounted and not guard_held and (u.weapon == "" or use_bow):
 		attacked.emit("You can't shoot from the saddle yet. Research mounted archery at the stable (/r).")
@@ -455,7 +452,7 @@ func _update_bow(b: float, u) -> void:
 		var stretch := Basis(Quaternion(Vector3.UP, along.normalized())) * Basis.from_scale(Vector3(1, along.length(), 1))
 		vm_strings[i].transform = Transform3D(stretch, (low + high) * 0.5)
 	vm_arrow.position = nock
-	vm_arrow.visible = u.arrows > 0 and (drawing or now - u.shot_t > 0.35)
+	vm_arrow.visible = drawing or now - u.shot_t > 0.35
 
 
 func _vm_arm_mesh() -> Mesh:

@@ -103,7 +103,7 @@ static func _wanted(m, p, workers: Array) -> Array:
 				food = maxi(food, Planner.food_workers(f.pop, 1) + 2)
 			left -= _food_jobs(m, p, jobs, mini(food, left))
 			if m.post_goal(p) >= 2 or p.focus in ["pikes", "swords", "cavalry", "cannons"]:
-				# Racing for an age, or making metal gear: a share goes to the mines and the smelter.
+				# Racing for an age, or making metal gear: a share goes to the mines.
 				var share := mini(left, ceili(workers.size() * 0.35))
 				left -= share - _works_jobs(m, p, jobs, share)
 			if f.age >= 1 or m.has_building(p.faction, "quarry"):
@@ -124,9 +124,6 @@ static func _wanted(m, p, workers: Array) -> Array:
 		"garrison", "army":
 			var bare := workers.filter(func(u): return u.weapon == "" and not u.bow).size()
 			var n := mini(bare, _spare_weapons(m, p))
-			if int(m.fac(p.faction).gear.get("arrows", 0)) > 0:
-				# Half-empty quivers go back for more.
-				n += workers.filter(func(u): return u.bow and u.arrows < Defs.QUIVER / 2).size()
 			if m.has_building(p.faction, "armory"):
 				_add(jobs, "arm", "arm", "", n)
 				left -= n
@@ -134,29 +131,14 @@ static func _wanted(m, p, workers: Array) -> Array:
 	return jobs
 
 
-## The smelter first, once it has something to smelt, then miners round the mines in turn.
+## Spread workers across unlocked mines.
 ## Returns how many of `left` are still free.
 static func _works_jobs(m, p, jobs: Array, left: int) -> int:
-	var stock: Dictionary = m.fac(p.faction).stock
-	var smelter = m.nearest_building(p.faction, p.center, ["smelter"])
-	if smelter and smelter.pos.distance_to(p.center) <= Works.reach(m, p):
-		var metal := "bronze"
-		if smelter.tier >= 1 and float(stock.get("iron_ore", 0)) > 3.0 and float(stock.get("bronze", 0)) > 30.0:
-			metal = "iron"
-		# The smelter comes before the mines, once it has something to smelt.
-		var fed := true
-		for r in Defs.SMELT[metal]["inputs"]:
-			if float(stock.get(r, 0)) < 2.0:
-				fed = false
-		if fed:
-			var n := mini(2, left)
-			_add(jobs, "smelt", "smelt", metal, n)
-			left -= n
 	# Miners go round the mines in turn, up to three each, so one ore can't take everyone.
 	var miners := {}
 	var room := {}
 	for dep in Defs.DEPOSITS:
-		room[dep] = mini(3, _places(m, p, "mine", dep))
+		room[dep] = 0 if dep == "iron" and m.fac(p.faction).age < 3 else mini(3, _places(m, p, "mine", dep))
 	for turn in 3:
 		for dep in Defs.DEPOSITS:
 			if left > 0 and turn < room[dep]:
@@ -256,10 +238,8 @@ static func _assign(m, p, roster: Array, jobs: Array) -> void:
 		if role == "defend":
 			fit = free.filter(func(u): return m.armed(u))
 		elif role in ["arm", "shelter"]:
-			# Empty hands first, then half-empty quivers.
+			# Only unarmed villagers need to draw weapons or shelter.
 			var bare: Array = free.filter(func(u): return u.weapon == "" and not u.bow)
-			if role == "arm":
-				bare.append_array(free.filter(func(u): return u.bow and u.arrows < Defs.QUIVER / 2))
 			fit = bare
 		var take: Array = fit.slice(0, need)
 		if take.is_empty():

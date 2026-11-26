@@ -81,6 +81,10 @@ var people_page := 0
 var people_pages := 1
 var chat_hint_command := ""
 var buying := {}              # what Shift-repeat buying has queued so far: {id, n}
+var captain_reviews := {}
+var last_order_result := {}
+var review_due := 0.0
+var inventory_due := -1.0
 var picker_quick := false     # opened with B or C: keys may run together ("bh") and a wrong one is dropped
 var map_open := false
 var map_refresh_t := 0.0
@@ -136,7 +140,6 @@ func start(options: Dictionary) -> void:
 	hud.chat_submitted.connect(_on_chat)
 	hud.chat_changed.connect(_on_chat_changed)
 	hud.chat_closed.connect(_on_chat_closed)
-	hud.picker_page.connect(_on_picker_page)
 	hud.picker_key.connect(_on_picker_key)
 	hud.chat_cycle.connect(_cycle_chat_address)
 	hud.menu_clicked.connect(_menu_select)
@@ -169,7 +172,7 @@ func _welcome() -> void:
 	if str(opts.get("mode", "standard")) == "grand_army":
 		hud.log_line("Grand army: %d villagers behind stone walls, every technology, full stables and full stores. %s the same." % [
 			Defs.GRAND_ARMY["villagers"], "Commander Rook has" if rivals.size() == 1 else "All %d rivals have" % rivals.size()], "system")
-		hud.log_line("Your armories share each order: /c 60 v p makes 60 iron pikes. Then 'arm 60 with pikes', or 'to arms' for everyone.", "system")
+		hud.log_line("Your armories share each order: /c iron pike 60 makes 60 iron pikes. Then 'arm 60 with pikes', or 'to arms' for everyone.", "system")
 		return
 	if rivals.size() == 1:
 		hud.log_line("You stand at your campfire with six villagers. Commander Rook has made camp somewhere across the valley.", "system")
@@ -179,7 +182,7 @@ func _welcome() -> void:
 			names.append(m.fac(rival.fid).short_name)
 		hud.log_line("You stand at your campfire with six villagers. %d rival commanders have made camp across the land: %s and %s. Be the last one standing." % [
 			rivals.size(), ", ".join(names.slice(0, -1)), names[-1]], "system")
-	hud.log_line("Look at a villager and press Enter to give orders. Press B to build (/b b h is a hut), /h for help.", "system")
+	hud.log_line("Look at a villager and press Enter to give orders. Press B to build (/b h is a hut), /h for help.", "system")
 	if not terra.available():
 		hud.log_line("Simple orders work offline. Choose a Terra connection in Settings for orders in your own words.", "hint")
 
@@ -218,6 +221,9 @@ func _process(delta: float) -> void:
 		# Your own blows land between ticks, on the frame they connect.
 		cmd.now = m.t + acc
 		m.commander_update(0, cmd.now)
+		if m.t >= review_due:
+			review_due = m.t + 2.0
+			_review_captains()
 	if tower_before >= 0 and me.in_tower < 0:
 		_move_commander_to_tower_position(me)
 	var alpha := clampf(acc / Defs.TICK, 0.0, 1.0)
@@ -385,18 +391,24 @@ func _click_selects(shift: bool) -> bool:
 func _update_hud() -> void:
 	var faction = m.fac(0)
 	hud.update_economy(faction.pop, faction.housing, faction.stock, m.workers_by_resource(0))
+	if m.t >= inventory_due:
+		inventory_due = m.t + 0.5
+		var inventory: Dictionary = m.armory_overview(0)
+		hud.update_weapons(inventory)
+		if hud.chat_open and chat_hint_command == "c" and hud.picker.visible:
+			hud.picker.refresh_inventory(inventory)
 	var me = m.commander(0)
 	if me == null:
 		return
 	var held := ""
 	if cmd.can_shoot():
-		held = "Bow · %d arrows" % me.arrows
+		held = "Bow"
 	else:
 		held = Defs.item_name(me.weapon).capitalize() if me.weapon != "" else "Bare hands"
 		if me.shield != "":
 			held += " · " + Defs.item_name(me.shield) + (" (raised)" if me.blocking else "")
 		if me.bow:
-			held += " · bow (%d)" % me.arrows
+			held += " · bow"
 	if me.armor != "":
 		held += " · " + Defs.item_name(me.armor)
 	if me.mounted:
@@ -471,7 +483,17 @@ func _describe_unit(u) -> String:
 	if u.kind == "horse":
 		return "Your horse in the stable"
 	if u.kind in ["cannon", "ram"]:
-		return "%s (%d crew)%s" % [Defs.item_name(u.kind).capitalize(), u.crew_ids.size(), (" · %d shot" % u.ammo) if u.kind == "cannon" else ""]
+		var need: int = Defs.ITEMS[u.kind]["crew"]
+		var state := "ready"
+		if u.crew_ids.size() < need:
+			state = "assembling"
+		elif u.dead_ends > 0 and u.path_wait > m.t:
+			state = "blocked"
+		elif u.reload > 0:
+			state = "reloading" if u.kind == "cannon" else "recovering"
+		elif u.anim == Match.Anim.WALK:
+			state = "moving"
+		return "%s · %d/%d crew · %s" % [u.kind.capitalize(), u.crew_ids.size(), need, state]
 	if u.dead:
 		return u.name + " (dead)"
 	if u.child:
@@ -504,8 +526,6 @@ func _describe_building(b) -> String:
 	var name: String = Defs.building_name(b.type)
 	if b.type == "armory":
 		name += " (%s)" % ["wood", "bronze", "iron"][b.tier]
-	if b.type == "smelter" and b.tier >= 1:
-		name = "Iron furnace"
 	if b.faction > 0:
 		return "%s's %s" % [m.fac(b.faction).short_name, name.to_lower()]
 	if not b.complete:
@@ -629,7 +649,18 @@ func _unhandled_input(event: InputEvent) -> void:
 				if r != "":
 					hud.log_line(r, "system")
 			KEY_R:
-				_mark()
+				if event.shift_pressed:
+					_mark()
+				else:
+					open_chat("/r ", true)
+			KEY_P:
+				_menu_people()
+			KEY_L:
+				_menu_ledger()
+			KEY_J:
+				_menu_reports()
+			KEY_Y:
+				_menu_tech()
 			KEY_G:
 				var r2: String = m.commander_take_gear(0)
 				hud.log_line(r2, "system")
@@ -726,6 +757,16 @@ func _move_commander_to_tower_position(me) -> void:
 
 
 func _mark() -> void:
+	var target = m.unit(look_unit)
+	if target and not target.dead and target.faction > 0:
+		m.set_mark(0, target.pos, target.id)
+		hud.log_line("Target marked. Order a cannon crew to fire at the mark.", "system")
+		return
+	var structure = m.bld(look_bld)
+	if structure and not structure.dead:
+		m.set_mark(0, structure.pos)
+		hud.log_line("Marked %s. Your crew can now move or attack there." % Defs.building_name(structure.type), "system")
+		return
 	var hit = view.ground_hit(cmd.eye(), cmd.look_dir(), 300.0)
 	if hit == null:
 		hud.show_toast("Look at the ground to mark a spot.")
@@ -824,7 +865,22 @@ func open_chat(prefill: String = "", quick: bool = false) -> void:
 		var b = m.bld(look_bld)
 		if b and not b.dead and not b.complete and b.faction == 0:
 			chat_site = b.id
+	if quick and prefill.strip_edges() in ["/c", "/r", "/b"]:
+		if prefill.strip_edges() == "/b":
+			_prune_selection()
+			if not selected.is_empty():
+				addressee = {"units": selected.duplicate()}
+				address_label = _selection_label()
+		cmd.move_enabled = false
+		hud.open_chat(address_label, prefill)
+		return
 	_prune_selection()
+	var engine = m.unit(look_unit)
+	if selected.is_empty() and engine and engine.faction == 0 and engine.kind in ["cannon", "ram"] and not engine.crew_ids.is_empty():
+		var engine_crew = m.crew_of(m.unit(engine.crew_ids[0]))
+		if engine_crew:
+			_open_crew_chat(engine_crew, engine.crew_ids[0], prefill)
+			return
 	var captain_id: int = selected[0] if selected.size() == 1 else (look_unit if selected.is_empty() else -1)
 	var held = _captains_post(captain_id)
 	if held:
@@ -957,12 +1013,11 @@ func _on_chat_changed(text: String) -> void:
 
 func _update_picker(command: String, args: PackedStringArray) -> void:
 	chat_hint_command = command
-	# Whatever the way in, a key acts the moment it's complete. Only an order recalled with Up
-	# waits for Enter. Keys typed as "bh" are for B and C, so a name like "bronze" is left alone.
+	# Direct picker keys act immediately. Chat stays editable for full item names.
 	var acts: bool = hud.history_i < 0
 	var packed: bool = picker_quick and acts
 	var pick: Dictionary = Hotkeys.read(m, command, Hotkeys.split_keys(command, args) if packed else args)
-	if acts and pick.get("key", "") != "":
+	if packed and pick.get("key", "") != "":
 		if pick["error"] == "":
 			_take_pick(pick)
 			return
@@ -970,18 +1025,10 @@ func _update_picker(command: String, args: PackedStringArray) -> void:
 			hud.set_draft(Hotkeys.draft(command, pick["page"]))
 	var page: String = pick.get("page", "")
 	if page == "":
-		hud.show_picker_pages(command)
-	else:
-		hud.show_picker_entries(command, pick, Hotkeys.page_entries(m, command, page), acts)
+		page = Hotkeys.only_page(command)
+		pick = Hotkeys.read(m, command, PackedStringArray())
+	hud.show_picker_entries(command, pick, Hotkeys.page_entries(m, command, page), packed)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-
-
-func _on_picker_page(page: String) -> void:
-	if not hud.chat_open or not Defs.HOTKEYS.has(chat_hint_command):
-		return
-	var draft := Hotkeys.draft(chat_hint_command, page) + " "
-	hud.set_draft(draft)
-	_on_chat_changed(draft)
 
 
 func _on_picker_key(key: String) -> void:
@@ -1133,6 +1180,11 @@ func _on_chat(text: String) -> void:
 				who = u.name
 	if text.strip_edges() == "":
 		return
+	var captain := _captain_address(req)
+	if not captain.is_empty():
+		captain_reviews.erase(captain.key)
+	elif req.get("all", false):
+		captain_reviews.clear()
 	hud.log_line(text, "you", "You → " + who)
 	var order := text.strip_edges().to_lower()
 	if order.begins_with("join @"):
@@ -1176,10 +1228,12 @@ func _on_chat(text: String) -> void:
 		elif not _abandon_site(req):
 			_stop_orders(req)
 		return
+	if not terra_ctx.is_empty() and (req.get("all", false) or req == terra_ctx.get("req")) and not parsed.get("confirm", false):
+		_discard_terra_request(req)
 	if parsed.get("confirm", false):
 		hud.log_line("Orders start when you give them. For construction, choose a site to start.", "hint")
 		return
-	if parsed.get("ok", false):
+	if parsed.get("ok", false) and not (not captain.is_empty() and terra and terra.available() and terra.remaining() > 0 and not terra.busy):
 		if parsed.get("all", false) and req.is_empty():
 			req = {"all": true}
 			who = "everyone"
@@ -1190,6 +1244,8 @@ func _on_chat(text: String) -> void:
 			hud.log_line("Terra is still thinking about your last order.", "warn")
 			return
 		terra_ctx = {"req": req, "who": who, "text": text, "site": chat_site}
+		if not captain.is_empty():
+			terra_ctx["captain"] = captain.lead
 		hud.set_thinking("Terra is thinking…")
 		var crew_id := int(req.get("crew", -1))
 		if req.has("unit") and not req.get("individual", false):
@@ -1206,6 +1262,8 @@ func _on_terra(result: Dictionary) -> void:
 	terra_ctx = {}
 	hud.set_thinking("")
 	if ctx.is_empty() or m.over:
+		return
+	if ctx.has("captain") and _captain_address(ctx.req).get("lead", -1) != ctx.captain:
 		return
 	if not result.get("ok", false):
 		hud.log_line(result.get("error", "Terra could not answer."), "warn")
@@ -1244,9 +1302,51 @@ func _on_terra(result: Dictionary) -> void:
 					return
 				req = {"post": named_post.id}
 				who = m.post_label(named_post)
+			last_order_result = {}
 			_execute(req, steps, who, site)
+			var captain := _captain_address(req)
+			if not captain.is_empty() and d.get("review_after", false) and last_order_result.get("ok", false):
+				var final_step: Dictionary = steps.back()
+				if not Defs.step_is_ongoing(final_step) and final_step.action not in Defs.SETTINGS:
+					captain_reviews[captain.key] = {"address": req.duplicate(), "objective": ctx.get("objective", ctx.text), "crew_ids": last_order_result.get("crews", []),
+						"step": final_step, "ready": m.t + 5.0, "lead": captain.lead}
 		"cancel":
 			_stop_orders(ctx["req"])
+
+
+## One new model decision when a delegated phase finishes. The per-match
+## request budget also covers these reviews; standing orders run locally.
+func _review_captains() -> void:
+	if captain_reviews.is_empty() or not terra or terra.busy or not terra.available() or terra.remaining() <= 0 or hud.chat_open:
+		return
+	for id in captain_reviews.keys():
+		var job: Dictionary = captain_reviews[id]
+		var captain := _captain_address(job.address)
+		if captain.get("lead", -1) != job.lead:
+			captain_reviews.erase(id)
+			continue
+		if m.t < job.ready:
+			continue
+		var active := false
+		for crew_id in job.crew_ids:
+			var crew = m.crews.get(crew_id)
+			if crew and not crew.done:
+				active = true
+		var step: Dictionary = job.step
+		if step.action == "research":
+			active = active or m.is_researching(0, step.subject)
+		if step.action == "craft":
+			for armory in m.buildings_of(0, "armory"):
+				active = active or step.subject in armory.queue
+		if active:
+			continue
+		captain_reviews.erase(id)
+		var who: String = captain.label
+		var message := "Review progress on your delegated objective: %s. Your last phase was %s. Choose the next necessary phase, or reply if finished." % [job.objective, Defs.describe_step(step)]
+		terra_ctx = {"req": job.address, "who": who, "text": message, "objective": job.objective, "captain": captain.lead}
+		hud.set_thinking("%s is reviewing the objective..." % who)
+		terra.ask(m.brief(0, who, job.address.get("crew", -1)), message, dialogue)
+		return
 
 
 func _discard_terra_request(req: Dictionary) -> bool:
@@ -1268,7 +1368,25 @@ func _name_place(title: String) -> void:
 		hud.log_line(r["error"], "warn")
 
 
+## A post and a promoted crew can both receive a continuing objective.
+func _captain_address(req: Dictionary) -> Dictionary:
+	if req.has("post"):
+		var p = m.posts.get(req.post)
+		if p:
+			return {"key": p.id, "lead": p.captain, "label": m.post_label(p)}
+	elif req.has("crew"):
+		var crew = m.crews.get(req.crew)
+		if crew and crew.captain:
+			return {"key": -1 - crew.id, "lead": crew.leader, "label": m.crew_label(crew)}
+	return {}
+
+
 func _stop_orders(req: Dictionary) -> void:
+	var captain := _captain_address(req)
+	if not captain.is_empty():
+		captain_reviews.erase(captain.key)
+	elif req.is_empty() or req.get("all", false):
+		captain_reviews.clear()
 	var n: int = m.cancel(0, req if not req.is_empty() else {"all": true})
 	hud.log_line("Stopped." if n > 0 else "Nobody was doing anything.", "crew")
 
@@ -1333,15 +1451,16 @@ func _issue(req: Dictionary, steps: Array, who: String, sites: Array = []) -> vo
 	var full := req.duplicate()
 	full["steps"] = steps
 	var r: Dictionary = m.command(0, full)
+	last_order_result = r
 	if r.get("ok", false):
 		var parts: Array[String] = []
 		for s in steps:
 			parts.append(_describe_order(s, req))
 		var label := who
-		if (label == "your people" or req.has("units")) and not r.get("crews", []).is_empty():
+		if r.get("crews", []).size() == 1:
 			var c = m.crews.get(r["crews"][0])
 			if c:
-				label = m.crew_label(c)
+				label = ("%s — %s" % [who, m.crew_label(c)]) if req.has("post") else m.crew_label(c)
 		hud.log_line("%s: %s." % [label.capitalize() if label == "everyone" else label, ", then ".join(parts)], "crew")
 		Sfx.play("click", null, -10.0)
 		if tutorial:
@@ -1499,11 +1618,11 @@ func _slash(text: String) -> void:
 						_craft_by_name(arg)
 					"r":
 						_research_by_name(arg)
+			elif pick["error"] != "":
+				hud.log_line(pick["error"], "warn")
 			elif pick["key"] == "":
 				# Deferred: the line edit stops editing once this submit returns.
 				_open_picker.call_deferred(c, pick["page"])
-			elif pick["error"] != "":
-				hud.log_line(pick["error"], "warn")
 			else:
 				_choose_order_entry(pick["entry"], pick["batches"])
 		"l":
@@ -1519,6 +1638,10 @@ func _slash(text: String) -> void:
 		"h":
 			_menu_help()
 		"cancel":
+			if addressee.has("post"):
+				captain_reviews.erase(addressee.post)
+			elif addressee.is_empty() or addressee.get("all", false):
+				captain_reviews.clear()
 			_discard_terra_request(addressee)
 			if _abandon_site(addressee):
 				return
@@ -1648,7 +1771,7 @@ func _menu_ledger() -> void:
 	lines.append("[b]Food[/b]  %d stored · [color=#%s]%s[/color]%s" % [int(f.stock["food"]), "a8d890" if f.food_state == 3 else ("f0c060" if f.food_state >= 1 else "ff6a50"), fs, why])
 	lines.append("")
 	var res: Array[String] = []
-	for r in ["wood", "stone", "bronze_ore", "coal", "iron_ore", "bronze", "iron"]:
+	for r in ["wood", "stone", "bronze", "iron"]:
 		res.append("%s %d" % [Defs.RESOURCE_NAMES[r], int(f.stock.get(r, 0))])
 	lines.append("[b]Stores[/b]  " + " · ".join(res))
 	var gear: Array[String] = []
@@ -1740,24 +1863,24 @@ func _menu_help() -> void:
 [b]Fighting[/b]  Left click to strike (hold and release with a bow) · hold right mouse or V to block; raise it just as a blow lands (blue marker) to parry · a sword sweeps two and a spear outreaches · with enemies near, a click strikes and Shift+click still selects · Q switch bow/weapon · G or E at the armory: take gear · F at the stable: ride
 [b]Selecting[/b]  Look at a villager and [b]click[/b] to select them; [b]Shift+click[/b] adds or drops more. Orders you type then go to exactly the selected people, as one crew. [b]Esc[/b] clears the selection.
 [b]Talking[/b]  Look at a villager and press [b]Enter[/b] (or T) to address their crew. In chat, [b]Tab[/b] cycles through individual members and back to the crew. [b]@Name[/b] addresses someone's crew by name, [b]@all[/b] addresses everyone. Idle villagers take orders with no addressee.
-[b]Marking[/b]  R marks the spot you look at; orders can then say 'there' or 'the mark'.
+[b]Marking[/b]  Shift+R marks the spot you look at; orders can then say 'there' or 'the mark'.
 [b]Stone towers[/b]  Mark a tower and tell archers to guard the mark. Three can post on the roof. Press E at the door to climb, then E on the roof to descend.
 
 [b]Slash commands[/b] (instant, no Terra needed)
-   /b  build · b basic or v advanced, then one key: /b b h is a hut (or press B, B, H) · /b hut works too
-   /c  craft weapons the same way: /c b w is spears (or C, B, W) · /c 2 b w or /c spears 2 makes two batches
+   /b  build · /b h is a hut (or press B, H) · /b hut works too
+   /c  craft weapons the same way: /c w is spears (or C, W) · /c 2 w or /c spears 2 makes two batches
    /l  ledger (or Tab outside chat) · /p people and crews · /s scout reports
    /r  research, picked the same way: /r b bronze armory · /r i iron armory · /r m mounted archery · /r g gunpowder
    /m  field map (or M) · /t tech tree · /h this help · /cancel stop a crew
 
 [b]Orders you can type[/b]
    gather wood · gather 30 wood then build a hut · pick berries · work the farms · hunt
-   build a hut · build a palisade · continue construction · finish the wall · make 32 arrows · arm 6 with spears · to arms! · fall back · back to work
+   build a hut · build a palisade · continue construction · finish the wall · make four spears · arm 6 with spears · to arms! · fall back · back to work
    send two scouts east · scout their camp · attack their camp · guard the mark · follow me · hold
-   tame 3 horses · mount up · smelt bronze · research the bronze armory · research gunpowder · man the cannon
+   tame 3 horses · mount up · mine bronze · research the bronze armory · research gunpowder · man the cannon
    promote (makes a captain) · dismiss · status · then chains steps
    Name, run the village · take twenty and run a mine here · set up a garrison at the mark · raise an army
-   call this East Hill names the spot you just marked (R), or where you stand. Then: hold East Hill
+   call this East Hill names the spot you just marked (Shift+R), or where you stand. Then: hold East Hill
    Captains build what their post needs. Limits: keep 100 wood back · don't build farms · stand your ground
    A captain with a post staffs and runs it. Talk to the captain and their people carry out the order.
    join @Name moves the addressed villager or crew to that person's crew.

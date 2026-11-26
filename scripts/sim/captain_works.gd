@@ -215,15 +215,10 @@ static func _strategy(m, p, out: Array) -> void:
 		if f.age < 1 and m.buildings_of(p.faction, "quarry", false).is_empty():
 			out.append(_building(Rank.DEFENCE, "quarry"))
 		if aim >= 2 and f.age >= 1:
-			for dep in (["bronze_ore", "coal"] if aim < 3 or f.age < 2 else Defs.DEPOSITS):
+			for dep in (["bronze"] if aim < 3 or f.age < 2 else Defs.DEPOSITS):
 				_want_mine(m, p, out, dep)
-			if m.buildings_of(p.faction, "smelter", false).is_empty():
-				out.append(_building(Rank.DEFENCE, "smelter"))
-		if aim >= 3 and f.age >= 2 and m.has_building(p.faction, "smelter"):
-			var b = m.nearest_building(p.faction, p.center, ["smelter"])
-			var id: String = m._upgrade_for(p.faction, "smelter")
-			if Defs.UPGRADES.has(id) and b and b.upgrading == "":
-				out.append(_want(Rank.DEFENCE, "upgrade", "smelter", Defs.UPGRADES[id]["cost"]))
+		if aim >= 3 and m.research_problem(p.faction, "iron_mining") == "":
+			out.append(_want(Rank.DEFENCE, "research", "iron_mining", Defs.RESEARCH["iron_mining"]["cost"]))
 		if aim >= 4 and f.age >= 3:
 			if m.buildings_of(p.faction, "university", false).is_empty():
 				out.append(_building(Rank.DEFENCE, "university"))
@@ -261,7 +256,7 @@ static func _strategy(m, p, out: Array) -> void:
 	if item == "":
 		return
 	var have := stocked(m, p.faction, item)
-	var keep: int = p.focus_keep * (8 if item in ["arrows", "shot"] else 1)
+	var keep: int = p.focus_keep
 	if have < keep:
 		var want := _want(Rank.DEFENCE, "craft", item, Defs.item_cost(item, maxi(0, m.armory_tier(p.faction))))
 		want["count"] = keep - have
@@ -269,14 +264,6 @@ static func _strategy(m, p, out: Array) -> void:
 	elif not p.focus_told and p.faction == 0:
 		p.focus_told = true
 		m.post(0, "%s: the armory holds %d %s, as you asked. We'll keep it topped up." % [m.post_label(p), have, Defs.item_name(item, have)], "done")
-	# The second item of a pair (arrows for bows, shot for cannons) once the first is in stock.
-	var second: Array = st["items"]
-	if st["items"].size() == 2 and item == second[0] and have >= keep and m.craft_problem(p.faction, second[1]) == "":
-		var extra: int = p.focus_keep * 8
-		if stocked(m, p.faction, second[1]) < extra:
-			var more := _want(Rank.DEFENCE, "craft", second[1], Defs.item_cost(second[1], maxi(0, m.armory_tier(p.faction))))
-			more["count"] = extra - stocked(m, p.faction, second[1])
-			out.append(more)
 
 
 ## The best thing the focus can make right now, or "" when it needs an age or research first.
@@ -290,6 +277,10 @@ static func focus_item(m, p) -> String:
 ## In the armory, and waiting in an armory's queue.
 static func stocked(m, faction: int, item: String) -> int:
 	var n := int(m.fac(faction).gear.get(item, 0))
+	if item in ["ram", "cannon"]:
+		for engine in m.units:
+			if not engine.dead and engine.kind == item and engine.faction == faction:
+				n += 1
 	for b in m.buildings_of(faction, "armory"):
 		n += b.queue.count(item) * int(Defs.ITEMS[item]["batch"])
 	return n
@@ -381,22 +372,14 @@ static func _industry(m, p, out: Array) -> void:
 				mine["deposit"] = dep
 				mine["what"] = "mine " + dep
 				out.append(mine)
-		if m.buildings_of(p.faction, "smelter", false).is_empty() and not m.buildings_of(p.faction, "mine", false).is_empty():
-			out.append(_building(Rank.REST, "smelter"))
 	if m.buildings_of(p.faction, "armory", false).is_empty() and f.pop >= 16:
 		out.append(_building(Rank.REST, "armory"))
 	if f.age >= 3 and m.buildings_of(p.faction, "university", false).is_empty():
 		out.append(_building(Rank.REST, "university"))
-	if m.has_building(p.faction, "smelter"):
-		var id: String = m._upgrade_for(p.faction, "smelter")
-		var b = m.nearest_building(p.faction, m.home_pos(p.faction), ["smelter"])
-		if Defs.UPGRADES.has(id) and b.upgrading == "":
-			out.append(_want(Rank.REST, "upgrade", "smelter", Defs.UPGRADES[id]["cost"]))
 	for id in Defs.RESEARCH:
 		if m.research_problem(p.faction, id) == "":
 			out.append(_want(Rank.REST, "research", id, Defs.RESEARCH[id]["cost"]))
 	_keep_spears(m, p, out, SPEARS_KEPT)
-	_keep_arrows(m, p, out)
 
 
 static func _garrison(m, p, out: Array) -> void:
@@ -416,7 +399,6 @@ static func _garrison(m, p, out: Array) -> void:
 	var bare: int = m.post_members(p).filter(func(u): return not u.child and not m.armed(u)).size()
 	if bare > 0:
 		_keep_spears(m, p, out, bare)
-	_keep_arrows(m, p, out)
 
 
 static func _keep_spears(m, p, out: Array, wanted: int) -> void:
@@ -435,14 +417,6 @@ static func _keep_spears(m, p, out: Array, wanted: int) -> void:
 		out.append(spears)
 
 
-static func _keep_arrows(m, p, out: Array) -> void:
-	var tier: int = m.armory_tier(p.faction)
-	if tier < 0 or stocked(m, p.faction, "arrows") >= Defs.QUIVER * 2:
-		return
-	for u in m.units:
-		if not u.dead and u.faction == p.faction and u.bow:
-			out.append(_want(Rank.REST, "craft", "arrows", Defs.item_cost("arrows", tier)))
-			return
 
 
 static func _remote(m, p) -> bool:

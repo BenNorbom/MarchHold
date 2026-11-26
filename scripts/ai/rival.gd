@@ -180,23 +180,11 @@ func _economy(f) -> void:
 		_keep_gathering("stone", "stone", stone_need)
 	if f.age >= 1:
 		for dep in Defs.DEPOSITS:
-			if _has_mine(dep):
-				var want := 2 if dep != "iron_ore" else 3
-				if strategy in ["cannons", "turtle"] and dep != "bronze_ore":
+			if _has_mine(dep) and (dep != "iron" or f.age >= 3):
+				var want := 2 if dep != "iron" else 3
+				if strategy in ["cannons", "turtle"] and dep != "bronze":
 					want += 1
 				_keep_gathering(dep, dep, want)
-		# Smelting.
-		if m.has_building(fid, "smelter"):
-			var metal := "bronze"
-			var sm = m.nearest_building(fid, _home(), ["smelter"])
-			if sm and sm.tier >= 1 and float(f.stock.get("iron_ore", 0)) > 3.0 and float(f.stock.get("bronze", 0)) > 30.0:
-				metal = "iron"
-			var c = _crew("smelt")
-			var cur := ""
-			if c and c.idx < c.steps.size():
-				cur = c.steps[c.idx]["subject"]
-			if cur != metal:
-				_order("smelt", [_step("smelt", metal)], 2)
 
 
 func _has_mine(dep: String) -> bool:
@@ -380,11 +368,9 @@ func _next_building(f) -> String:
 		return "stockpile"
 	if strategy == "cavalry" and _count("stable") == 0:
 		return "stable"
-	for dep in ["bronze_ore", "coal"]:
+	for dep in ["bronze"]:
 		if not _mine_site_exists(dep) and t > (330.0 if strategy != "rush" else 420.0) and _find_deposit(dep) != null:
 			return "mine"
-	if _count("smelter") == 0 and _mine_site_exists("bronze_ore"):
-		return "smelter"
 	if strategy == "turtle" and not wall_started and t > 420.0:
 		return "stone_ring"
 	if strategy == "turtle" and _count("tower") < 2 and t > 480.0:
@@ -395,11 +381,10 @@ func _next_building(f) -> String:
 			return "research:armory_bronze"
 		if _count("stable") == 0:
 			return "stable"
-		if not _mine_site_exists("iron_ore") and _find_deposit("iron_ore") != null:
+		if not _mine_site_exists("iron") and _find_deposit("iron") != null:
 			return "mine"
-		var sm = m.nearest_building(fid, _home(), ["smelter"])
-		if sm and sm.tier == 0 and sm.upgrading == "" and float(f.stock.get("bronze", 0)) >= float(Defs.UPGRADES["iron_furnace"]["cost"]["bronze"]):
-			return "upgrade:smelter"
+		if m.research_problem(fid, "iron_mining") == "":
+			return "research:iron_mining"
 	if f.age >= 3:
 		var arm2 = m.nearest_building(fid, _home(), ["armory"])
 		if arm2 and m.research_problem(fid, "armory_iron") == "":
@@ -530,21 +515,21 @@ func _gear_plan(f) -> Array:
 		"cavalry":
 			if tier >= 1:
 				return ["iron_lance" if tier >= 2 else "bronze_lance", "bronze_shield" if tier == 1 else "iron_shield"]
-			return ["wood_spear", "bow", "arrows"]
+			return ["wood_spear", "bow"]
 		"turtle":
 			if tier >= 2:
-				return ["iron_pike", "iron_sword", "iron_shield", "bow", "arrows"]
-			return ["wood_spear", "bow", "arrows", "arrows"]
+				return ["iron_pike", "iron_sword", "iron_shield", "bow"]
+			return ["wood_spear", "bow"]
 		"cannons":
 			if f.researched.has("gunpowder"):
-				return ["cannon", "shot", "iron_pike", "iron_shield"]
+				return ["cannon", "iron_pike", "iron_shield"]
 			if tier >= 2:
 				return ["iron_pike", "iron_sword", "iron_shield"]
 	if tier >= 2:
-		return ["iron_sword", "iron_shield", "iron_armor", "bow", "arrows"]
+		return ["iron_sword", "iron_shield", "iron_armor", "bow"]
 	if tier == 1:
 		return ["bronze_sword", "bronze_shield", "bronze_pike", "bronze_armor"]
-	return ["wood_spear", "wood_shield", "bow", "arrows"]
+	return ["wood_spear", "wood_shield", "bow"]
 
 
 func _army_start() -> float:
@@ -571,7 +556,7 @@ func _military(f) -> void:
 		var plan := _gear_plan(f)
 		var item: String = plan[rng.randi_range(0, plan.size() - 1)]
 		var weapons := _gear_count(f, ["weapon"]) + _queued(["weapon"])
-		var needs_gear: bool = m.t >= _army_start() and (f.soldiers + _gear_count(f, ["weapon", "bow"]) < _army_want(f) or item in ["arrows", "shot", "cannon", "ram"])
+		var needs_gear: bool = m.t >= _army_start() and (f.soldiers + _gear_count(f, ["weapon", "bow"]) < _army_want(f) or item in ["cannon", "ram"])
 		# Always keep weapons for the militia: pikes once riders have been seen and the armory can make them.
 		var reserve_short: bool = weapons < _ready_want(f)
 		if reserve_short:
@@ -594,21 +579,34 @@ func _military(f) -> void:
 		# A couple waiting at a time: each is paid for as it starts, so a long queue would drain the stores.
 		if needs_gear and can_pay and _queued_item(item) < 2 and m.craft_problem(fid, item) == "" and m.step_problem(fid, _step("craft", item)) == "":
 			var stock := int(f.gear.get(item, 0))
-			if stock < 12 or item == "arrows" or item == "shot":
+			if item in ["ram", "cannon"]:
+				stock = m.units.filter(func(u): return not u.dead and u.faction == fid and u.kind == item).size()
+			if stock < (4 if item in ["ram", "cannon"] else 12):
 				# One batch at a time: a second batch would spend wood the economy may need first.
 				var batches := 2 if float(cost.get("wood", 0)) <= 10.0 else 1
 				_order("craft", [_step("craft", item, int(Defs.ITEMS[item]["batch"]) * batches)], 2 if f.adults > 12 else 1)
 	# Horses for cavalry.
 	if m.has_building(fid, "stable") and f.horses < 6 and not _busy("tame") and strategy in ["cavalry", "boom", "cannons"]:
 		_order("tame", [_step("tame", "horses", 3)], 2)
-	# Cannon crews.
+	# Siege is built and staffed from this settlement's own stores and people.
+	for kind in ["ram", "cannon"]:
+		if m.craft_problem(fid, kind) != "" or _queued_item(kind) > 0 or not m.can_afford(fid, Defs.ITEMS[kind].cost):
+			continue
+		if (m.options.get("mode") == "grand_army" or (f.adults >= 16 and f.food_state >= 2 and f.soldiers >= 4)) and not m.units.any(func(u): return not u.dead and u.faction == fid and u.kind == kind):
+			m.queue_craft(fid, kind, 1)
 	for e in m.units:
 		if e.dead or e.faction != fid or not e.kind in ["cannon", "ram"]:
 			continue
 		var key := "eng%d" % e.id
-		if _crew(key) == null:
+		if m._open_engine_seats(e) > 0:
 			var steps := [_step("man", e.kind), _step("guard", "", 0, "home")]
-			_order(key, steps, int(Defs.ITEMS[e.kind]["crew"]))
+			var result: Dictionary = m.command(fid, {"engine": e.id, "steps": steps})
+			if result.ok and not result.crews.is_empty() and _crew(key) == null:
+				roles[key] = result.crews[0]
+		if not e.crew_ids.is_empty():
+			var operator = m.unit(e.crew_ids[0])
+			if operator and operator.crew >= 0:
+				roles[key] = operator.crew
 	# Grow the army.
 	var army = _crew("army")
 	var have: int = army.members.size() if army else 0

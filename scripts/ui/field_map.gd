@@ -83,7 +83,7 @@ func _draw() -> void:
 		var p := _to_screen(r, n.pos)
 		var col := Color(0.35, 0.33, 0.3)
 		if n.kind == "deposit":
-			col = {"bronze_ore": Color(0.2, 0.55, 0.45), "coal": Color(0.08, 0.08, 0.08), "iron_ore": Color(0.6, 0.25, 0.15)}[n.sub]
+			col = {"bronze": Color(0.2, 0.55, 0.45), "iron": Color(0.6, 0.25, 0.15)}[n.sub]
 		draw_circle(p, 4.5, col)
 		if show_names:
 			draw_string(font, p + Vector2(6, 4), title, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, ink)

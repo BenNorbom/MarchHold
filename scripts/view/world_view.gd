@@ -588,7 +588,7 @@ func _sync_building(b) -> void:
 		info = {"root": root, "mesh": mi, "body": body, "tier": b.tier, "h": h, "fire": null, "complete": false}
 		bld_nodes[b.id] = info
 		_paint_for(b)
-		if b.type == "campfire" or (b.type == "smelter") or (b.type == "armory" and b.tier >= 1):
+		if b.type == "campfire" or (b.type == "armory" and b.tier >= 1):
 			info["fire"] = _make_fire(root, b)
 	var mi2: MeshInstance3D = info["mesh"]
 	var level: float = 999.0 if b.complete else (-0.2 + (float(info["h"]) + 0.4) * b.progress if b.paid else -0.25)
@@ -665,9 +665,7 @@ func _remove_building(id: int) -> void:
 func _make_fire(root: Node3D, b) -> Node3D:
 	var n := Node3D.new()
 	var offset := Vector3.ZERO
-	if b.type == "smelter":
-		offset = Vector3(0, 0.8, 1.5)
-	elif b.type == "armory":
+	if b.type == "armory":
 		offset = Vector3(b.size.x * 0.5 + 0.9, 1.1, 0)
 	n.position = offset
 	root.add_child(n)

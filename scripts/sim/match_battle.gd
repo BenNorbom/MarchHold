@@ -61,7 +61,7 @@ func update_engagements() -> void:
 		if foe == null or foe.dead:
 			continue
 		pressure[foe.id] = int(pressure.get(foe.id, 0)) + 1
-		if can_shoot_bow(u) and u.arrows > 0 and u.weapon == "":
+		if can_shoot_bow(u) and u.weapon == "":
 			continue
 		var d := u.pos.distance_to(foe.pos)
 		if d > stand_distance(u, foe) + 2.5:
@@ -113,11 +113,11 @@ func _may_fight(u: Unit, o: Unit, area: Array, radius: float) -> bool:
 	if not is_hostile(u.faction, o) or (o.id == u.avoid_id and t < u.avoid_t):
 		return false
 	var d := u.pos.distance_to(o.pos)
-	if o.in_tower >= 0 and (not can_shoot_bow(u) or u.arrows <= 0 or d > bow_range(u, o)):
+	if o.in_tower >= 0 and (not can_shoot_bow(u) or d > bow_range(u, o)):
 		return false
 	var hit_me := o.id == u.attacker and t - u.hit_t < 4.0
 	# An archer needn't leave the post to shoot.
-	if can_shoot_bow(u) and u.arrows > 0 and u.weapon == "" and d <= bow_range(u, o):
+	if can_shoot_bow(u) and u.weapon == "" and d <= bow_range(u, o):
 		return true
 	if d > maxf(radius + 8.0, float(area[2]) if hit_me else 0.0):
 		return false
@@ -126,7 +126,7 @@ func _may_fight(u: Unit, o: Unit, area: Array, radius: float) -> bool:
 
 func _pick_target(u: Unit, current: Unit, c: Crew, order: String, radius: float) -> Unit:
 	var area := _fight_area(u, c, order, radius)
-	var shooter := can_shoot_bow(u) and u.arrows > 0 and u.weapon == ""
+	var shooter := can_shoot_bow(u) and u.weapon == ""
 	var places := int(melee_def(u)["places"])
 	var best := current
 	var best_score := INF

@@ -363,7 +363,7 @@ func update_frame(delta: float, alpha: float, cam: Vector3, hidden: int) -> void
 			_item("cloak", rig, xf2, f.color.lightened(0.15).srgb_to_linear() if f else tunic, custom)
 		if cargo != "":
 			var bundle := "bundle_wood" if cargo == "wood" else ("bundle_food" if cargo == "food" else "bundle_stone")
-			var bcol := Color(0.55, 0.53, 0.5) if cargo == "stone" else (Color(0.2, 0.2, 0.22) if cargo == "coal" else (Color(0.5, 0.36, 0.28) if cargo.ends_with("ore") else tunic))
+			var bcol := Color(0.55, 0.53, 0.5) if cargo == "stone" else (Color(0.5, 0.36, 0.28) if cargo in ["bronze", "iron"] else tunic)
 			_item(bundle, rig, xf2, bcol, custom)
 	for side_meshes in crowd_meshes:
 		for mm in side_meshes:

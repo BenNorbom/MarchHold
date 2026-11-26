@@ -17,7 +17,7 @@ var armed_filter: Callable = armed      # one Callable, not a new lambda for eve
 # --- Fighting -----------------------------------------------------------------
 
 func armed(u: Unit) -> bool:
-	return u.weapon != "" or (u.bow and u.arrows > 0) or u.kind == "commander"
+	return u.weapon != "" or (u.bow) or u.kind == "commander"
 
 
 func weapon_def(u: Unit) -> Dictionary:
@@ -76,13 +76,28 @@ func combat_update(u: Unit, dt: float, radius: float) -> bool:
 		return true
 	var c := crew_of(u)
 	var order: String = c.steps[c.idx]["action"] if c and c.idx < c.steps.size() else ""
+	if order == "skirmish":
+		if c.steps[c.idx].get("subject", "") == "cavalry" and not u.mounted:
+			if not resume_work(u.faction, [u.id]):
+				release_member(u)
+			return true
+		var contacts := _crew_sightings(c)
+		var limit := int(c.steps[c.idx].get("amount", 0))
+		if limit <= 0:
+			limit = maxi(2, ceili(c.members.size() * 0.4))
+		if contacts.size() >= limit:
+			c.state["withdraw_until"] = t + 7.0
+		if t < float(c.state.get("withdraw_until", 0.0)):
+			_drop_fight(u)
+			move_to(u, home_pos(u.faction) + u.slot, dt, 3.0, true)
+			return true
 	var foe := unit(u.enemy)
 	if foe:
 		if u.engage_from == Vector2.ZERO:
 			u.engage_from = u.pos
 		# The leash is checked twice a second, the rest every tick.
 		var gone := foe.dead or foe.stable >= 0 or foe.faction == u.faction
-		gone = gone or (foe.in_tower >= 0 and (not can_shoot_bow(u) or u.arrows <= 0))
+		gone = gone or (foe.in_tower >= 0 and (not can_shoot_bow(u)))
 		if not gone and (ticks + u.id) % 5 == 0:
 			gone = not _may_fight(u, foe, _fight_area(u, c, order, radius), radius)
 			# An attacking crew keeps after anyone it can still see, wherever they run.
@@ -97,7 +112,7 @@ func combat_update(u: Unit, dt: float, radius: float) -> bool:
 		u.scan_t = 0.0
 	if t + EPS >= u.scan_t:
 		foe = _pick_target(u, foe, c, order, radius)
-		if foe == null and order == "attack":
+		if foe == null and order in ["attack", "skirmish"]:
 			# Nobody close: go after the nearest enemy person any of the crew can see
 			# before touching a building, unless walls shut them in.
 			foe = _hunt_target(u, c)
@@ -143,7 +158,7 @@ func _hunted(u: Unit, c: Crew, foe: Unit) -> bool:
 
 ## Someone on foot doesn't run after a rider: they'd only break the line. An archer can still shoot.
 func _can_run_down(u: Unit, foe: Unit) -> bool:
-	return u.mounted or not foe.mounted or (can_shoot_bow(u) and u.arrows > 0 and u.pos.distance_to(foe.pos) <= bow_range(u, foe))
+	return u.mounted or not foe.mounted or (can_shoot_bow(u) and u.pos.distance_to(foe.pos) <= bow_range(u, foe))
 
 
 ## The nearest enemy person the crew can see and reach. Claims them like any other target.
@@ -183,18 +198,11 @@ func _maybe_flee(u: Unit, dt: float, r: float) -> bool:
 
 func _fight(u: Unit, foe: Unit, dt: float, order: String, c: Crew) -> void:
 	var d := u.pos.distance_to(foe.pos)
-	if can_shoot_bow(u) and u.arrows > 0 and (u.weapon == "" or d > 6.0 or foe.in_tower >= 0) and d <= bow_range(u, foe):
+	if can_shoot_bow(u) and (u.weapon == "" or d > 6.0 or foe.in_tower >= 0) and d <= bow_range(u, foe):
 		u.engaged = false
 		_shoot_at(u, foe)
 		return
 	var holding := order == "hold"
-	if not holding and u.bow and u.arrows <= 0 and u.weapon == "":
-		# Out of arrows: go and refill at the armory.
-		var arm := nearest_building(u.faction, u.pos, ["armory"])
-		if arm:
-			if go_to_building(u, arm, dt, 1.4, true):
-				refill_quiver(u, fac(u.faction))
-			return
 	var stand := stand_distance(u, foe)
 	if d <= stand + (STAY_MARGIN if u.engaged else START_MARGIN):
 		face(u, foe.pos)
@@ -247,14 +255,9 @@ func _shoot_at(u: Unit, foe: Unit) -> void:
 			return
 		u.cooldown = 2.0
 		u.shot_t = t
-		u.arrows -= 1
 		fire_arrow(u, foe, armory_tier(u.faction))
 
 
-func _tower_resupply(u: Unit) -> Building:
-	if u.arrows <= 0 and int(fac(u.faction).gear.get("arrows", 0)) > 0:
-		return nearest_building(u.faction, u.pos, ["armory"])
-	return null
 
 
 func _walk_into_tower(u: Unit, tower: Building, dt: float) -> void:
@@ -278,9 +281,7 @@ func _update_tower_archer(u: Unit, dt: float) -> void:
 	if u.flee_t > 0.0 or (u.hp < u.max_hp * 0.25 and t - u.hit_t < 4.0):
 		u.flee_t = 10.0
 		leave_tower(u)
-	elif _tower_resupply(u):
-		leave_tower(u)
-	elif u.arrows > 0:
+	else:
 		var search_range := bow_range(u)
 		var foe := nearest_enemy(u.pos, search_range, u.faction, func(o): return u.pos.distance_to(o.pos) <= bow_range(u, o))
 		if foe:
@@ -687,23 +688,15 @@ func update_engine(e: Unit, dt: float) -> void:
 		else:
 			crew_units.append(m)
 	var need := int(Defs.ITEMS[e.kind]["crew"])
-	if crew_units.is_empty():
+	if crew_units.size() < need:
 		e.anim = Anim.IDLE
 		return
 	var f := fac(e.faction)
-	# Load shot near the armory.
-	if e.kind == "cannon" and e.ammo < Defs.SHOT_LOAD:
-		var arm := nearest_building(e.faction, e.pos, ["armory"])
-		if arm and arm.pos.distance_to(e.pos) < 30.0:
-			var take := mini(Defs.SHOT_LOAD - e.ammo, int(f.gear.get("shot", 0)))
-			if take > 0:
-				e.ammo += take
-				f.gear["shot"] = int(f.gear["shot"]) - take
 	var c := crew_of(crew_units[0])
 	var s: Dictionary = c.steps[c.idx] if c and c.idx < c.steps.size() else {}
 	var a: String = s.get("action", "hold")
 	var goal: Vector2 = e.pos
-	if a == "attack" or a == "guard":
+	if a in ["attack", "guard", "move"]:
 		goal = c.state.get("target", e.pos)
 	elif a == "follow":
 		var cmd := unit(f.commander)
@@ -714,42 +707,53 @@ func update_engine(e: Unit, dt: float) -> void:
 	# Pick something to shoot or ram.
 	var rng_max: float = Defs.CANNON["range"] if e.kind == "cannon" else 3.0
 	var tb := _engine_target_building(e, goal, rng_max)
-	var crewed := crew_units.size() >= need
-	var speed_scale := 1.0 if crewed else 0.35
 	var base_speed: float
 	if e.kind == "cannon":
 		base_speed = Defs.CANNON["speed_team"] if e.team else Defs.CANNON["speed_hand"]
 	else:
 		base_speed = Defs.RAM["speed_team"] if e.team else Defs.RAM["speed"]
+	if a in ["move", "recall", "follow"]:
+		_engine_move(e, goal, dt, base_speed, 3.0)
+		return
+	if a == "attack" and s.get("where") == "marked":
+		var marked_building := _nearest_enemy_building(e.faction, goal, 8.0)
+		if marked_building:
+			tb = marked_building
+	if a == "hold" and (tb == null or tb.pos.distance_to(e.pos) > rng_max + (tb.size.length() * 0.5 if e.kind == "ram" else 0.0)):
+		tb = null
 	if e.kind == "cannon":
-		var aim_unit: Unit = null
-		if tb == null:
+		var aim_unit := unit(c.state.get("marked_unit", -1)) if c and a == "attack" else null
+		if aim_unit and (aim_unit.dead or not is_hostile(e.faction, aim_unit)):
+			aim_unit = null
+		if aim_unit:
+			tb = null
+			goal = aim_unit.pos
+		elif tb == null:
 			aim_unit = _cluster_target(e, rng_max)
-		var in_range := (tb != null and tb.pos.distance_to(e.pos) <= rng_max) or aim_unit != null
-		if in_range and crewed:
+		var in_range := (tb != null and tb.pos.distance_to(e.pos) <= rng_max) or (aim_unit != null and aim_unit.pos.distance_to(e.pos) <= rng_max)
+		if in_range:
 			var aim: Vector2 = tb.pos if tb else aim_unit.pos
 			face(e, aim)
 			e.anim = Anim.LOAD if e.reload > 0.0 else Anim.IDLE
-			if e.reload <= 0.0 and e.ammo > 0:
-				e.ammo -= 1
+			if e.reload <= 0.0:
 				e.reload = Defs.CANNON["reload"]
 				fire_ball(e, aim, tb.id if tb else -1)
-			elif e.ammo <= 0 and e.faction == 0 and t - e.hit_t > 30.0:
-				e.hit_t = t
-				post(0, "A cannon is out of shot. Make more at the armory (/c shot).", "warn")
+			elif aim_unit and s.get("where") == "marked" and a == "attack":
+				# Close on a singled-out person between shots: distant fire scatters widely.
+				_engine_move(e, aim, dt, base_speed, rng_max * 0.3)
 			return
 		var stop := 0.0 if a in ["follow", "recall"] else (rng_max * 0.75 if tb else 4.0)
-		_engine_move(e, goal, dt, base_speed * speed_scale, stop + 2.0)
+		_engine_move(e, tb.pos if tb else goal, dt, base_speed, stop + 2.0)
 	else:
 		if tb and tb.pos.distance_to(e.pos) < tb.size.length() * 0.5 + 3.5:
 			face(e, tb.pos)
-			if e.reload <= 0.0 and crewed:
+			if e.reload <= 0.0:
 				e.reload = Defs.RAM["reload"]
 				damage_building(tb, Defs.RAM["dmg_building"], e)
 				sound("ram", e.pos)
 			return
-		var dest := tb.pos if tb else goal
-		_engine_move(e, dest, dt, base_speed * speed_scale, (tb.size.length() * 0.5 + 2.5) if tb else 4.0)
+		var dest := tb.pos + (e.pos - tb.pos).normalized() * (tb.size.length() * 0.5 + 1.5) if tb else goal
+		_engine_move(e, dest, dt, base_speed, 1.0 if tb else 4.0)
 
 
 func _engine_move(e: Unit, goal: Vector2, dt: float, speed: float, arrive: float) -> void:
@@ -852,6 +856,17 @@ func _do_military(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
 			if arrived:
 				u.anim = Anim.IDLE
 				u.facing = cmd.facing
+		"move":
+			if move_to(u, target + u.slot, dt, 1.5):
+				u.anim = Anim.IDLE
+		"skirmish":
+			var center := crew_center_now(c)
+			var radial := (home_pos(c.faction) - target).normalized()
+			var leg := int(c.state.get("leg", 0))
+			var patrol := target + radial.rotated(-0.65 if leg % 2 == 0 else 0.65) * 46.0
+			if center.distance_to(patrol) < 10.0:
+				c.state["leg"] = leg + 1
+			move_to(u, patrol + u.slot, dt, 2.0, true)
 		"guard", "hold":
 			var dir := post_facing(u.faction, target)
 			var spot := station(u, c)
@@ -859,12 +874,7 @@ func _do_military(u: Unit, c: Crew, s: Dictionary, dt: float) -> void:
 				var tower := nearest_building(u.faction, target, ["tower"])
 				if tower and tower.pos.distance_to(target) < 12.0:
 					if tower.archer_posts.has(-1):
-						var arm := _tower_resupply(u)
-						if arm:
-							if go_to_building(u, arm, dt, 1.4, true):
-								refill_quiver(u, f)
-						else:
-							_walk_into_tower(u, tower, dt)
+						_walk_into_tower(u, tower, dt)
 						return
 					# Extra archers guard outside the tower until a post opens.
 					spot = approach_point(u, tower, 1.4)

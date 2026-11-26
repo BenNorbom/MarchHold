@@ -128,7 +128,7 @@ func _update_villager(u: Unit, dt: float) -> void:
 		u.flee_t = 0.0
 		update_worker(u, dt)
 		return
-	if u.task == "scout" and u.scout_leg < 3:
+	if u.task in ["man", "move"] or u.siege >= 0 or (u.task == "scout" and u.scout_leg < 3):
 		update_worker(u, dt)
 		return
 	var c := crew_of(u)
@@ -333,24 +333,21 @@ func step_problem(faction: int, s: Dictionary) -> String:
 	var subj: String = s.get("subject", "")
 	var at: String = s.get("where", "")
 	if at.begins_with(Defs.PLACE) and not places_of(faction).has(at.substr(Defs.PLACE.length())):
-		return "There's no place called %s. Mark it (R), then say 'call this %s'." % [at.substr(Defs.PLACE.length()).capitalize(), at.substr(Defs.PLACE.length()).capitalize()]
+		return "There's no place called %s. Mark it (Shift+R), then say 'call this %s'." % [at.substr(Defs.PLACE.length()).capitalize(), at.substr(Defs.PLACE.length()).capitalize()]
+	if at == "marked" and not f.has_mark:
+		return "Mark the destination first with Shift+R."
 	match s["action"]:
 		"build":
 			return unlock_problem(faction, subj)
 		"craft":
 			var it: Dictionary = Defs.ITEMS[subj]
-			var need_age: int = [0, 2, 3][it["tier"]]
+			var need_age: int = 1 if subj == "bow" else [0, 2, 3][it["tier"]]
 			if it.has("research"):
 				need_age = 3
 			if f.age < need_age:
 				return "%s need the %s age. %s" % [Defs.item_name(subj, 2).capitalize(), Defs.AGES[need_age], Defs.AGE_HOW[need_age]]
 			if it.has("research") and not f.researched.has(it["research"]) and f.age < 4:
 				return "Cannons need gunpowder. Build a university and research it."
-		"smelt":
-			if subj == "iron" and f.age < 3:
-				return "Iron needs an iron furnace (upgrade the smelter in the Bronze age)."
-			if f.age < 1:
-				return "Smelting needs the Stone age. %s" % Defs.AGE_HOW[1]
 		"upgrade":
 			var up := _upgrade_for(faction, subj)
 			if up.begins_with("!") and not up.contains("first"):
@@ -362,6 +359,8 @@ func step_problem(faction: int, s: Dictionary) -> String:
 			if not rd.is_empty() and rd.has("requires") and not f.researched.has(rd["requires"]):
 				return "%s needs the %s first." % [rd["name"], Defs.RESEARCH[rd["requires"]]["name"].to_lower()]
 		"gather":
+			if subj == "iron" and not f.researched.has("iron_mining"):
+				return "Research Iron Mining at a mine first."
 			if subj in Defs.DEPOSITS and f.age < 1:
 				return "Mining needs the Stone age. %s" % Defs.AGE_HOW[1]
 		"tame", "mount":
@@ -388,11 +387,6 @@ func first_step_problem(faction: int, s: Dictionary) -> String:
 				why = "we need an armory first."
 			elif subj != "" and int(fac(faction).gear.get(subj, 0)) <= 0:
 				why = "there are no %s in the armory. Make some with /c." % Defs.item_name(subj, 2)
-		"smelt":
-			if buildings_of(faction, "smelter").is_empty():
-				why = "we need a smelter first."
-			elif subj == "iron" and buildings_of(faction, "smelter").all(func(b): return b.tier < 1):
-				why = "the smelter has to be upgraded to an iron furnace first."
 		"research":
 			why = research_problem(faction, subj)
 		"tame":
@@ -415,11 +409,11 @@ func first_step_problem(faction: int, s: Dictionary) -> String:
 				return site != null and not site.dead and not site.complete and site.faction == faction
 			):
 				why = "there's no site placed for the %s." % Defs.building_name(subj).to_lower()
-		"scout", "guard", "hold", "attack":
+		"move", "skirmish", "scout", "guard", "hold", "attack":
 			var where: String = s.get("where", "")
 			# An unseen enemy camp is no reason to refuse: attack marches to the best guess.
 			if where == "marked" and not fac(faction).has_mark:
-				why = "mark a spot first (look at the ground and press R)."
+				why = "mark a spot first (look at the ground and press Shift+R)."
 		"gather":
 			var g: Dictionary = Defs.GATHER[subj]
 			if g.has("building") and not g.has("node"):
@@ -453,7 +447,7 @@ func _default_size(faction: int, s: Dictionary) -> int:
 			return 4 if Defs.BUILDINGS.get(s["subject"], {}).get("wall", false) else 3
 		"upgrade":
 			return 3
-		"craft", "smelt":
+		"craft":
 			return 2
 		"research", "scout", "tame", "mount":
 			return 1
@@ -628,8 +622,6 @@ func post_status(p: Post) -> String:
 			var what: String = s["action"]
 			if what == "gather":
 				what = Defs.GATHER[s["subject"]]["name"]
-			elif what == "smelt":
-				what = "smelting"
 			working[what] = int(working.get(what, 0)) + 1
 	for what in working:
 		doing.append("%d %s" % [working[what], what])
@@ -748,7 +740,7 @@ func give_mandate(faction: int, req: Dictionary, s: Dictionary) -> Dictionary:
 			here.members = [lead.id]
 			at = resolve_where(here, where, 120.0)
 			if at == null:
-				return {"ok": false, "error": "Mark a spot first (look at the ground and press R)." if where == "marked" else "We don't know where that is yet."}
+				return {"ok": false, "error": "Mark a spot first (look at the ground and press Shift+R)." if where == "marked" else "We don't know where that is yet."}
 	var p: Post = village_post(faction) if kind == "village" else null
 	if p == null and leads_post(lead):
 		p = post_of(lead)
@@ -814,7 +806,7 @@ func set_strategy(p: Post, id: String, amount: int) -> String:
 		if f.age >= int(st["age"]):
 			return "%s: we're already in %s." % [post_label(p), st["name"]]
 		p.goal = int(st["age"])
-		post(p.faction, "%s: we'll get to %s as fast as we can. Mines, smelting and the works come first now." % [post_label(p), st["name"]], "info")
+		post(p.faction, "%s: we'll get to %s as fast as we can. Mines and research come first now." % [post_label(p), st["name"]], "info")
 		return ""
 	p.focus = id
 	p.focus_keep = amount if amount > 0 else int(st.get("keep", 0))
@@ -907,6 +899,16 @@ func command(faction: int, req: Dictionary) -> Dictionary:
 	var err := Defs.validate_steps(steps)
 	if err != "":
 		return {"ok": false, "error": err}
+	if steps[0]["action"] == "skirmish" and steps[0]["subject"] == "cavalry":
+		var patrol: Dictionary = steps[0].duplicate()
+		var patrol_size: int = patrol["count"]
+		patrol["count"] = 0
+		if _stable_with_horse(faction, home_pos(faction)) == null and not people_in(faction, req).any(func(u): return u.mounted):
+			return {"ok": false, "error": "The cavalry patrol needs grown horses at a stable."}
+		if not has_building(faction, "armory"):
+			return {"ok": false, "error": "Build an armory to equip the cavalry patrol."}
+		steps = [{"action": "mount", "subject": "", "count": patrol_size}, {"action": "arm", "subject": "", "count": 0}, patrol]
+		steps = clean_steps(steps)
 	if steps[0]["action"] == "resume_work":
 		return _resume_order(faction, req)
 	var expanded := []
@@ -923,6 +925,9 @@ func command(faction: int, req: Dictionary) -> Dictionary:
 		var e2 := step_problem(faction, s)
 		if e2 != "":
 			return {"ok": false, "error": e2}
+		if s.where == "marked":
+			s["mark_pos"] = fac(faction).mark
+			s["mark_unit"] = fac(faction).marked_unit
 	if steps[0]["action"] == "free":
 		# "Take 2 off wood" happens at once; what follows (put them on stone) goes to exactly those people.
 		var source: String = steps[0]["subject"]
@@ -973,6 +978,92 @@ func command(faction: int, req: Dictionary) -> Dictionary:
 		return {"ok": why == "", "error": why.substr(0, 1).to_upper() + why.substr(1), "crews": []}
 	var targets := []
 	var first: Dictionary = steps[0]
+	if first["action"] == "move":
+		var probe := Crew.new()
+		probe.faction = faction
+		var destination = resolve_where(probe, first["where"])
+		var movers := people_in(faction, req)
+		var origins := movers.map(func(u): return u.pos)
+		if origins.is_empty():
+			origins.append(home_pos(faction))
+		var reachable := {}
+		for origin: Vector2 in origins:
+			if destination == null:
+				return {"ok": false, "error": "Mark a destination first."}
+			var cell := nearest_free_cell(faction, cell_of(origin))
+			if reachable.has(cell) or line_clear(faction, origin, destination):
+				continue
+			var route := blocking.route_into(faction, cell, nearest_free_cell(faction, cell_of(destination)))
+			if route.is_empty():
+				return {"ok": false, "error": "That destination is unreachable for this group. Mark open ground or choose another route."}
+			for waypoint in route:
+				reachable[waypoint] = true
+	if first["action"] == "arm" and first["subject"] == "" and steps.size() > 1 and steps[1]["action"] == "guard":
+		var roster := people_in(faction, req)
+		if req.get("all", false):
+			roster = units.filter(func(u): return orderable_unit(faction, u.id) != null and u.siege < 0)
+		elif not req.has("units") and not req.has("post") and not req.has("unit") and (not req.has("crew") or int(first["count"]) > roster.size()):
+			var want := int(first["count"])
+			var recruits := idle_adults(faction, home_pos(faction))
+			if recruits.size() + roster.size() < want:
+				recruits.append_array(_pull_workers(faction, home_pos(faction), want - recruits.size() - roster.size(), _addressed_crew(faction, req)))
+			for recruitable in recruits:
+				if not roster.has(recruitable):
+					roster.append(recruitable)
+		var weapons := 0
+		var lances := 0
+		for item in fac(faction).gear:
+			if str(item).ends_with("lance"):
+				lances += int(fac(faction).gear[item])
+			elif Defs.ITEMS.get(item, {}).get("slot", "") in ["weapon", "bow"]:
+				weapons += int(fac(faction).gear[item])
+		# Other groups already walking to an armory have first claim on their weapons.
+		for u: Unit in units:
+			if u.faction == faction and not u.dead and u.task == "arm" and not armed(u) and not roster.has(u):
+				if u.mounted and lances > 0:
+					lances -= 1
+				else:
+					weapons -= 1
+		var chosen := []
+		roster.sort_custom(func(a, b): return int(armed(a)) > int(armed(b)))
+		for u in roster:
+			if u.child or u.siege >= 0:
+				continue
+			if not armed(u):
+				if u.mounted and lances > 0:
+					lances -= 1
+				elif weapons > 0:
+					weapons -= 1
+				else:
+					continue
+			chosen.append(u.id)
+			if int(first["count"]) > 0 and chosen.size() >= int(first["count"]):
+				break
+		if chosen.is_empty():
+			return {"ok": false, "error": "No equipped militia or spare weapons. Workers are continuing their jobs."}
+		# Keep established work crews together on a full muster so they resume together.
+		if not (req.get("all", false) and chosen.size() == roster.size() and not units.any(func(u): return not u.dead and u.faction == faction and u.siege >= 0)):
+			req = {"units": chosen}
+	if first["action"] == "man":
+		if steps.size() == 1:
+			steps.append({"action": "hold", "subject": "", "count": 0, "amount": 0, "where": ""})
+		var hands := people_in(faction, req)
+		var origin: Vector2 = hands[0].pos if not hands.is_empty() else home_pos(faction)
+		var available := _free_engine(faction, first["subject"], origin)
+		if req.has("engine"):
+			available = unit(int(req.engine))
+			if available == null or available.dead or available.faction != faction or available.kind != first.subject or _open_engine_seats(available) <= 0:
+				return {"ok": false, "error": "That engine has no open crew positions."}
+		first["engine"] = available.id
+		if hands.is_empty() and (req.get("all", false) or not (req.has("post") or req.has("unit") or req.has("units") or req.has("crew"))):
+			hands = idle_adults(faction, available.pos)
+			hands.append_array(gatherers_of(faction, ""))
+		var vacancies := _open_engine_seats(available)
+		hands = hands.filter(func(u): return u.siege < 0 and not u.child).slice(0, vacancies)
+		if hands.is_empty():
+			return {"ok": false, "error": "No available operators for that engine."}
+		req = {"units": hands.map(func(u): return u.id)}
+
 	if req.get("all", false):
 		for c: Crew in crews.values():
 			if c.faction == faction:
@@ -992,6 +1083,12 @@ func command(faction: int, req: Dictionary) -> Dictionary:
 				close_post(p)
 			return {"ok": true, "crews": []}
 		var detail := _post_detail(p, first)
+		if steps.back()["action"] == "skirmish" and first["count"] > detail.size():
+			for u in idle_adults(faction, p.center):
+				if u.post < 0 and not detail.has(u):
+					detail.append(u)
+					if detail.size() >= first["count"]:
+						break
 		if detail.is_empty():
 			for id in laid:
 				remove_site(id)
@@ -999,6 +1096,7 @@ func command(faction: int, req: Dictionary) -> Dictionary:
 		for s in steps:
 			s["count"] = 0      # their own people, not whoever is nearest
 		for u in detail:
+			_remember_worker(u)
 			release_member(u)
 		targets.append(make_crew(faction, detail))
 	elif req.has("crew"):
@@ -1339,9 +1437,10 @@ func remove_site(id: int) -> void:
 		remove_building(b, "cancelled")
 
 
-func set_mark(faction: int, p: Vector2) -> void:
+func set_mark(faction: int, p: Vector2, target_id: int = -1) -> void:
 	var f := fac(faction)
 	f.mark = p
+	f.marked_unit = target_id
 	f.mark_t = t
 	f.has_mark = true
 
@@ -1353,7 +1452,7 @@ func name_place(faction: int, title: String) -> Dictionary:
 	if not f.has_mark or t - f.mark_t > FRESH_MARK:
 		var me := commander(faction)
 		if me == null:
-			return {"ok": false, "error": "Mark a spot first (look at the ground and press R)."}
+			return {"ok": false, "error": "Mark a spot first (look at the ground and press Shift+R)."}
 		p = me.pos
 	f.places[title.to_lower()] = {"name": title, "pos": p}
 	return {"ok": true}
@@ -1396,9 +1495,8 @@ func tower_at_door(faction: int, p: Vector2) -> Building:
 func commander_shoot(faction: int, origin: Vector3, dir: Vector3, power: float, now: float = -1.0) -> bool:
 	var u := commander(faction)
 	var at := now if now >= 0.0 else t
-	if u == null or u.dead or not can_shoot_bow(u) or u.arrows <= 0 or at + EPS < u.shot_t + NOCK:
+	if u == null or u.dead or not can_shoot_bow(u) or at + EPS < u.shot_t + NOCK:
 		return false
-	u.arrows -= 1
 	u.shot_t = at
 	var p := clampf(power, 0.0, 1.0)
 	fire_free_arrow(u, origin, dir.normalized() * lerpf(22.0, 62.0, p), armory_tier(faction), lerpf(0.45, 1.0, p))
@@ -1416,14 +1514,12 @@ func commander_take_gear(faction: int) -> String:
 	if arm == null or arm.pos.distance_to(u.pos) > arm.size.length() * 0.5 + 4.0:
 		return "Stand next to your armory to take gear."
 	var f := fac(faction)
-	var before := [u.weapon, u.shield, u.armor, u.bow, u.arrows]
+	var before := [u.weapon, u.shield, u.armor, u.bow]
 	_equip_best(u, f)
 	if not u.bow and int(f.gear.get("bow", 0)) > 0:
 		u.bow = true
 		f.gear["bow"] = int(f.gear["bow"]) - 1
-	if u.bow:
-		refill_quiver(u, f)
-	if [u.weapon, u.shield, u.armor, u.bow, u.arrows] == before:
+	if [u.weapon, u.shield, u.armor, u.bow] == before:
 		return "Nothing better in the armory. Make gear with /c."
 	var parts: Array[String] = []
 	parts.append(Defs.item_name(u.weapon) if u.weapon != "" else "bare hands")
@@ -1432,7 +1528,7 @@ func commander_take_gear(faction: int) -> String:
 	if u.armor != "":
 		parts.append(Defs.item_name(u.armor))
 	if u.bow:
-		parts.append("bow with %d arrows" % u.arrows)
+		parts.append("bow")
 	return "You take " + ", ".join(parts) + "."
 
 
@@ -1663,6 +1759,9 @@ func brief(faction: int, addressed: String, crew_id: int, individual: bool = fal
 		"next_age": next_age_text(faction),
 		"stock": stock,
 		"armory_stock": gear,
+		"production": armory_overview(faction),
+		"researched": f.researched.keys(),
+		"research_options": research_menu(faction),
 		"population": {"people": f.pop, "adults": f.adults, "children": f.children, "housing": f.housing,
 			"idle_adults": f.idle, "armed": f.soldiers, "horses_in_stables": f.horses},
 		"food": {"state": Defs.FOOD_STATES[f.food_state], "stored": int(f.stock.get("food", 0)), "storage": f.food_cap,

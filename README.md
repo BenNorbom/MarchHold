@@ -32,10 +32,10 @@ Start with **The Founding** (tutorial) from the main menu. Terra, your steward, 
 | Q | Switch between bow and weapon (rotates a building while placing) |
 | E / G | E talks or uses a stone tower door. E or G takes gear at the armory. |
 | F | Take or leave a horse at your stable |
-| R | Mark the spot you're looking at (orders can say "there" or "the mark") |
+| Shift+R | Mark the spot you're looking at (orders can say "there" or "the mark") |
 | Tab | Cycle between the whole crew and individual members in chat. Open the ledger outside chat. |
 | M | Field map (only what you and your scouts have seen) |
-| B / C | Build / craft. Then B (basic) or V (advanced), then one key: B, B, H is a hut |
+| B / C / R | Build, armory, research. Choose a tile or press its letter. |
 | F1 or H | Help |
 | Esc | Close menus, cancel placement, clear the selection, pause |
 | F11 / F12 | Fullscreen / screenshot |
@@ -48,7 +48,7 @@ Look at a villager and press **Enter** to address their whole crew. Press **Tab*
 
 Promote a villager to captain and give them a post, such as “run the village” or “take charge of farming here.” Captains staff jobs, build within their mandate, and respond to threats. Use the people menu to talk to a post.
 
-Give a captain a strategy: “get to the Iron age ASAP” has them build the mines, smelter, furnace and university and staff them; “focus on pike production” keeps 20 pikes in the armory (“focus on 40 pikes” for more), doing the research and building the armories it takes. Focuses: pikes, swords, archers, cavalry, cannons, spears, growth, defence. An age and a focus can both stand. “Go back to normal” drops them.
+Give a captain a strategy: “get to the Iron age ASAP” has them build the mines and university and staff them; “focus on pike production” keeps 20 pikes in the armory (“focus on 40 pikes” for more), doing the research and building the armories it takes. Focuses: pikes, swords, archers, cavalry, cannons, spears, growth, defence. An age and a focus can both stand. “Go back to normal” drops them.
 
 Give a selected individual a new order to take them out of their current crew, or say `dismiss` to release them. Say `join @Name` to move the addressed individual or crew into that person's crew and pick up its current orders.
 
@@ -56,12 +56,12 @@ Slash commands work instantly and never need Terra:
 
 | Command | Opens |
 |---|---|
-| `/b` | Build popup with pictures and keys. `b` is basic and `v` advanced, then one key: `/b b h` is a hut (`/b hut` also works) |
-| `/c` | Weapons popup, keyed the same way: `/c b w` is a wooden spear, `/c 5 b w` five (`/c spears 5` also works). Hold **Shift** and keep pressing the key or clicking the picture to keep buying, or hold it down |
+| `/b` | Build menu. B then H places a hut. |
+| `/c` | Armory. C then W orders one wooden spear. |
 | `/l` | Ledger: stores, people, food, housing, crews |
 | `/p` | People and crews |
 | `/s` | Scout reports, newest first |
-| `/r` | Research: bronze and iron armory, mounted archery (stable) and gunpowder (university). Picked like `/b` and `/c`; `/r gunpowder` works too. Research is paid up front and runs by itself, with no villagers |
+| `/r` | Research Iron Mining at a mine, bronze and iron armory tiers at an armory, mounted archery at a stable, and Gunpowder at a university. You can also type `/r gunpowder`. Research is paid up front and runs by itself, with no villagers |
 | `/m` | Field map |
 | `/t` | Tech tree |
 | `/h` | Help |
@@ -70,28 +70,24 @@ Orders the game understands without Terra, for example:
 
 ```
 gather wood · gather 30 wood then build a hut · pick berries · work the farms · hunt
-build a hut · build a palisade · make 32 arrows · arm 6 with spears · to arms! · fall back
+build a hut · build a palisade · make four spears · arm 6 with spears · to arms! · fall back
 send two scouts east · scout their camp · attack their camp · guard the mark · follow me · hold
-tame 3 horses · mount up · smelt bronze · research the bronze armory · research gunpowder · man the cannon
+tame 3 horses · mount up · mine bronze · research the bronze armory · research gunpowder · man the cannon
 promote · dismiss · status · cancel
 continue construction · finish the wall · gather wood here · back to work
 ```
 
 ### Hotkeys
 
-`/b`, `/c` and `/r` open a popup of pictures. A hotkey acts the moment it is complete, with no Enter: typing `/b b h` (or pressing B, B, H) lets you place a hut. You can also click a picture. An order recalled with the Up arrow still waits for Enter. Crafting takes its count first: `/c 2 b a` makes two batches of arrows.
+Click a villager or Shift-click a group, press **B**, then click the building or press its displayed key. Click the ground to place it. **C** opens the armory and **R** opens research for the settlement. Each tile has a fixed shortcut. Hold Shift to repeat a purchase. Typed names such as `/c bronze sword 5` work in chat. The armory shows stocks, active production, time to the next completion, queued items, and field engine crews.
 
-| | Keys |
-|---|---|
-| `/b b` Basic structures | **H** hut · **F** farm · **S** stockpile · **A** armory · **P** palisade · **G** palisade gate · **W** watch post · **Q** quarry |
-| `/b v` Advanced structures | **W** stone wall · **G** stone gate · **T** tower · **H** stable · **M** mine · **S** smelter · **U** university · **B** battering ram · **F** iron furnace |
-| `/c b` Basic weapons | **W** wooden spear · **D** wooden shield · **B** bow · **A** arrows · **R** ram · bronze: **S** sword, **H** shield, **M** armor, **P** pike, **L** lance |
-| `/c v` Advanced weapons | iron: **S** sword, **H** shield, **M** armor, **P** pike, **L** lance · **C** cannon · **T** cannon shot |
-| `/r` Research | **B** bronze armory · **I** iron armory · **M** mounted archery · **G** gunpowder |
+**Shift+R** marks ground or a structure. With villagers selected, type `go there`. Try `man the ram, then attack the marked gate`. Cannons need three operators and rams need four. Aim at a crewed engine and open chat to redirect its crew. **P** opens People, **L** the ledger, **J** scout reports, **Y** the tech tree, and **M** the map.
+
+An equipped militia answers a call to arms. Workers who cannot get a weapon carry on. A captain can take a free-form objective through your Terra connection. For example, ask a captain to take 30 cavalry to skirmish. The patrol gathers mounts, equips riders, pursues isolated opponents, and pulls away from a larger group. Terra can review completed phases against the same objective using the existing per-match request budget.
 
 Walls are placed post to post: choose a palisade or stone wall, click each post, press Enter to finish.
 
-Mark a finished stone tower with **R** and tell your archers to `guard the mark`. Up to three will walk to the door and take rooftop posts. They shoot farther from the roof, and the stone parapet shelters them. Press **E** at the door to join them, then **E** on the roof to return to the door.
+Mark a finished stone tower with **Shift+R** and tell your archers to `guard the mark`. Up to three will walk to the door and take rooftop posts. They shoot farther from the roof, and the stone parapet shelters them. Press **E** at the door to join them, then **E** on the roof to return to the door.
 
 ### Terra (optional)
 
@@ -104,9 +100,9 @@ MarchHold keeps account credentials encrypted on your PC. When you submit a free
 ## How the game works
 
 - **Growth.** Villagers are born when the village is *fed* (1 food stored per person, 75% of the birth rate) or *well fed* (3 food per person, full rate) and there's free housing. Births keep building up while housing is full (up to half a birth per adult), so a new hut or a death is filled at once. The campfire houses 8 and each hut 6, up to 200 people. The campfire stores 150 food and each stockpile 50 more.
-- **Ages.** Wood (start) → Stone (build a quarry by a rock outcrop) → Bronze (smelt bronze from bronze ore and coal) → Iron (upgrade the smelter to an iron furnace) → Gunpowder (university research). Researching the bronze and then the iron armory (`/r`) upgrades every armory at once, including ones built later.
+- **Ages.** Wood (start) → Stone (build a quarry by a rock outcrop) → Bronze (mine bronze directly) → Iron (research Iron Mining at a mine) → Gunpowder (university research). Researching the bronze and then the iron armory (`/r`) upgrades every armory at once, including ones built later.
 - **Scouting.** You only know what you've seen. Scouts report when they return, and if they die, what they saw dies with them. Watch posts and towers ring the alarm when enemies appear.
-- **Armories.** Each armory works through a queue by itself, one item at a time, paying for each as it starts. An order is shared out among all your armories, so more armories make it sooner. Once the armory is researched to bronze it stops making wooden shields, and at iron it stops making bronze gear; wooden spears, bows, arrows and rams are always made.
+- **Armories.** Each armory works through a queue by itself, one item at a time, paying for each as it starts. An order is shared out among all your armories, so more armories make it sooner. Each armory tier adds recipes. Bows unlock in the Stone age. Archers and cannons carry their own ammunition.
 - **Combat.** Pikes beat cavalry. Cavalry runs down archers. Shields and armor blunt arrows. Sword and shield beat pikes up close. A raised shield protects you from blows and arrows from the front. Blocking costs stamina, and a well-timed parry staggers the attacker. Pikemen and archers need both hands, so they carry no shield. A cannonball kills whatever it lands on, even another cannon, but only one target, and it misses more the further it flies. Cannons smash walls, reload slowly and need a crew of three. Horses pull cannons faster.
 
 The full design is in [PLAN.md](PLAN.md) and the tech tree in [TECH_TREE.md](TECH_TREE.md).
@@ -129,6 +125,9 @@ godot --path .
 
 # Test, export and build the installer into dist/
 powershell -ExecutionPolicy Bypass -File tools\build.ps1
+
+# Play both exported modes through the victory screen with Terra off
+powershell -ExecutionPolicy Bypass -File tools\verify-release.ps1
 ```
 
 `tools/build.ps1` expects Godot and Inno Setup under `%USERPROFILE%\Tools` and takes `-Godot` and `-Iscc` parameters if they live elsewhere. `python tools/fetch_textures.py` re-downloads the CC0 textures.
@@ -149,7 +148,9 @@ powershell -ExecutionPolicy Bypass -File tools\build.ps1
 
 ## Status
 
-Version 0.6.0 adds the Grand army mode, strategy orders for captains (“get to the Iron age ASAP”, “focus on pike production”), armories that work through queues by themselves, armory upgrades as research in a new `/r` popup, battering rams built in the field, Shift to keep buying, and births while only fed. Berries run out sooner, so farms matter. Weapons are bought one at a time and cost more; metal spears are gone, and pikemen and archers carry no shield. Cannonballs kill one target outright. Rook defends far better against rushes, and big battles no longer freeze the game.
+Version 0.7.0 adds direct mining, the unified purchase and research menus, ammunition-free ranged combat, persistent siege crews, movement orders, and captain-led skirmish patrols. Shift+R marks targets.
+
+Version 0.6.0 added the Grand army mode, strategy orders for captains (“get to the Iron age ASAP”, “focus on pike production”), armories that work through queues by themselves, armory upgrades as research in a new `/r` popup, battering rams built in the field, Shift to keep buying, and births while only fed. Berries run out sooner, so farms matter. Weapons are bought one at a time and cost more; metal spears are gone, and pikemen and archers carry no shield. Cannonballs kill one target outright. Rook defends far better against rushes, and big battles no longer freeze the game.
 
 Version 0.5.0 added multi-rival matches, captain posts, combat timing and parries, stone tower garrisons, and build and craft hotkeys.
 

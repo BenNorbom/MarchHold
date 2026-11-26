@@ -1,7 +1,6 @@
 extends PanelContainer
 ## The small window above the chat line: a picture and a key for each thing on the page.
 
-signal page_picked(page: String)
 signal key_picked(key: String)
 
 const UiTheme = preload("res://scripts/ui/ui_theme.gd")
@@ -9,12 +8,12 @@ const Defs = preload("res://scripts/data/defs.gd")
 const Hotkeys = preload("res://scripts/game/hotkeys.gd")
 
 const ICON := "res://assets/icons/%s_%s.png"
-const CELL := Vector2(107, 123)
-const PAGE_TILE := Vector2(266, 128)
+const CELL := Vector2(137, 137)
+const ARMORY_CELL := Vector2(165, 149)
 const GAP := 4
-const TITLES := {"b": "Build", "c": "Craft", "r": "Research"}
 const DIMMED := Color(1, 1, 1, 0.6)
 
+var inventory_labels := {}
 var title: Label
 var grid: GridContainer
 var detail: RichTextLabel
@@ -48,30 +47,36 @@ func _ready() -> void:
 	add_child(repeat)
 
 
-func show_pages(command: String) -> void:
-	_clear()
-	title.text = "%s · /%s" % [TITLES[command], command]
-	grid.columns = Defs.HOTKEYS[command].size()
-	for page: String in Defs.HOTKEYS[command]:
-		grid.add_child(_page_tile(command, page))
-	_set_width(PAGE_TILE.x)
-	var example := "[b]/b b h[/b] builds a hut" if command == "b" else "[b]/c 2 b a[/b] makes two batches of arrows. Hold Shift to keep buying"
-	_set_detail("[b]B[/b] basic, [b]V[/b] advanced, then one key: %s." % example)
-
-
 ## quick: a key acts the moment it's typed, so the popup never asks for Enter.
 func show_entries(command: String, pick: Dictionary, entries: Array, quick: bool) -> void:
 	_clear()
 	var page: String = pick["page"]
 	title.text = "%s · %s" % [Defs.HOTKEYS[command][page]["name"], Hotkeys.draft(command, page).strip_edges()]
-	grid.columns = 4 if entries.size() <= 8 else (5 if entries.size() <= 10 else 6)
+	grid.columns = 5 if command == "c" else (4 if entries.size() <= 8 else 6)
+	if command == "c":
+		# Basic equipment and engines share the first row. Each metal fills one row.
+		var groups := [[], [], []]
+		for entry: Dictionary in entries:
+			var tier: int = Defs.ITEMS[entry.id].tier
+			groups[0 if entry.id in ["ram", "cannon"] else tier].append(entry)
+		entries = groups[0] + groups[1] + groups[2]
 	var chosen := {}
-	for e: Dictionary in entries:
+	for i in entries.size():
+		var e: Dictionary = entries[i]
+		if command == "c" and i % grid.columns == 0:
+			var last_group := ""
+			for j in range(i, mini(i + grid.columns, entries.size())):
+				var id: String = entries[j].id
+				var group: String = "Siege" if Defs.ITEMS[id].slot == "siege" else ["Wood", "Bronze", "Iron"][Defs.ITEMS[id].tier]
+				var group_title := _label(group if group != last_group else "", 14, UiTheme.GOLD)
+				last_group = group
+				group_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+				grid.add_child(group_title)
 		var picked: bool = e["key"] == pick["key"]
 		grid.add_child(_cell(e, picked))
 		if picked:
 			chosen = e
-	_set_width(CELL.x)
+	_set_width(ARMORY_CELL.x if command == "c" else CELL.x)
 	if pick.get("note", "") != "":
 		_set_detail(pick["note"])
 	elif pick["error"] != "":
@@ -87,36 +92,26 @@ func show_entries(command: String, pick: Dictionary, entries: Array, quick: bool
 		_set_detail(times + ("Press a key or click a picture." if quick else "Type a key and press Enter, or click a picture."))
 
 
-func _page_tile(command: String, page: String) -> Button:
-	var info: Dictionary = Defs.HOTKEYS[command][page]
-	var b := _button(PAGE_TILE, false)
-	var rows := _rows(b)
-	var head := _label("%s   %s" % [page.to_upper(), info["name"]], 19, UiTheme.GOLD)
-	rows.add_child(head)
-	var pictures := GridContainer.new()
-	pictures.columns = 6
-	pictures.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	pictures.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	rows.add_child(pictures)
-	for slot: String in info["keys"].values():
-		pictures.add_child(_picture(slot.get_slice(":", 0), slot.get_slice(":", 1), 38))
-	b.pressed.connect(func(): page_picked.emit(page), CONNECT_DEFERRED)
-	return b
-
-
 func _cell(e: Dictionary, picked: bool) -> Button:
-	var b := _button(CELL, picked)
+	var size := ARMORY_CELL if e.has("inventory") else CELL
+	var b := _button(size, picked)
 	var locked: bool = e["locked"] != ""
 	var rows := _rows(b)
-	var picture := _picture(e["kind"], e["id"], 60)
+	var picture := _picture(e["kind"], e["id"], 32 if e.has("inventory") else 60)
 	rows.add_child(picture)
-	var name_label := _label(e["name"], 14, UiTheme.INK)
+	var name_label := _label(e["name"], 17, UiTheme.INK)
 	name_label.clip_text = true
 	rows.add_child(name_label)
-	var cost := _text(13)
+	var cost := _text(15)
 	cost.add_theme_constant_override("line_separation", -2)
 	cost.text = "[center]%s[/center]" % _cost_bb(e["cost"], {} if locked else e["missing"])
 	rows.add_child(cost)
+	if e.has("inventory"):
+		var inventory_label := _label("", 15, UiTheme.INK)
+		inventory_label.clip_text = true
+		rows.add_child(inventory_label)
+		inventory_labels[e.id] = inventory_label
+		_inventory_text(inventory_label, e.id, e.inventory)
 	if locked:
 		rows.modulate = DIMMED
 
@@ -125,7 +120,7 @@ func _cell(e: Dictionary, picked: bool) -> Button:
 	b.add_child(key)
 	if e["batch"] > 1:
 		var count := _label("×%d" % e["batch"], 14, UiTheme.INK)
-		count.position = Vector2(CELL.x - 30, 3)
+		count.position = Vector2(size.x - 30, 3)
 		b.add_child(count)
 
 	var about: String = "[color=#ffd870]%s[/color]  %s" % [e["name"], e["desc"]]
@@ -144,6 +139,26 @@ func _cell(e: Dictionary, picked: bool) -> Button:
 				repeat.start(REPEAT_FIRST)
 				key_picked.emit.call_deferred(held_key))
 	return b
+
+
+func refresh_inventory(inventory: Dictionary) -> void:
+	for id in inventory_labels:
+		_inventory_text(inventory_labels[id], id, inventory[id])
+
+
+func _inventory_text(label: Label, id: String, counts: Dictionary) -> void:
+	var stock := "In stock %d" % counts.stock
+	if id in ["ram", "cannon"]:
+		stock = "Field %d · Crew %d/%d" % [counts.stock, counts.operators, counts.stock * Defs.ITEMS[id].crew]
+	var progress := "Making %d · Queued %d" % [counts.making, counts.queued]
+	var detail := ""
+	if counts.seconds > 0:
+		detail = "Next in %ds" % counts.seconds
+	if counts.waiting != "":
+		detail += ("\n" if detail != "" else "") + "Needs " + counts.waiting
+	label.text = stock + "\n" + progress + ("\n" + detail if detail != "" else "")
+	var button := label.get_parent().get_parent() as Button
+	button.tooltip_text = label.text
 
 
 func _on_repeat() -> void:
@@ -233,6 +248,7 @@ func _set_detail(text: String) -> void:
 
 
 func _clear() -> void:
+	inventory_labels.clear()
 	for child in grid.get_children():
 		grid.remove_child(child)
 		child.queue_free()

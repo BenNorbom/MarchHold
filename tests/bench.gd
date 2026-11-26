@@ -188,7 +188,6 @@ func _stage(m, pop: int, scenario: String) -> void:
 				for i in army.size():
 					army[i].weapon = "wood_spear"
 					army[i].bow = i % 4 == 0
-					army[i].arrows = Defs.QUIVER if army[i].bow else 0
 				var foe: Vector2 = m.fac((f.id + 1) % n).start
 				if scenario == "war":
 					# Everyone's army meets in the middle.

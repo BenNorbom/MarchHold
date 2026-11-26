@@ -1,5 +1,5 @@
 extends RefCounted
-## Build and craft by hotkey, StarCraft style: a page (b basic, v advanced), then one key.
+## Read fixed shortcuts and typed item names for the build, armory and research grids.
 ## Reads what's typed after /b or /c and describes each slot for the popup.
 
 const Defs = preload("res://scripts/data/defs.gd")
@@ -31,14 +31,14 @@ static func split_keys(command: String, args: PackedStringArray) -> PackedString
 
 
 ## {page, key, batches, entry, error}, or {} when the words are a name such as "hut".
-## Crafting takes its count first, so the key can act the moment it's typed: /c 2 b a.
+## Crafting takes its count first, so the key can act the moment it's typed: /c 2 w.
 static func read(m, command: String, args: PackedStringArray) -> Dictionary:
 	var pick := {"page": "", "key": "", "batches": 1, "entry": {}, "error": ""}
 	var words := Array(args)
 	if command == "c" and not words.is_empty() and str(words[0]).is_valid_int():
 		var count := int(words.pop_front())
 		if count < 1 or count > MAX_BATCHES:
-			pick["error"] = "Batches go from 1 to %d, as in /c 2 b a." % MAX_BATCHES
+			pick["error"] = "Batches go from 1 to %d, as in /c 2 w." % MAX_BATCHES
 			return pick
 		pick["batches"] = count
 	var sole := only_page(command)
@@ -68,7 +68,7 @@ static func read(m, command: String, args: PackedStringArray) -> Dictionary:
 		if command == "c" and words.size() == 3 and last.is_valid_int() and int(last) >= 1 and int(last) <= MAX_BATCHES:
 			pick["batches"] = int(last)   # still read when Enter sends the line, as with a recalled order
 		elif command == "c":
-			pick["error"] = "Batches go from 1 to %d, as in /c 2 %s %s." % [MAX_BATCHES, page, key]
+			pick["error"] = "Batches go from 1 to %d, as in /c 2 %s." % [MAX_BATCHES, key]
 		else:
 			pick["error"] = "One key does one thing, as in %s%s." % [draft(command, page), key]
 	if e["locked"] != "":
@@ -80,6 +80,10 @@ static func page_entries(m, command: String, page: String) -> Array:
 	var out := []
 	for key in Defs.HOTKEYS[command][page]["keys"]:
 		out.append(entry(m, command, page, key))
+	if command == "c":
+		var overview: Dictionary = m.armory_overview(0)
+		for row in out:
+			row["inventory"] = overview[row["id"]]
 	return out
 
 
@@ -95,10 +99,8 @@ static func entry(m, command: String, page: String, key: String) -> Dictionary:
 		"craft":
 			var it: Dictionary = Defs.ITEMS[id]
 			var item := Defs.item_name(id)
-			if id == "arrows":
-				item = Defs.item_name(id, 2)
 			out.merge({"name": _sentence(item), "cost": Defs.item_cost(id, maxi(0, m.armory_tier(0))),
-				"desc": "%d in armory." % int(m.fac(0).gear.get(id, 0)),
+				"desc": "%d operators per engine." % int(it.crew) if it.has("crew") else "%d seconds to make." % int(it.time),
 				"locked": _sentence(m.craft_problem(0, id)), "batch": int(it["batch"])}, true)
 		"upgrade":
 			var up := _next_upgrade(m, id)

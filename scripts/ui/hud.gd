@@ -5,7 +5,6 @@ signal chat_submitted(text: String)
 signal chat_changed(text: String)
 signal chat_closed
 signal chat_cycle(backward: bool)
-signal picker_page(page: String)
 signal picker_key(key: String)
 signal menu_clicked(index: int)
 signal pause_choice(name: String)
@@ -14,7 +13,8 @@ const UiTheme = preload("res://scripts/ui/ui_theme.gd")
 const Defs = preload("res://scripts/data/defs.gd")
 const HotkeyPopup = preload("res://scripts/ui/hotkey_popup.gd")
 
-const RESOURCE_DISPLAY_ORDER := ["food", "wood", "stone", "bronze_ore", "coal", "iron_ore", "bronze", "iron"]
+const WEAPON_SLOTS := ["weapon", "bow", "armor", "shield"]
+const RESOURCE_DISPLAY_ORDER := ["food", "wood", "stone", "bronze", "iron"]
 
 # Widths are in base 1600x900 pixels: the "expand" stretch never gives less room than that.
 const MENU_SIZE := Vector2(720, 483)
@@ -58,6 +58,8 @@ var map_view: Control
 var village_widgets: VBoxContainer
 var supply_label: Label
 var resource_counts: Dictionary[String, Label] = {}
+var weapon_panel: PanelContainer
+var weapon_rows: Dictionary[String, Array] = {}   # item id -> [name label, count label]
 var objective_panel: PanelContainer
 var objective_label: RichTextLabel
 var caption: Label
@@ -93,6 +95,7 @@ func _ready() -> void:
 	_build_chat()
 	_build_map()
 	_build_village()
+	_build_weapons()
 	_build_objective()
 	_build_menu()   # after the village widgets, so menus draw over them
 	_build_caption()
@@ -297,7 +300,6 @@ func _build_picker() -> void:
 	picker.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
 	picker.hide()
 	root.add_child(picker)
-	picker.page_picked.connect(picker_page.emit)
 	picker.key_picked.connect(picker_key.emit)
 	picker.resized.connect(_position_picker)
 	chat_panel.item_rect_changed.connect(_position_picker)
@@ -305,11 +307,6 @@ func _build_picker() -> void:
 
 func _position_picker() -> void:
 	picker.position = chat_panel.position - Vector2(0, picker.size.y + 6)
-
-
-func show_picker_pages(command: String) -> void:
-	picker.show_pages(command)
-	_show_picker()
 
 
 func show_picker_entries(command: String, pick: Dictionary, entries: Array, quick: bool) -> void:
@@ -479,6 +476,44 @@ func _build_village() -> void:
 		count.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		grid.add_child(count)
 		resource_counts[resource] = count
+
+
+## Top right: how many of each weapon the armory holds. Only weapons you own show.
+func _build_weapons() -> void:
+	weapon_panel = _panel()
+	weapon_panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	weapon_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	weapon_panel.position = Vector2(-18, 14)
+	weapon_panel.custom_minimum_size.x = 180
+	weapon_panel.visible = false
+	root.add_child(weapon_panel)
+	var rows := VBoxContainer.new()
+	rows.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	weapon_panel.add_child(rows)
+	var title := Label.new()
+	title.text = "Armory inventory"
+	title.add_theme_color_override("font_color", UiTheme.GOLD)
+	title.add_theme_font_size_override("font_size", 22)
+	rows.add_child(title)
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	grid.add_theme_constant_override("h_separation", 16)
+	grid.add_theme_constant_override("v_separation", 0)
+	rows.add_child(grid)
+	for id: String in Defs.ITEMS:
+		if not Defs.ITEMS[id]["slot"] in WEAPON_SLOTS:
+			continue
+		var label := Label.new()
+		label.text = String(Defs.ITEMS[id]["name"]).capitalize()
+		label.visible = false
+		grid.add_child(label)
+		var count := Label.new()
+		count.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		count.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		count.visible = false
+		grid.add_child(count)
+		weapon_rows[id] = [label, count]
 
 
 func _build_objective() -> void:
@@ -678,6 +713,19 @@ func update_economy(population: int, housing: int, stock: Dictionary, workers: D
 	for resource: String in RESOURCE_DISPLAY_ORDER:
 		var n := int(workers.get(resource, 0))
 		resource_counts[resource].text = "%d  (%d)" % [int(stock.get(resource, 0)), n] if n > 0 else str(int(stock.get(resource, 0)))
+
+
+func update_weapons(inventory: Dictionary) -> void:
+	var any := false
+	for id: String in weapon_rows:
+		var n := int(inventory[id].stock)
+		weapon_rows[id][0].visible = n > 0
+		weapon_rows[id][1].visible = n > 0
+		weapon_rows[id][1].text = str(n)
+		any = any or n > 0
+	weapon_panel.visible = any
+	if not any:
+		weapon_panel.reset_size()
 
 
 func update_status(hp: float, max_hp: float, stamina: float, held: String, yaw_deg: float, home_deg: float) -> void:

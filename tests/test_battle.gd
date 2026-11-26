@@ -420,7 +420,6 @@ func test_towers() -> void:
 		for k in 4:
 			var u = soldier(m, 0, C + Vector2(-16, k * 1.5 - 2), "")
 			u.bow = true
-			u.arrows = 16
 			men.append(u)
 		crew(m, men, "guard", C)
 		run(m, 20.0)
@@ -516,7 +515,6 @@ func test_commander_bow() -> void:
 	var m = field()
 	var p = player(m, C, "")
 	p.bow = true
-	p.arrows = 5
 	var o := Vector3(C.x, 6.68, C.y)
 	check(m.commander_shoot(0, o, Vector3.BACK, 1.0, 1.0), "the bow looses")
 	check(not m.commander_shoot(0, o, Vector3.BACK, 1.0, 1.1), "nocking takes a moment")
@@ -542,7 +540,6 @@ func battle(a: Dictionary, b: Dictionary, seed_in: int, count: int = 8, gap: flo
 		u.armor = kit.get("armor", "")
 		if kit.get("bow", false):
 			u.bow = true
-			u.arrows = 16
 		if kit.get("horse", false):
 			u.mounted = true
 			u.max_hp += Defs.MOUNTED["hp_bonus"]

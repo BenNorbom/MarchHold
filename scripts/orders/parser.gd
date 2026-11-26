@@ -20,24 +20,24 @@ const BUILD_WORDS := [
 	["gate", "palisade_gate"], ["watch post", "watch_post"], ["watchpost", "watch_post"], ["lookout", "watch_post"],
 	["stockpile", "stockpile"], ["storehouse", "stockpile"], ["farm", "farm"], ["field", "farm"],
 	["armory", "armory"], ["armoury", "armory"], ["quarry", "quarry"], ["tower", "tower"],
-	["hut", "hut"], ["stable", "stable"], ["mine", "mine"], ["smelter", "smelter"],
-	["furnace", "smelter"], ["university", "university"], ["college", "university"]]
+	["hut", "hut"], ["stable", "stable"], ["mine", "mine"],
+	["university", "university"], ["college", "university"]]
 
 const ITEM_WORDS := [
 	["iron sword", "iron_sword"], ["bronze sword", "bronze_sword"], ["sword", "bronze_sword:generic"],
 	["wooden spear", "wood_spear"], ["spear", "wood_spear"],
 	["iron shield", "iron_shield"], ["bronze shield", "bronze_shield"], ["wooden shield", "wood_shield"], ["shield", "wood_shield:generic"],
 	["iron armor", "iron_armor"], ["bronze armor", "bronze_armor"], ["armor", "bronze_armor:generic"], ["armour", "bronze_armor:generic"],
-	["iron pike", "iron_pike"], ["pike", "bronze_pike:generic"], ["iron lance", "iron_lance"], ["lance", "bronze_lance:generic"],
-	["bow", "bow"], ["arrow", "arrows"], ["cannonball", "shot"], ["cannon shot", "shot"], ["shot", "shot"],
+	["iron pike", "iron_pike"], ["bronze pike", "bronze_pike"], ["pike", "bronze_pike:generic"], ["iron lance", "iron_lance"], ["bronze lance", "bronze_lance"], ["lance", "bronze_lance:generic"],
+	["bow", "bow"],
 	["cannon", "cannon"], ["battering ram", "ram"], ["ram", "ram"]]
 
 const GATHER_WORDS := [
-	["bronze ore", "bronze_ore"], ["iron ore", "iron_ore"], ["coal", "coal"], ["wood", "wood"], ["tree", "wood"],
+	["wood", "wood"], ["tree", "wood"],
 	["timber", "wood"], ["log", "wood"], ["lumber", "wood"], ["stone", "stone"], ["rock", "stone"],
 	["berries", "berries"], ["berry", "berries"], ["deer", "hunt"], ["meat", "hunt"], ["game", "hunt"],
 	["grain", "farm"], ["wheat", "farm"], ["crop", "farm"], ["fields", "farm"], ["farm", "farm"],
-	["food", "food:generic"], ["bronze", "bronze_ore"], ["iron", "iron_ore"], ["ore", "bronze_ore:generic"]]
+	["food", "food:generic"], ["bronze", "bronze"], ["iron", "iron"]]
 
 
 # Picking construction back up, matched against whole clauses so "finish gathering wood"
@@ -169,7 +169,7 @@ static func strategy_in(s: String) -> Array:
 
 static func limits_in(s: String) -> Array:
 	var out := []
-	var kept := RegEx.create_from_string(" (?:keep|hold|leave|reserve) ([0-9]+|[a-z]+) (wood|stone|food|bronze ore|coal|iron ore|bronze|iron)( back| in reserve| aside| spare)? ")
+	var kept := RegEx.create_from_string(" (?:keep|hold|leave|reserve) ([0-9]+|[a-z]+) (wood|stone|food|bronze|iron)( back| in reserve| aside| spare)? ")
 	for found in kept.search_all(s):
 		if found.get_string(3) == "" and not found.get_string().begins_with(" reserve "):
 			continue
@@ -202,7 +202,7 @@ static func _unknown_place(p: String) -> bool:
 
 
 static func normalize(text: String) -> String:
-	var s := text.to_lower().strip_edges()
+	var s := text.to_lower().strip_edges().replace("armour", "armor")
 	for ch in ["!", "?", ".", "\"", "(", ")", ":"]:
 		s = s.replace(ch, " ")
 	s = s.replace("’", "'").replace(",", " , ")
@@ -244,7 +244,7 @@ static func count_in(s: String) -> int:
 		var nxt: String = words[i + 1] if i + 1 < words.size() else ""
 		var nxt2: String = words[i + 2] if i + 2 < words.size() else ""
 		if nxt.trim_suffix("s") in ["scout", "men", "man", "people", "person", "villager", "worker", "soldier", "archer",
-				"spearmen", "spearman", "rider", "hunter", "builder", "guard", "miner", "farmer", "you", "of", "more", "crew"] or nxt in ["men", "people"] or (nxt == "of" and nxt2 in ["you", "them"]):
+				"spearmen", "spearman", "rider", "cavalry", "hunter", "builder", "guard", "miner", "farmer", "you", "of", "more", "crew"] or nxt in ["men", "people"] or (nxt == "of" and nxt2 in ["you", "them"]):
 			return n
 		if i > 0 and words[i - 1] in ["send", "take", "with", "use", "get", "need", "arm"]:
 			return n
@@ -453,6 +453,10 @@ static func _parse(text: String) -> Dictionary:
 		return out
 	if s.contains(" everyone ") or s.contains(" everybody ") or s.contains(" all of you ") or s.contains(" all hands "):
 		out["all"] = true
+	if has_word(s, "skirmish"):
+		out["steps"] = [_step("skirmish", "cavalry" if has_word(s, "cavalry") or has_word(s, "riders") else "", 0, where_in(s, "enemy"), count_in(s))]
+		out["ok"] = true
+		return out
 	var settings := limits_in(s)
 	settings.append_array(strategy_in(s))
 	var charge := mandate_in(s)
@@ -519,7 +523,7 @@ const VERBS := ["gather", "collect", "chop", "cut", "harvest", "get", "fetch", "
 	"build", "construct", "make", "craft", "forge", "put", "raise", "erect", "set", "arm", "equip", "grab", "take", "scout",
 	"explore", "find", "look", "send", "attack", "charge", "raid", "assault", "kill", "guard", "defend", "protect", "hold",
 	"stay", "follow", "come", "fall", "retreat", "go", "return", "recall", "mount", "ride", "man", "crew", "tame", "catch",
-	"round", "bring", "smelt", "research", "study", "upgrade", "promote", "dismiss", "disband", "report", "status", "keep", "start", "stop",
+	"round", "bring", "research", "study", "upgrade", "promote", "dismiss", "disband", "report", "status", "keep", "start", "stop",
 	"continue", "resume", "finish"]
 
 
@@ -551,6 +555,8 @@ static func _parse_part(p: String, out: Dictionary):
 		return again
 	if structure != "" and _matches(p, RESUME_LEAD + RESUME_START):
 		return null
+	if RegEx.create_from_string("(?:^| )(?:go|move|walk|come) ").search(p) != null and where_in(p) not in ["", "home"] and find_in(p, GATHER_WORDS) == "":
+		return _step("move", "", 0, where_in(p), count)
 	# Recall / follow / hold.
 	if p.contains("fall back") or p.contains("come back") or p.contains("go home") or p.contains("come home") or has_word(p, "retreat") or has_word(p, "recall") or p.contains("back to camp") or p.contains("return home") or p.contains("return to camp"):
 		if p.contains(" don't ") or p.contains(" do not ") or p.contains(" never "):
@@ -558,7 +564,7 @@ static func _parse_part(p: String, out: Dictionary):
 		return _step("recall", "", 0, "home")
 	if has_word(p, "follow") or p.contains("with me") or p.contains("come with") or p.contains("on me"):
 		return _step("follow", "", 0, "", count)
-	if p.contains("to arms") or has_word(p, "militia") or p.contains("grab weapons") or p.contains("take up arms") or p.contains("everyone fight"):
+	if p.strip_edges() in ["garrison", "call garrison", "call the garrison"] or p.contains("to arms") or has_word(p, "militia") or p.contains("grab weapons") or p.contains("take up arms") or p.contains("everyone fight"):
 		out["all"] = out["all"] or count == 0
 		return [_step("arm", "", 0, "", count), _step("guard", "", 0, where_in(p, "home"))]
 	if p.contains("status") or p.contains("what are you doing") or p.contains("how are you") or bare_is(p, "report"):
@@ -585,9 +591,9 @@ static func _parse_part(p: String, out: Dictionary):
 		return _step("mount", "", 0, "", count)
 	if (has_word(p, "man") or has_word(p, "crew")) and (has_word(p, "cannon") or has_word(p, "ram")):
 		return _step("man", "cannon" if has_word(p, "cannon") else "ram")
-	if has_word(p, "smelt") or (has_word(p, "make") and (has_word(p, "bronze") or has_word(p, "iron")) and find_in(p, ITEM_WORDS) == ""):
-		return _step("smelt", "iron" if has_word(p, "iron") else "bronze", number_in(p), "", count)
 	if has_word(p, "research") or has_word(p, "study") or p.contains("learn gunpowder"):
+		if p.contains("iron mining") or p.contains("mining iron"):
+			return _step("research", "iron_mining")
 		if p.contains("archery") or p.contains("mounted") or p.contains("horse archer"):
 			return _step("research", "mounted_archery")
 		if has_word(p, "armory") or has_word(p, "armoury"):
@@ -598,14 +604,12 @@ static func _parse_part(p: String, out: Dictionary):
 	if has_word(p, "upgrade") or p.contains("improve the"):
 		if has_word(p, "armory") or has_word(p, "armoury"):
 			return _step("upgrade", "armory")
-		if has_word(p, "smelter") or has_word(p, "furnace"):
-			return _step("upgrade", "smelter")
 		return null
 	# Scouting.
 	if has_word(p, "scout") or has_word(p, "explore") or p.contains("find their") or p.contains("find the enemy") or p.contains("look around") or p.contains("spy"):
 		return _step("scout", "", 0, where_in(p, ""), maxi(count, 0))
 	# Fighting.
-	if has_word(p, "attack") or has_word(p, "charge") or has_word(p, "raid") or has_word(p, "assault") or p.contains("kill them") or p.contains("destroy"):
+	if p.contains("fire at") or p.contains("shoot at") or has_word(p, "attack") or has_word(p, "charge") or has_word(p, "raid") or has_word(p, "assault") or p.contains("kill them") or p.contains("destroy"):
 		# "Attack the village" can only mean theirs: you never attack your own home.
 		var target := where_in(p, "enemy")
 		return _step("attack", "", 0, "enemy" if target == "home" else target, count)
@@ -615,7 +619,7 @@ static func _parse_part(p: String, out: Dictionary):
 		return _step("guard", "", 0, where_in(p, "here"), count)
 	if has_word(p, "arm") or has_word(p, "equip") or p.contains("take up") or p.contains("grab"):
 		var item := find_in(p, ITEM_WORDS)
-		if item in ["arrows", "shot", "cannon", "ram"]:
+		if item in ["cannon", "ram"]:
 			item = ""
 		return _step("arm", item, 0, "", count)
 	# Making things.
